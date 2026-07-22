@@ -126,6 +126,35 @@ cm_kill_rclone_for_remote() {
   pkill -KILL -f "$pattern" 2>/dev/null || true
 }
 
+# Zwraca "prawda" (0), jesli proces rclone nfsmount dla danego remote ZYJE i
+# jego log rosl w ciagu ostatnich `quiet_threshold` sekund - czyli realnie
+# COS ROBI, mimo ze wolumin NFS jeszcze sie nie pojawil w tabeli `mount`.
+#
+# Powod: rclone (potwierdzone tez w dokumentacji/na forum rclone) NIE
+# uruchamia swojego serwera NFS, dopoki najpierw nie przetworzy calej
+# zaleglej kolejki uploadow z lokalnego cache (`--vfs-cache-mode full`) - po
+# przerwanym w polowie backupie Time Machine ta kolejka moze miec setki
+# pozycji i naturalnie zajmuje to dlugo. To NIE jest zawieszenie - to rclone
+# w trakcie pracy. Watchdog nie powinien wtedy ubijac tego procesu (widzielismy
+# to bezposrednio: powtarzajace sie ubicie w takiej sytuacji NIGDY nie
+# pozwala kolejce sie skonczyc, bo kazdy restart zaczyna odliczanie od nowa).
+#
+# Prawdziwe zawieszenie (np. rclone utknal wewnetrznie, zero postepu) wyglada
+# INACZEJ: proces zyje, ale jego log przestaje rosnac na dobre - to jest
+# sygnal, ktorego uzywa ta funkcja.
+cm_rclone_busy_draining() {
+  local remote_path="$1"
+  local quiet_threshold="${2:-45}"
+  pgrep -f "rclone nfsmount ${remote_path} " >/dev/null 2>&1 || return 1
+  local log_file="$CM_LOG_DIR/rclone-mount.log"
+  [ -f "$log_file" ] || return 1
+  local mtime now age
+  mtime="$(stat -f %m "$log_file" 2>/dev/null || echo 0)"
+  now="$(date +%s)"
+  age=$((now - mtime))
+  [ "$age" -lt "$quiet_threshold" ]
+}
+
 # Sprawdza, czy katalog faktycznie ODPOWIADA (a nie tylko figuruje w tabeli
 # `mount`) - zawieszony serwer NFS dalej tam wisi, ale kazda operacja I/O na
 # nim blokuje sie w nieskonczonosc (i to w nieprzerywalnym oczekiwaniu w

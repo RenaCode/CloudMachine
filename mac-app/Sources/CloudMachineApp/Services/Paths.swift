@@ -24,10 +24,6 @@ enum Paths {
         return nil
     }
 
-    static var launchdTemplatesDir: URL? {
-        scriptsDir?.deletingLastPathComponent().appendingPathComponent("launchd")
-    }
-
     static var appSupportDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let dir = base.appendingPathComponent("CloudMachine")

@@ -27,9 +27,12 @@ set +e
 cm_require_config
 cm_require_jq
 
-# Krotka blokada (2 min) - jesli poprzedni przebieg watchdoga wciaz trwa
-# (np. utknal na wymuszonym odmontowaniu), nie odpalamy drugiego rownolegle.
-if ! cm_acquire_lock "mount-watchdog" 120; then
+# Blokada 20 minut - mount.sh wywolane ponizej moze legalnie czekac do 10
+# minut na kazda z 2 prob, jesli rclone aktywnie dogania duza zalegla
+# kolejke uploadow (patrz cm_rclone_busy_draining) - zbyt krotka blokada
+# pozwolilaby kolejnemu cyklowi watchdoga (co 60s) uznac ja za "osierocona"
+# i odpalic drugi, rownolegly przebieg w trakcie legalnego oczekiwania.
+if ! cm_acquire_lock "mount-watchdog" 1200; then
   exit 0
 fi
 
@@ -74,9 +77,17 @@ if [ "$nfs_listed" = "1" ]; then
     fi
   fi
 else
-  cm_log "[mount-watchdog] $LOCAL_DIR nie jest zamontowane, mimo ze powinno byc."
-  needs_repair=1
-  rm -f "$SLOW_STREAK_FILE"
+  if cm_rclone_busy_draining "$REMOTE_PATH" 45; then
+    # rclone zyje i aktywnie cos wysyla (log rosl w ostatnich 45s) - to
+    # normalne, ze NFS jeszcze sie nie pojawilo, jesli dogania duza zalegla
+    # kolejke po przerwanym backupie. NIE przerywamy - patrz komentarz przy
+    # cm_rclone_busy_draining w common.sh.
+    cm_log "[mount-watchdog] $LOCAL_DIR jeszcze nie zamontowane, ale rclone wciaz aktywnie pracuje (prawdopodobnie doganiam zalegle wysylki po przerwanym backupie) - czekam, nie przerywam."
+  else
+    cm_log "[mount-watchdog] $LOCAL_DIR nie jest zamontowane, mimo ze powinno byc."
+    needs_repair=1
+    rm -f "$SLOW_STREAK_FILE"
+  fi
 fi
 
 if [ "$healthy" = "1" ]; then

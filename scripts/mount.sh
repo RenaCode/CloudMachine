@@ -156,22 +156,49 @@ MOUNT_OK=0
 if [ "$NFS_MNT" = "1" ]; then
   MOUNT_OK=1
 else
-  # Sprzątanie ewentualnych osieroconych procesów
-  cm_kill_rclone_for_remote "$REMOTE_PATH"
-  if mount | grep -q "$LOCAL_DIR"; then
-    diskutil unmount force "$LOCAL_DIR" >/dev/null 2>&1 || true
+  # Sprzątanie ewentualnych osieroconych procesów - ale TYLKO jesli naprawde
+  # sa osierocone (martwe/zawieszone), a NIE jesli po prostu aktywnie dogania
+  # zalegla kolejke uploadow po przerwanym w polowie backupie (rclone celowo
+  # NIE uruchamia serwera NFS, dopoki nie przetworzy calej takiej kolejki -
+  # to udokumentowane zachowanie rclone, nie usterka). Zabicie takiego
+  # procesu resetuje postep do zera i przy duzej kolejce moze skutecznie
+  # UNIEMOZLIWIC montowanie na zawsze, jesli cos (np. ten sam watchdog) robi
+  # to w kolko - dokladnie to zaobserwowalismy przy realnym przerwanym
+  # backupie.
+  already_running=0
+  if cm_rclone_busy_draining "$REMOTE_PATH" 45; then
+    cm_log "Istniejacy proces rclone dla tego remote wciaz aktywnie pracuje (prawdopodobnie dogania zalegla kolejke) - NIE ubijam, czekam na niego zamiast startowac nowy."
+    already_running=1
+  else
+    cm_kill_rclone_for_remote "$REMOTE_PATH"
+    if mount | grep -q "$LOCAL_DIR"; then
+      diskutil unmount force "$LOCAL_DIR" >/dev/null 2>&1 || true
+    fi
   fi
 
   cm_log "Montuje $REMOTE_PATH -> $LOCAL_DIR (vfs-cache-mode=full, cache max=$VFS_CACHE_MAX_SIZE)"
 
   for attempt in 1 2; do
-    if rclone nfsmount "${MOUNT_ARGS[@]}" --daemon; then
-      sleep 2
-      if mount | grep -q "$LOCAL_DIR"; then
-        MOUNT_OK=1
-        break
-      fi
+    if [ "$already_running" = "1" ] || rclone nfsmount "${MOUNT_ARGS[@]}" --daemon; then
+      # Czekamy do 10 minut na pojawienie sie NFS w tabeli mount - ale TYLKO
+      # dopoki rclone realnie cos robi (log rosnie w ostatnich 45s). Jesli
+      # ucichnie na dobre, przestajemy czekac wczesniej zamiast trzymac cala
+      # pule 10 minut na cos, co juz i tak stoi.
+      waited=0
+      while [ "$waited" -lt 600 ]; do
+        if mount | grep -q "$LOCAL_DIR"; then
+          MOUNT_OK=1
+          break 2
+        fi
+        if [ "$waited" -ge 10 ] && ! cm_rclone_busy_draining "$REMOTE_PATH" 45; then
+          cm_log "Proba $attempt: rclone przestal robic postepy (brak aktywnosci w logu >45s) po ${waited}s oczekiwania - przerywam ta probe."
+          break
+        fi
+        sleep 5
+        waited=$((waited + 5))
+      done
     fi
+    already_running=0
     if [ "$attempt" -eq 1 ]; then
       cm_log "Proba $attempt nie powiodla sie, sprzatam i probuje ponownie..."
       if mount | grep -q "$LOCAL_DIR"; then

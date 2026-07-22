@@ -16,6 +16,10 @@ launchd/*.plist
 # OS
 .DS_Store
 
+# Robocze/testowe sparsebundle uzywane recznie do eksperymentow z hdiutil/rclone -
+# to sa binarne pliki testowe, nie kod projektu.
+scratch/
+
 # Globalny ~/.gitignore_global na tym koncie ignoruje katalogi "scripts" -
 # to jest kluczowy kod tego projektu, wiec jawnie go odignorowujemy.
 !scripts/

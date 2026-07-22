@@ -24,10 +24,6 @@ final class CloudMachineController: ObservableObject {
 
     // MARK: - Config
 
-    func reloadConfig() {
-        config = ConfigStore.load()
-    }
-
     func saveConfig() {
         do {
             try ConfigStore.save(config)
