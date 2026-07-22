@@ -3,6 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/Licencja-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: macOS 14+](https://img.shields.io/badge/Platforma-macOS%2014%2B-blue.svg)](#)
 [![Status: Experimental](https://img.shields.io/badge/Status-Eksperymentalny-orange.svg)](#)
+[![CI](https://github.com/RenaCode/CloudMachine/actions/workflows/ci.yml/badge.svg)](https://github.com/RenaCode/CloudMachine/actions/workflows/ci.yml)
 
 Natywne rozwiązanie Time Machine dla wielu komputerów Mac, tworzące kopie zapasowe na wspólnym dysku Google Drive (np. Google One/Workspace), z twardym limitem przestrzeni nałożonym na każdą maszynę, aby jedna z nich nie zajęła całej puli pamięci.
 
@@ -212,6 +213,11 @@ cd mac-app
 ```
 
 Aplikacja jest lekką nakładką graficzną na skrypty z folderu `scripts/` - te same skrypty stoją za każdym przyciskiem w GUI, więc CLI i GUI zawsze zachowują się identycznie.
+
+### CI i wydania
+
+- Każdy push/PR uruchamia [CI](.github/workflows/ci.yml): kompilację pakietu Swift oraz sprawdzenie składni i `shellcheck` dla wszystkich skryptów bash.
+- Push tagu w formacie `vX.Y.Z` uruchamia [Release DMG](.github/workflows/release.yml): buduje appkę (podpis ad-hoc, bez konta Apple Developer) i publikuje `CloudMachine-<wersja>.dmg` jako załącznik GitHub Release.
 
 ---
 

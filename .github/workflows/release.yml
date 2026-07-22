@@ -1,0 +1,40 @@
+name: Release DMG
+
+# Buduje i publikuje CloudMachine-<wersja>.dmg jako zalacznik GitHub Release
+# przy kazdym pushu tagu w formacie vX.Y.Z. Podpis pozostaje ad-hoc (bez
+# certyfikatu Apple Developer) - Gatekeeper nadal pokaze ostrzezenie
+# "niezidentyfikowany deweloper" przy pierwszym uruchomieniu, patrz README.
+#
+# TODO (po zalozeniu konta Apple Developer): dodac krok `codesign` z realnym
+# Developer ID certyfikatem (zaimportowanym z sekretow repo) i `notarytool`
+# przed `make-dmg.sh`, zeby usunac to ostrzezenie.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build-and-release:
+    name: Build DMG and publish release
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build .app (ad-hoc signed)
+        working-directory: mac-app
+        run: ./scripts/build-app.sh
+
+      - name: Package .dmg
+        working-directory: mac-app
+        run: ./scripts/make-dmg.sh
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mac-app/build/*.dmg
+          generate_release_notes: true

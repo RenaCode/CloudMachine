@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-app:
+    name: Build Swift package
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift build
+        working-directory: mac-app
+        run: swift build
+
+  lint-scripts:
+    name: Shell script checks
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check (bash -n)
+        run: |
+          set -euo pipefail
+          status=0
+          for f in scripts/*.sh mac-app/scripts/*.sh; do
+            echo "== $f =="
+            bash -n "$f" || status=1
+          done
+          exit $status
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          command -v shellcheck >/dev/null 2>&1 || brew install shellcheck
+          # --severity=error: fail only on genuine bugs, not style/info nits -
+          # the scripts weren't written against shellcheck from day one, so a
+          # strict pass would fail on pre-existing style choices unrelated to
+          # correctness. Tighten this over time as the backlog is cleared.
+          shellcheck --severity=error --shell=bash scripts/*.sh mac-app/scripts/*.sh
