@@ -1,0 +1,17 @@
+{
+  "_comment": "Skopiuj ten plik jako machines.json i dostosuj. Suma limit_gb obu Macow powinna zostac ponizej realnej pojemnosci dysku Google (zostaw margines bezpieczenstwa, np. 10-15%, na narzuty rclone/Google i przypadkowy wzrost miedzy sprawdzeniami watchdoga).",
+  "drive_total_gb": 5000,
+  "safety_margin_percent": 10,
+  "remote_name": "gdrive-cloudmachine",
+  "remote_root_folder": "CloudMachine",
+  "machines": {
+    "macbook-pro-marcin": {
+      "display_name": "MacBook Pro Marcin",
+      "limit_gb": 3000
+    },
+    "imac-domowy": {
+      "display_name": "iMac domowy",
+      "limit_gb": 1500
+    }
+  }
+}

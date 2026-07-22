@@ -1,0 +1,5 @@
+.build/
+build/
+*.dmg
+# Pliki posrednie generatora ikony - odtwarzalne z generate_icon.swift, tylko finalny .icns jest sledzony.
+Resources/AppIcon.iconset/

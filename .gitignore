@@ -1,0 +1,22 @@
+# Konfiguracja z danymi osobistymi (nazwy maszyn, limity) - kazdy uzytkownik ma wlasna
+config/machines.json
+
+# Logi
+*.log
+logs/
+
+# rclone config (zawiera tokeny OAuth) - nigdy nie commitowac
+rclone.conf
+*.conf
+
+# Wygenerowane pliki launchd (zawieraja lokalne sciezki uzytkownika)
+launchd/*.plist
+!launchd/*.plist.template
+
+# OS
+.DS_Store
+
+# Globalny ~/.gitignore_global na tym koncie ignoruje katalogi "scripts" -
+# to jest kluczowy kod tego projektu, wiec jawnie go odignorowujemy.
+!scripts/
+!scripts/*.sh
