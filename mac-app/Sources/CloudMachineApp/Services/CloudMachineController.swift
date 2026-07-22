@@ -528,18 +528,19 @@ final class CloudMachineController: ObservableObject {
     /// Dopisuje wpisy sudoers (NOPASSWD) dla wszystkich podkomend `tmutil`,
     /// ktorych ta appka potrzebuje bez interaktywnego hasla: `delete` (dla
     /// watchdoga limitu dzialajacego bez sesji GUI) oraz `setdestination` /
-    /// `startbackup` / `verifychecksums` (dla przyciskow w GUI - patrz
-    /// komentarz przy `runTmutilPrivileged`, dlaczego to NIE jest przez
-    /// AppleScript). Nadpisuje istniejacy plik za kazdym razem (idempotentne,
-    /// bezpieczne tez gdy user ma juz starszy wpis tylko dla `delete`
-    /// sprzed tej zmiany).
+    /// `startbackup` / `verifychecksums` / `removedestination` (dla
+    /// przyciskow w GUI - patrz komentarz przy `runTmutilPrivileged`,
+    /// dlaczego to NIE jest przez AppleScript). Nadpisuje istniejacy plik za
+    /// kazdym razem (idempotentne, bezpieczne tez gdy user ma juz starszy
+    /// wpis sprzed tej zmiany).
     private func ensureTmutilSudoersRule() async throws {
         let user = NSUserName()
         let rules = [
             "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil delete -p *",
             "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil setdestination -a *",
             "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil startbackup*",
-            "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil verifychecksums *"
+            "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil verifychecksums *",
+            "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil removedestination *"
         ]
         let writeCommands = rules.enumerated().map { index, line in
             "echo '\(line)' \(index == 0 ? ">" : ">>") /etc/sudoers.d/cloudmachine"

@@ -128,23 +128,15 @@ mount_sparsebundle() {
     fi
   done
 
-  # Wszystkie 3 proby nie powiodly sie - moze to byc nie tylko "zimny cache",
-  # ale STARY, lokalnie zbuforowany (na dysku, przezywa restart rclone) obraz
-  # backup.sparsebundle z poprzedniej sesji, ktory nie zgadza sie juz z tym co
-  # jest na Google Drive. hdiutil dostaje wtedy w polowie odczytu niespojne
-  # dane (rclone podmienia je w locie po wykryciu "remote is different") i
-  # konczy sie to "no mountable file systems" mimo poprawnego pliku w
-  # chmurze. Czyscimy ten konkretny cache i probujemy raz jeszcze.
-  cm_log "3 proby montowania sparsebundle nie powiodly sie - czyszcze lokalny cache VFS dla backup.sparsebundle i probuje ostatni raz."
-  local rclone_cache_dir
-  rclone_cache_dir="$(rclone config paths 2>/dev/null | awk -F': *' '/Cache dir/ {print $2}')"
-  if [ -n "$rclone_cache_dir" ]; then
-    rm -rf "${rclone_cache_dir}/vfs/${REMOTE_NAME}/$(cm_remote_root_folder)/${MACHINE_KEY}/backup.sparsebundle"
-    rm -rf "${rclone_cache_dir}/vfsMeta/${REMOTE_NAME}/$(cm_remote_root_folder)/${MACHINE_KEY}/backup.sparsebundle"
-  fi
-  if hdiutil attach -noverify -noautoopen -nobrowse -mountpoint "$SP_MOUNT" "$sp_path" 2>>"$CM_LOG_DIR/cloudmachine.log"; then
-    return 0
-  fi
+  # UWAGA: celowo NIE czyscimy tu lokalnego cache VFS jako "ostatniej deski
+  # ratunku" (wczesniejsza wersja to robila) - w tym miejscu w cache moga
+  # lezec realne, jeszcze nie przeslane na Google Drive fragmenty AKTYWNEGO
+  # backupu Time Machine (bandy oczekujace w kolejce na upload). Skasowanie
+  # ich obcieloby prawdziwe dane backupu, nie tylko "stary, nieaktualny
+  # cache". Bezpieczne czyszczenie cache robimy WYLACZNIE zaraz po tym, jak
+  # SAMI dopiero co utworzylismy i przeslalismy zupelnie nowy sparsebundle
+  # (patrz sekcja "Brak sparsebundle w chmurze" wyzej) - tam nie ma szans na
+  # kolizje z czyimis oczekujacymi uploadami, bo plik dopiero co powstal.
   return 1
 }
 
