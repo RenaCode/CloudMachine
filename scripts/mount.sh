@@ -31,6 +31,19 @@ VFS_CACHE_MAX_SIZE="${CM_VFS_CACHE_MAX_SIZE:-20G}"
 RCLONE_TRANSFERS="${CM_RCLONE_TRANSFERS:-4}"
 RCLONE_CHECKERS="${CM_RCLONE_CHECKERS:-8}"
 RCLONE_TPSLIMIT="${CM_RCLONE_TPSLIMIT:-10}"
+RCLONE_VFS_WRITE_BACK="${CM_RCLONE_VFS_WRITE_BACK:-5s}"
+# --poll-interval sluzy do wykrywania zmian zrobionych na remote Z ZEWNATRZ
+# (np. przez inne urzadzenie) - u nas nic innego nie pisze do tego folderu,
+# wiec ta funkcja jest niepotrzebna, a przy bardzo czesto nadpisywanych
+# malych plikach metadanych sparsebundle (bitmapa alokacji, Info.plist)
+# moze aktywnie szkodzic: rclone porownuje lokalny cache ze stanem remote co
+# CM_RCLONE_POLL_INTERVAL, a Google Drive API bywa chwilowo niespojne zaraz
+# po uploadzie (swiezo wyslany plik jeszcze "nie dojrzal" po stronie
+# Google) - rclone widzi wtedy falszywa roznice, kasuje swoj wlasnie
+# zapisany lokalny cache jako "stale", i kolejny odczyt tego samego pliku
+# (ktory TM robi natychmiast potem) dostaje niespojne dane. Domyslnie
+# wylaczone (0 = brak pollingu) wlasnie zeby wyeliminowac ten wyscig.
+RCLONE_POLL_INTERVAL="${CM_RCLONE_POLL_INTERVAL:-0}"
 
 if ! cm_acquire_lock "mount-${MACHINE_KEY}"; then
   cm_log "Inna instancja mount.sh dla tej maszyny juz dziala, pomijam ten przebieg."
@@ -102,8 +115,9 @@ MOUNT_ARGS=(
   --vfs-cache-mode full
   --vfs-cache-max-size "$VFS_CACHE_MAX_SIZE"
   --vfs-cache-max-age 72h
+  --vfs-write-back "$RCLONE_VFS_WRITE_BACK"
   --dir-cache-time 1h
-  --poll-interval 15s
+  --poll-interval "$RCLONE_POLL_INTERVAL"
   --tpslimit "$RCLONE_TPSLIMIT"
   --transfers "$RCLONE_TRANSFERS"
   --checkers "$RCLONE_CHECKERS"
@@ -236,6 +250,10 @@ if [ "$MOUNT_OK" = "1" ]; then
   # Zapamietujemy, ze uzytkownik CHCE miec dysk zamontowany - mount-watchdog.sh
   # bedzie odtad pilnowal, zeby tak zostalo, az do jawnego unmount.sh.
   cm_set_mount_desired "on"
+  # Blokujemy sen systemowy na caly czas trwania (patrz komentarz przy
+  # cm_start_caffeinate w common.sh) - inaczej Mac usypia w przerwach miedzy
+  # proba a nastepna i budzi sie z polamanym mountem.
+  cm_start_caffeinate
 else
   cm_log "BLAD: montowanie nie powiodlo sie po 2 probach. Ostatnie linie logu:"
   tail -n 10 "$CM_LOG_DIR/rclone-mount.log" 2>/dev/null | while IFS= read -r line; do cm_log "  $line"; done

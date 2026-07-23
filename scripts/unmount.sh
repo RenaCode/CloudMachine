@@ -17,6 +17,32 @@ REMOTE_PATH="$(cm_remote_path_for "$MACHINE_KEY")"
 # wolumin jako "powinien byc zamontowany" i nie zaczal go odmontowywac z
 # powrotem w trakcie tej operacji.
 cm_set_mount_desired "off"
+cm_stop_caffeinate
+
+# 0. Jesli Time Machine akurat aktywnie pisze na ten wolumin, zatrzymujemy
+# backup i CZEKAMY az faktycznie stanie, ZANIM odmontujemy. Odmontowanie
+# (zwlaszcza wymuszone) w trakcie aktywnego zapisu obserwowane na zywo
+# uszkadza metadane sparsebundle (Info.plist / bitmapa alokacji) tak, ze
+# hdiutil pozniej zglasza "no mountable file systems" mimo ze dane sa nadal
+# tam - to sie zdarzylo trzykrotnie w trakcie prac nad tym projektem.
+# `tmutil stopbackup` NIE wymaga sudo (w przeciwienstwie do startbackup).
+RUNNING="$(tmutil status 2>/dev/null | awk -F'= ' '/Running/ { gsub(";","",$2); print $2 }')"
+if [ "$RUNNING" = "1" ]; then
+  cm_log "Time Machine aktywnie kopiuje - zatrzymuje backup przed odmontowaniem, zeby nie uszkodzic sparsebundle."
+  tmutil stopbackup >/dev/null 2>&1 || true
+  waited=0
+  while [ "$waited" -lt 30 ]; do
+    RUNNING="$(tmutil status 2>/dev/null | awk -F'= ' '/Running/ { gsub(";","",$2); print $2 }')"
+    [ "$RUNNING" != "1" ] && break
+    sleep 2
+    waited=$((waited + 2))
+  done
+  if [ "$RUNNING" = "1" ]; then
+    cm_log "OSTRZEZENIE: Time Machine nie zatrzymalo sie po ${waited}s - odmontowuje mimo to, ryzyko uszkodzenia sparsebundle."
+  else
+    cm_log "Backup zatrzymany po ${waited}s."
+  fi
+fi
 
 # 1. Odmontowanie sparsebundle, jeśli jest zamontowane
 if mount | grep -q "$SP_MOUNT"; then

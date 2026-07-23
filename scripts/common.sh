@@ -106,6 +106,46 @@ cm_mount_desired() {
   fi
 }
 
+# `backupd` sam trzyma asercje "PreventUserIdleSystemSleep" WYLACZNIE podczas
+# aktywnego kopiowania - w przerwach miedzy proba a nastepna (np. gdy TM
+# padnie z bledem i czeka az backup-watchdog.sh je wznowi) nic nie blokuje
+# snu z bezczynnosci. Zaobserwowany na zywo efekt: Mac zasypia w takiej
+# przerwie, budzi sie z polamanym mountem/polaczeniami sieciowymi, kolejna
+# proba backupu natychmiast pada, powstaje kolejna przerwa, Mac znowu
+# zasypia - blad w kolko. `caffeinate -s` blokuje sen systemowy (na zasilaniu
+# AC) niezaleznie od tego, czy backupd akurat w danej sekundzie kopiuje, wiec
+# trzymamy go przez caly czas trwania "mount_desired=on", nie tylko podczas
+# pojedynczych sesji backupu.
+cm_caffeinate_pid_file() {
+  echo "$CM_LOG_DIR/.caffeinate.pid"
+}
+
+cm_start_caffeinate() {
+  local pid_file
+  pid_file="$(cm_caffeinate_pid_file)"
+  if [ -f "$pid_file" ]; then
+    local pid
+    pid="$(cat "$pid_file" 2>/dev/null)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  nohup caffeinate -s >/dev/null 2>&1 &
+  disown 2>/dev/null
+  echo "$!" > "$pid_file"
+}
+
+cm_stop_caffeinate() {
+  local pid_file
+  pid_file="$(cm_caffeinate_pid_file)"
+  if [ -f "$pid_file" ]; then
+    local pid
+    pid="$(cat "$pid_file" 2>/dev/null)"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null
+    rm -f "$pid_file"
+  fi
+}
+
 # Ubija istniejace procesy 'rclone nfsmount' dla danej sciezki remote.
 # Najpierw TERM (grzecznie, zeby rclone zdazyl posprzatac swoj serwer NFS),
 # a jesli po kilku sekundach proces nadal zyje (np. utknal w nieudanej

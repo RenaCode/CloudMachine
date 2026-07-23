@@ -41,6 +41,11 @@ if [ "$(cm_mount_desired)" != "on" ]; then
   exit 0
 fi
 
+# Samo-naprawa na wypadek, gdyby proces caffeinate padl niezaleznie od
+# mountu (np. ubity recznie) - patrz komentarz przy cm_start_caffeinate w
+# common.sh, dlaczego to krytyczne dla stabilnosci backupu.
+cm_start_caffeinate
+
 MACHINE_KEY="$(cm_machine_key)"
 LOCAL_DIR="$(cm_local_machine_mount_dir "$MACHINE_KEY")"
 SP_MOUNT="$(cm_sparsebundle_mount_dir "$MACHINE_KEY")"
