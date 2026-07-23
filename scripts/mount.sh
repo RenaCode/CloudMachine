@@ -22,6 +22,15 @@ LOCAL_DIR="$(cm_local_machine_mount_dir "$MACHINE_KEY")"
 SP_MOUNT="$(cm_sparsebundle_mount_dir "$MACHINE_KEY")"
 
 VFS_CACHE_MAX_SIZE="${CM_VFS_CACHE_MAX_SIZE:-20G}"
+# Domyslne wartosci dobrane pod dzielony (shared) client_id rclone, ktory ma
+# globalnie dzielony, niski limit zapytan/sekunde do Google Drive API - patrz
+# sekcja "Wlasny client_id Google" w README. Przy WLASNYM, prywatnym
+# client_id (rclone config show <remote> pokazuje niestandardowy client_id)
+# limit jest per-projekt, wiec te wartosci mozna bezpiecznie podniesc przez
+# CM_RCLONE_TRANSFERS/CM_RCLONE_CHECKERS/CM_RCLONE_TPSLIMIT.
+RCLONE_TRANSFERS="${CM_RCLONE_TRANSFERS:-4}"
+RCLONE_CHECKERS="${CM_RCLONE_CHECKERS:-8}"
+RCLONE_TPSLIMIT="${CM_RCLONE_TPSLIMIT:-10}"
 
 if ! cm_acquire_lock "mount-${MACHINE_KEY}"; then
   cm_log "Inna instancja mount.sh dla tej maszyny juz dziala, pomijam ten przebieg."
@@ -95,9 +104,9 @@ MOUNT_ARGS=(
   --vfs-cache-max-age 72h
   --dir-cache-time 1h
   --poll-interval 15s
-  --tpslimit 10
-  --transfers 4
-  --checkers 8
+  --tpslimit "$RCLONE_TPSLIMIT"
+  --transfers "$RCLONE_TRANSFERS"
+  --checkers "$RCLONE_CHECKERS"
   --log-level INFO
   --log-file "$CM_LOG_DIR/rclone-mount.log"
   -o "nolocks,locallocks"
