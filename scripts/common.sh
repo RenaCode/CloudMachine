@@ -204,24 +204,37 @@ cm_probe_responsive() {
 #
 # Zwraca 0 i rejestruje automatyczne zwolnienie blokady na wyjsciu skryptu
 # (trap EXIT), albo zwraca 1, jesli inna zywa instancja juz trzyma blokade.
-# Blokady starsze niz max_age_seconds sa traktowane jako osierocone (np. po
-# kill -9 procesu, ktory nie zdazyl posprzatac) i przejmowane automatycznie.
+#
+# Osierocenie blokady (np. po kill -9 procesu, ktory nie zdazyl posprzatac)
+# wykrywamy sprawdzajac, czy PID zapisany w blokadzie wciaz zyje (`kill -0`),
+# NIE po wieku katalogu blokady. Wczesniejsza wersja uzywala progu czasowego
+# (max_age_seconds) - to dzialalo tylko dopoki proces trzymajacy blokade
+# faktycznie konczyl prace w zakladanym oknie czasowym. mount.sh moze dzis
+# legalnie trzymac swoja blokade znacznie dluzej niz jakikolwiek rozsadny
+# staly prog (dogananie duzej zaleglej kolejki uploadow po przerwanym
+# backupie), wiec kazdy staly prog albo falszywie oznaczalby wciaz zywy,
+# pracujacy proces jako "osierocony" (i pozwalal drugiej instancji odpalic
+# sie rownolegle - kolizja dwoch `rclone nfsmount` na tym samym remote), albo
+# musialby byc absurdalnie duzy. Sprawdzenie zywotnosci PID dziala poprawnie
+# niezaleznie od tego, jak dlugo trwa legalna praca.
 cm_acquire_lock() {
   local name="$1"
-  local max_age_seconds="${2:-300}"
   local lock_dir="$CM_LOG_DIR/${name}.lock.d"
+  local pid_file="$lock_dir/pid"
 
   if ! mkdir "$lock_dir" 2>/dev/null; then
-    local created_at
-    created_at="$(stat -f %m "$lock_dir" 2>/dev/null || echo 0)"
-    local age=$(( $(date +%s) - created_at ))
-    if [ "$age" -le "$max_age_seconds" ]; then
+    local holder_pid
+    holder_pid="$(cat "$pid_file" 2>/dev/null || echo "")"
+    if [ -n "$holder_pid" ] && kill -0 "$holder_pid" 2>/dev/null; then
       return 1
     fi
-    rmdir "$lock_dir" 2>/dev/null || true
+    # Proces-wlasciciel juz nie zyje (lub blokada zostala przerwana zanim
+    # zdazyl zapisac swoj PID) - blokada jest osierocona, przejmujemy ja.
+    rm -rf "$lock_dir"
     mkdir "$lock_dir" 2>/dev/null || return 1
   fi
 
-  trap "rmdir '$lock_dir' 2>/dev/null || true" EXIT
+  echo $$ > "$pid_file"
+  trap "rm -rf '$lock_dir' 2>/dev/null || true" EXIT
   return 0
 }

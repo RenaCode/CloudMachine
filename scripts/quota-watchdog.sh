@@ -15,7 +15,7 @@ source ./common.sh
 cm_require_config
 cm_require_jq
 
-if ! cm_acquire_lock "quota-watchdog" 1800; then
+if ! cm_acquire_lock "quota-watchdog"; then
   cm_log "Watchdog juz dziala, pomijam ten przebieg."
   exit 0
 fi

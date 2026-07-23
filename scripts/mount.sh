@@ -23,9 +23,7 @@ SP_MOUNT="$(cm_sparsebundle_mount_dir "$MACHINE_KEY")"
 
 VFS_CACHE_MAX_SIZE="${CM_VFS_CACHE_MAX_SIZE:-20G}"
 
-# Używamy krótkiej blokady (15s) zamiast 300s, aby zapobiec blokowaniu interfejsu
-# w przypadku ubicia lub niepowodzenia poprzedniego procesu.
-if ! cm_acquire_lock "mount-${MACHINE_KEY}" 15; then
+if ! cm_acquire_lock "mount-${MACHINE_KEY}"; then
   cm_log "Inna instancja mount.sh dla tej maszyny juz dziala, pomijam ten przebieg."
   exit 0
 fi
@@ -180,12 +178,19 @@ else
 
   for attempt in 1 2; do
     if [ "$already_running" = "1" ] || rclone nfsmount "${MOUNT_ARGS[@]}" --daemon; then
-      # Czekamy do 10 minut na pojawienie sie NFS w tabeli mount - ale TYLKO
-      # dopoki rclone realnie cos robi (log rosnie w ostatnich 45s). Jesli
-      # ucichnie na dobre, przestajemy czekac wczesniej zamiast trzymac cala
-      # pule 10 minut na cos, co juz i tak stoi.
+      # Czekamy na pojawienie sie NFS w tabeli mount BEZ sztywnego limitu
+      # czasu, dopoki rclone realnie cos robi (log rosnie w ostatnich 45s) -
+      # dogonienie duzej zaleglej kolejki uploadow po przerwanym backupie
+      # moze legalnie trwac znacznie dluzej niz 10 minut (patrz README).
+      # Wczesniejsza wersja miala tu twardy limit 600s, ktory - jesli
+      # drenowanie akurat trwalo dluzej - ubijal AKTYWNIE PRACUJACY proces
+      # rclone w kroku "Proba $attempt nie powiodla sie" ponizej, zerujac
+      # postep; to dokladnie ten sam blad, przed ktorym ostrzega komentarz
+      # przy cm_kill_rclone_for_remote powyzej. Przerywamy WYLACZNIE gdy
+      # rclone naprawde ucichnie (>45s bez postepu) - to jedyny wiarygodny
+      # sygnal, ze faktycznie utknelo, a nie tylko wciaz pracuje.
       waited=0
-      while [ "$waited" -lt 600 ]; do
+      while true; do
         if mount | grep -q "$LOCAL_DIR"; then
           MOUNT_OK=1
           break 2

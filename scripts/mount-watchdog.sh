@@ -27,12 +27,13 @@ set +e
 cm_require_config
 cm_require_jq
 
-# Blokada 20 minut - mount.sh wywolane ponizej moze legalnie czekac do 10
-# minut na kazda z 2 prob, jesli rclone aktywnie dogania duza zalegla
-# kolejke uploadow (patrz cm_rclone_busy_draining) - zbyt krotka blokada
-# pozwolilaby kolejnemu cyklowi watchdoga (co 60s) uznac ja za "osierocona"
-# i odpalic drugi, rownolegly przebieg w trakcie legalnego oczekiwania.
-if ! cm_acquire_lock "mount-watchdog" 1200; then
+# mount.sh wywolane ponizej moze legalnie czekac dlugo (bez sztywnego limitu
+# czasu) na kazda z 2 prob, dopoki rclone aktywnie dogania duza zalegla
+# kolejke uploadow (patrz cm_rclone_busy_draining) - blokada jest wiec oparta
+# o zywotnosc PID (patrz cm_acquire_lock w common.sh), nie o staly czas, zeby
+# kolejny cykl watchdoga (co 60s) nie uznal wciaz pracujacej instancji za
+# "osierocona" i nie odpalil drugiego, rownoleglego przebiegu.
+if ! cm_acquire_lock "mount-watchdog"; then
   exit 0
 fi
 
