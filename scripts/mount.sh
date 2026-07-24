@@ -21,16 +21,20 @@ REMOTE_PATH="$(cm_remote_path_for "$MACHINE_KEY")"
 LOCAL_DIR="$(cm_local_machine_mount_dir "$MACHINE_KEY")"
 SP_MOUNT="$(cm_sparsebundle_mount_dir "$MACHINE_KEY")"
 
-VFS_CACHE_MAX_SIZE="${CM_VFS_CACHE_MAX_SIZE:-20G}"
-# Domyslne wartosci dobrane pod dzielony (shared) client_id rclone, ktory ma
-# globalnie dzielony, niski limit zapytan/sekunde do Google Drive API - patrz
-# sekcja "Wlasny client_id Google" w README. Przy WLASNYM, prywatnym
-# client_id (rclone config show <remote> pokazuje niestandardowy client_id)
-# limit jest per-projekt, wiec te wartosci mozna bezpiecznie podniesc przez
-# CM_RCLONE_TRANSFERS/CM_RCLONE_CHECKERS/CM_RCLONE_TPSLIMIT.
-RCLONE_TRANSFERS="${CM_RCLONE_TRANSFERS:-4}"
-RCLONE_CHECKERS="${CM_RCLONE_CHECKERS:-8}"
-RCLONE_TPSLIMIT="${CM_RCLONE_TPSLIMIT:-10}"
+VFS_CACHE_MAX_SIZE="${CM_VFS_CACHE_MAX_SIZE:-40G}"
+# Wartosci dobrane i sprawdzone w praktyce (wielogodzinny test na zywym
+# koncie z WLASNYM, prywatnym client_id - patrz sekcja "Wlasny client_id
+# Google" w README) - zero throttlingu/bledow 403/429 nawet przy tym
+# poziomie. WAZNE: to sa tez wartosci, ktorych uzyje KAZDA automatyczna
+# naprawa mount-watchdog.sh (wywoluje mount.sh bez zadnych wlasnych zmiennych
+# CM_RCLONE_*), wiec musza tu byc na stale, a nie tylko przekazywane recznie
+# przy pojedynczym wywolaniu - inaczej auto-naprawa cicho cofa sie do
+# duzo wolniejszych ustawien bez ostrzezenia. Jesli nadal uzywasz
+# DZIELONEGO (domyslnego) client_id rclone, obnizyc przez
+# CM_RCLONE_TRANSFERS/CM_RCLONE_CHECKERS/CM_RCLONE_TPSLIMIT (patrz README).
+RCLONE_TRANSFERS="${CM_RCLONE_TRANSFERS:-32}"
+RCLONE_CHECKERS="${CM_RCLONE_CHECKERS:-32}"
+RCLONE_TPSLIMIT="${CM_RCLONE_TPSLIMIT:-50}"
 RCLONE_VFS_WRITE_BACK="${CM_RCLONE_VFS_WRITE_BACK:-5s}"
 # --poll-interval sluzy do wykrywania zmian zrobionych na remote Z ZEWNATRZ
 # (np. przez inne urzadzenie) - u nas nic innego nie pisze do tego folderu,
