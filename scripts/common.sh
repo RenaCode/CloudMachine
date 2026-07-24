@@ -188,10 +188,24 @@ cm_rclone_busy_draining() {
   pgrep -f "rclone nfsmount ${remote_path} " >/dev/null 2>&1 || return 1
   local log_file="$CM_LOG_DIR/rclone-mount.log"
   [ -f "$log_file" ] || return 1
-  local mtime now age
-  mtime="$(stat -f %m "$log_file" 2>/dev/null || echo 0)"
+  # NIE uzywamy mtime CALEGO pliku - okresowy heartbeat "vfs cache: cleaned"
+  # rclone pisze do tego samego pliku logu mniej wiecej co 60s NIEZALEZNIE
+  # od tego, czy realnie cos przesyla, wiec sam mtime pliku nigdy sie nie
+  # starzeje i ten check falszywie pokazywalby "wciaz zajety" w
+  # nieskonczonosc, nawet gdy rclone od dawna nic nie robi. Zaobserwowane
+  # na zywo: proces stal bezczynnie ponad 5 minut, a stary check (mtime
+  # pliku) caly czas twierdzil, ze jest "busy", blokujac watchdogowi
+  # jakakolwiek naprawe. Zamiast tego szukamy czasu OSTATNIEJ linii z
+  # realna aktywnoscia transferu (kopiowanie/upload/kolejkowanie),
+  # ignorujac linie heartbeat "vfs cache: cleaned".
+  local last_activity_line last_ts last_epoch now age
+  last_activity_line="$(tail -n 500 "$log_file" 2>/dev/null | grep -E 'Copied \(|upload succeeded|queuing for upload' | tail -1)"
+  [ -n "$last_activity_line" ] || return 1
+  last_ts="$(awk '{print $1, $2}' <<<"$last_activity_line")"
+  last_epoch="$(date -j -f "%Y/%m/%d %H:%M:%S" "$last_ts" +%s 2>/dev/null || echo 0)"
+  [ "$last_epoch" -gt 0 ] || return 1
   now="$(date +%s)"
-  age=$((now - mtime))
+  age=$((now - last_epoch))
   [ "$age" -lt "$quiet_threshold" ]
 }
 
