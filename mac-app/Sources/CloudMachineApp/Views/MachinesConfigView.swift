@@ -309,8 +309,16 @@ struct StorageAllocationBar: View {
 
     private func colorForMachine(_ key: String) -> Color {
         let colors: [Color] = [.blue, .purple, .teal, .indigo, .cyan]
-        let hash = abs(key.hashValue)
-        return colors[hash % colors.count]
+        // FNV-1a, NIE `key.hashValue` - w Swift `String.hashValue` jest celowo
+        // losowany od nowa przy kazdym starcie procesu (ochrona przed hash-
+        // flooding), wiec kolory maszyn na pasku alokacji zmienialyby sie po
+        // kazdym restarcie appki. FNV-1a jest deterministyczny miedzy uruchomieniami.
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in key.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1_099_511_628_211
+        }
+        return colors[Int(hash % UInt64(colors.count))]
     }
 }
 

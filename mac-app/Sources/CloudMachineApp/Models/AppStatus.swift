@@ -50,6 +50,16 @@ struct LastRunResult: Equatable {
     var date: Date
 }
 
+/// Ostatnia aktywnosc watchdogow dzialajacych w tle przez launchd (NIE akcji
+/// klikanych recznie w GUI - te sa w `lastBackup`/`lastVerify` ponizej).
+/// Kazde pole to surowa linia z cloudmachine.log (juz ma swoj znacznik czasu
+/// z `cm_log`), albo `nil`, jesli dany watchdog jeszcze nigdy tego nie zrobil.
+struct BackgroundActivity: Equatable {
+    var lastMountRepair: String?
+    var lastVerify: String?
+    var lastBackupResume: String?
+}
+
 @MainActor
 final class AppStatus: ObservableObject {
     @Published var dependencyState: DependencyState = .unknown
@@ -60,6 +70,7 @@ final class AppStatus: ObservableObject {
     @Published var driveInfo: DriveInfo?
     @Published var lastBackup: LastRunResult?
     @Published var lastVerify: LastRunResult?
+    @Published var backgroundActivity = BackgroundActivity()
     @Published var watchdogInstalled: Bool = false
     /// Osobny od `watchdogInstalled` (ktory pilnuje limitu miejsca) - ten
     /// pilnuje, zeby samo montowanie dysku nie wisialo/nie zawieszalo sie.

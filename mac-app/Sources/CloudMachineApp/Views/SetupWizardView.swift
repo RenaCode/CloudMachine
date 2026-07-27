@@ -79,8 +79,12 @@ struct SetupWizardView: View {
 
                 // KROK 3: Limit i nazwa maszyny
                 let step3Allowed = step2Done
-                let isRegistered = !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && 
-                                   controller.config.machines.contains(where: { $0.displayName == displayName })
+                // Po kluczu maszyny (stabilny identyfikator), NIE po displayName -
+                // displayName to dowolny tekst edytowalny przez uzytkownika i NIE
+                // jest gwarantowany unikalny (dwa Maki moga nazywac sie tak samo),
+                // wiec porownanie po nim moglo pokazac krok jako "ukonczony" dla
+                // maszyny, ktora nigdy nie zostala faktycznie zapisana.
+                let isRegistered = controller.config.machines.contains(where: { $0.key == controller.status.currentMachineKey })
                 let step3Done = step3Allowed && isRegistered
                 WizardStepCard(
                     number: 3,

@@ -69,7 +69,7 @@ struct StatusView: View {
                 }
 
                 // Karta 3: Ostatnie operacje (na całą szerokość)
-                StatusCard(title: "Historia ostatnich operacji", systemImage: "clock.arrow.circlepath") {
+                StatusCard(title: "Historia ostatnich operacji (ta sesja aplikacji)", systemImage: "clock.arrow.circlepath") {
                     VStack(spacing: 12) {
                         OperationResultRow(
                             title: "Backup Time Machine",
@@ -85,11 +85,37 @@ struct StatusView: View {
                     }
                 }
 
+                // Karta 4: aktywnosc watchdogow dzialajacych w tle przez launchd -
+                // odrebna od karty wyzej, bo ta pokazuje wylacznie akcje klikniete
+                // recznie W TEJ appce, a watchdogi dzialaja niezaleznie od tego,
+                // czy appka jest w ogole otwarta.
+                StatusCard(title: "Automatyzacja w tle (watchdogi launchd)", systemImage: "gearshape.arrow.triangle.2.circlepath") {
+                    VStack(spacing: 12) {
+                        BackgroundActivityRow(
+                            title: "Ostatnia naprawa montowania",
+                            line: controller.status.backgroundActivity.lastMountRepair,
+                            placeholder: "Brak zarejestrowanej naprawy - montowanie jeszcze nigdy nie musiało być automatycznie odzyskiwane."
+                        )
+                        Divider()
+                        BackgroundActivityRow(
+                            title: "Ostatnia automatyczna weryfikacja",
+                            line: controller.status.backgroundActivity.lastVerify,
+                            placeholder: "Jeszcze nie wykonana - verify-watchdog uruchamia się raz na 7 dni (jeśli włączony w kroku 5 Kreatora)."
+                        )
+                        Divider()
+                        BackgroundActivityRow(
+                            title: "Ostatnie automatyczne wznowienie backupu",
+                            line: controller.status.backgroundActivity.lastBackupResume,
+                            placeholder: "Backup nigdy nie musiał być automatycznie wznawiany przez backup-watchdog."
+                        )
+                    }
+                }
+
                 // Dolna sekcja akcji (Panel sterowania)
                 VStack(spacing: 12) {
                     HStack(spacing: 12) {
                         Button(action: {
-                            Task { await controller.refreshAll() }
+                            Task { await controller.refreshAll(force: true) }
                         }) {
                             Label("Odśwież status", systemImage: "arrow.clockwise")
                                 .frame(maxWidth: .infinity)
@@ -135,6 +161,17 @@ struct StatusView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
+                        .disabled(controller.status.mountState != .mounted)
+
+                        Button(action: {
+                            Task { await controller.stopBackupNow() }
+                        }) {
+                            Label("Zatrzymaj backup", systemImage: "stop.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .tint(.red)
                         .disabled(controller.status.mountState != .mounted)
                     }
                 }
@@ -348,6 +385,33 @@ struct OperationResultRow: View {
                     .foregroundStyle(.secondary)
                     .italic()
                     .padding(.vertical, 2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct BackgroundActivityRow: View {
+    var title: String
+    var line: String?
+    var placeholder: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.subheadline.bold())
+
+            if let line {
+                Text(line)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(placeholder)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .italic()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

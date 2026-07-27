@@ -8,14 +8,36 @@ final class CloudMachineController: ObservableObject {
 
     private let requiredTools = ["rclone", "jq"]
 
+    /// Chroni przed lawina nakladajacych sie subprocessow (rclone size/about,
+    /// tmutil, launchctl...) - `MenuBarContentView` odpala `refreshAll()` w
+    /// `.task` przy KAZDYM otwarciu popupu paska menu, wiec bez tego szybkie,
+    /// powtarzane klikanie ikonki multiplikowaloby te wywolania bez sensu.
+    private var lastRefreshAllAt: Date?
+    private let refreshAllMinInterval: TimeInterval = 5
+
     init() {
-        // mount.sh/quota-watchdog.sh wymagaja istniejacego pliku configu - bez tego
-        // pierwsze klikniecie "Zamontuj" (zanim ktokolwiek dotknie zakladki Maszyny)
-        // konczy sie cichym bledem "brak pliku konfiguracyjnego" widocznym tylko w logu.
-        if !ConfigStore.exists {
+        switch ConfigStore.loadResult() {
+        case .loaded(let loaded):
+            config = loaded
+        case .missing:
+            // mount.sh/quota-watchdog.sh wymagaja istniejacego pliku configu - bez
+            // tego pierwsze klikniecie "Zamontuj" (zanim ktokolwiek dotknie zakladki
+            // Maszyny) konczy sie cichym bledem "brak pliku konfiguracyjnego"
+            // widocznym tylko w logu.
+            config = .empty
             try? ConfigStore.save(.empty)
+        case .corrupt(let error):
+            // NIE zapisujemy tu `.empty` na dysk (w przeciwienstwie do galezi
+            // .missing wyzej) - plik istnieje, wiec moze byc do odzyskania recznie.
+            // Zamiast cicho go nadpisac, robimy kopie zapasowa obok i pokazujemy
+            // czerwony baner bledu, zeby uzytkownik NIE dotknal zakladki Maszyny
+            // (co odpalyloby auto-zapis pustej konfiguracji przez onChange) zanim
+            // nie przejrzy, co poszlo nie tak.
+            config = .empty
+            let backupPath = ConfigStore.backupCorruptFile()
+            let backupNote = backupPath.map { " Kopia zapisana jako: \($0.lastPathComponent)." } ?? ""
+            status.errorMessage = "Plik konfiguracyjny (machines.json) jest uszkodzony i nie zostal wczytany - pokazuje pusta konfiguracje, ZEBY NIE NADPISAC oryginalu.\(backupNote) Blad: \(error.localizedDescription)"
         }
-        config = ConfigStore.load()
         Task {
             let key = await currentMachineKey()
             status.currentMachineKey = key
@@ -398,6 +420,27 @@ final class CloudMachineController: ObservableObject {
         }
     }
 
+    /// `tmutil stopbackup` NIE wymaga sudo (w przeciwienstwie do startbackup) -
+    /// patrz ten sam komentarz w scripts/unmount.sh. Bezpieczne wywolac nawet
+    /// gdy akurat nic nie kopiuje (tmutil po prostu nic wtedy nie robi).
+    func stopBackupNow() async {
+        guard !status.isBusy else { return }
+        clearError()
+        status.isBusy = true
+        status.busyLabel = "Zatrzymuje backup Time Machine..."
+        defer { status.isBusy = false }
+        do {
+            let result = try await Shell.run("/usr/bin/tmutil", ["stopbackup"], timeout: 30)
+            if result.succeeded {
+                appendLog("Zatrzymano backup Time Machine.")
+            } else {
+                fail("Zatrzymanie backupu nie powiodlo sie: \(result.stderr.isEmpty ? result.stdout : result.stderr)")
+            }
+        } catch {
+            fail("Blad zatrzymania backupu: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Weryfikacja
 
     func verifyNow() async {
@@ -606,9 +649,39 @@ final class CloudMachineController: ObservableObject {
         }
     }
 
+    // MARK: - Aktywnosc watchdogow w tle
+
+    /// Panel Status pokazywal dotad WYLACZNIE wyniki akcji klikanych recznie w
+    /// GUI (`lastBackup`/`lastVerify`) - jesli watchdogi (mount-watchdog,
+    /// backup-watchdog, verify-watchdog) naprawily/zweryfikowaly cos w tle przez
+    /// launchd, GUI o tym nie wiedzialo i dashboard moglby bez konca pokazywac
+    /// "nigdy nie zweryfikowano", mimo ze automatyczna weryfikacja realnie dziala
+    /// co tydzien. Skanujemy wiec `cloudmachine.log` (wspolny log wszystkich
+    /// skryptow, pisany przez `cm_log`) w poszukiwaniu ostatniej linii kazdego
+    /// watchdoga - plik jest mały (rotowany osobno od ogromnego
+    /// rclone-mount.log), wiec pelne skanowanie jest tanie.
+    func refreshBackgroundWatchdogActivity() {
+        guard let data = try? String(contentsOf: Paths.combinedLogFile, encoding: .utf8) else { return }
+        let lines = data.split(separator: "\n").map(String.init)
+        status.backgroundActivity = BackgroundActivity(
+            lastMountRepair: lines.last(where: { $0.contains("[mount-watchdog] Naprawa zakonczona powodzeniem") }),
+            lastVerify: lines.last(where: { $0.contains("[verify-watchdog]") && ($0.contains("OK:") || $0.contains("UWAGA:")) }),
+            lastBackupResume: lines.last(where: { $0.contains("[backup-watchdog] Wznowiono backup") })
+        )
+    }
+
     // MARK: - Odswiezenie calosci
 
-    func refreshAll() async {
+    /// `force: false` (domyslne) pomija odswiezenie, jesli ostatnie wywolanie
+    /// bylo mniej niz `refreshAllMinInterval` temu - patrz komentarz przy
+    /// `lastRefreshAllAt`. Przyciski "Odswiez" klikniete recznie przez
+    /// uzytkownika powinny uzywac `force: true`, zeby zawsze zadzialaly.
+    func refreshAll(force: Bool = false) async {
+        if !force, let last = lastRefreshAllAt, Date().timeIntervalSince(last) < refreshAllMinInterval {
+            return
+        }
+        lastRefreshAllAt = Date()
+
         let key = await currentMachineKey()
         status.currentMachineKey = key
         await checkDependencies()
@@ -620,5 +693,6 @@ final class CloudMachineController: ObservableObject {
         await refreshWatchdogInstalled()
         checkFullDiskAccess()
         refreshLogTail()
+        refreshBackgroundWatchdogActivity()
     }
 }
