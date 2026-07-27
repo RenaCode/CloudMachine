@@ -132,24 +132,18 @@ cm_log "[mount-watchdog] Wykryto niezdrowe/zawieszone montowanie. Naprawiam..."
 if [ "$nfs_listed" = "1" ]; then
   # 1. Odepnij sparsebundle, jesli jest zamontowany (wymuszone, bo skoro NFS
   #    pod nim jest zawieszony, zwykle odmontowanie prawdopodobnie tez by sie zawiesilo).
+  #    hdiutil detach probujemy jako pierwszy krok (zwykle szybszy przy
+  #    zdrowym backendzie), ale fallback na diskutil idzie juz przez
+  #    cm_force_unmount - synchroniczne wywolanie diskutil tutaj kiedys
+  #    zawieszalo caly ten skrypt na dobre, patrz komentarz przy tej funkcji.
   if mount | grep -q "$SP_MOUNT"; then
     hdiutil detach -force "$SP_MOUNT" >/dev/null 2>&1
-    if mount | grep -q "$SP_MOUNT"; then
-      diskutil unmount force "$SP_MOUNT" >/dev/null 2>&1
-    fi
+    cm_force_unmount "$SP_MOUNT" 10 || true
   fi
 
-  # 2. Wymuszone odmontowanie NFS w tle - zwykle `umount` na zawieszonym
-  #    punkcie tez moze sie zawiesic, wiec nie czekamy na nie synchronicznie
-  #    w nieskonczonosc.
-  ( diskutil unmount force "$LOCAL_DIR" >/dev/null 2>&1 || umount -f "$LOCAL_DIR" >/dev/null 2>&1 ) &
-  disown 2>/dev/null
-  waited=0
-  while [ "$waited" -lt 10 ]; do
-    mount | grep -q "$LOCAL_DIR" || break
-    sleep 1
-    waited=$((waited + 1))
-  done
+  # 2. Wymuszone odmontowanie NFS - patrz komentarz przy cm_force_unmount w
+  #    common.sh (nigdy nie czeka na diskutil/umount w nieskonczonosc).
+  cm_force_unmount "$LOCAL_DIR" 10 || true
 
   # 3. Ubij zawieszony proces rclone dla tego remote (SIGTERM, potem KILL) -
   #    dopiero teraz wiemy, ze byl naprawde zawieszony, a nie w trakcie

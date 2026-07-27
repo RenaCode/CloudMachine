@@ -249,6 +249,32 @@ cm_probe_responsive() {
   return 1
 }
 
+# Wymusza odmontowanie w tle i NIGDY nie czeka na `diskutil`/`umount`
+# synchronicznie - te polecenia potrafia zawiesic sie NA DOBRE (nieprzerywalne
+# oczekiwanie w jadrze, nie reaguje nawet na kill -9), jesli storagekitd probuje
+# przy okazji zsynchronizowac dane z backendu, ktory wlasnie w tej samej chwili
+# przestal odpowiadac (np. serwer NFS rclone zabity chwile wczesniej w tym samym
+# cyklu naprawy). Zaobserwowany na zywo incydent: dokladnie taki synchroniczny
+# `diskutil unmount force` zawiesil caly cykl watchdoga na >48h, az do recznego
+# restartu Maca. Zwraca 0, jesli punkt montowania zniknal z tabeli `mount` w ciagu
+# `timeout_s`, 1 w przeciwnym razie - ale nie zabija ani nie czeka na osierocony
+# proces `diskutil` w tle, zeby nie zablokowac wywolujacego skryptu tak samo, jak
+# blokowalby sie sam.
+cm_force_unmount() {
+  local mount_point="$1"
+  local timeout_s="${2:-10}"
+  mount | grep -q "$mount_point" || return 0
+  ( diskutil unmount force "$mount_point" >/dev/null 2>&1 || umount -f "$mount_point" >/dev/null 2>&1 ) &
+  disown 2>/dev/null || true
+  local waited=0
+  while [ "$waited" -lt "$timeout_s" ]; do
+    mount | grep -q "$mount_point" || return 0
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
 # Blokada oparta na atomowym `mkdir` - NIE na `flock`, ktorego macOS nie ma
 # domyslnie zainstalowanego (brak `/usr/bin/flock` na stockowym systemie;
 # `flock -n` po prostu nie uruchamia sie, wiec kazdy skrypt myslal, ze

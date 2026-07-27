@@ -196,9 +196,7 @@ else
     already_running=1
   else
     cm_kill_rclone_for_remote "$REMOTE_PATH"
-    if mount | grep -q "$LOCAL_DIR"; then
-      diskutil unmount force "$LOCAL_DIR" >/dev/null 2>&1 || true
-    fi
+    cm_force_unmount "$LOCAL_DIR" 10 || true
   fi
 
   cm_log "Montuje $REMOTE_PATH -> $LOCAL_DIR (vfs-cache-mode=full, cache max=$VFS_CACHE_MAX_SIZE)"
@@ -233,9 +231,7 @@ else
     already_running=0
     if [ "$attempt" -eq 1 ]; then
       cm_log "Proba $attempt nie powiodla sie, sprzatam i probuje ponownie..."
-      if mount | grep -q "$LOCAL_DIR"; then
-        diskutil unmount force "$LOCAL_DIR" >/dev/null 2>&1 || true
-      fi
+      cm_force_unmount "$LOCAL_DIR" 10 || true
       cm_kill_rclone_for_remote "$REMOTE_PATH"
       sleep 1
       if ! mount | grep -q "$LOCAL_DIR"; then
