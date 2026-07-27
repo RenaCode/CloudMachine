@@ -16,6 +16,34 @@ cm_log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg" | tee -a "$CM_LOG_DIR/cloudmachine.log"
 }
 
+# Przycina plik logu, jesli przekroczyl max_bytes - metoda "copytruncate"
+# (zachowuje ostatnie `keep_lines` linii, POTEM obcina oryginal do 0 bajtow),
+# bezpieczna dla procesu (rclone), ktory trzyma ten sam plik otwarty do
+# dopisywania (O_APPEND) - po obcieciu jadro samo przesuwa nastepny zapis na
+# nowy, mniejszy koniec pliku, wiec NIE trzeba restartowac rclone, zeby
+# rotacja zadziala.
+#
+# Powod istnienia: bez tego rclone-mount.log rosnie bez ograniczen (w praktyce
+# zaobserwowano 3.3 GiB po kilku dniach dzialania, m.in. przez to, ze rclone
+# potrafi zalogowac IDENTYCZNA linie "queuing for upload" nawet >100 razy pod
+# rzad dla tego samego banda w ciagu kilku sekund) - to i niepotrzebnie zuzywa
+# miejsce na dysku, i spowalnia kazde `tail`/grep po tym pliku (m.in. te
+# uzywane przez cm_rclone_busy_draining ponizej).
+cm_rotate_log_if_large() {
+  local log_file="$1"
+  local max_bytes="${2:-209715200}" # 200 MiB
+  local keep_lines="${3:-5000}"
+  [ -f "$log_file" ] || return 0
+  local size
+  size="$(stat -f%z "$log_file" 2>/dev/null || echo 0)"
+  [ "$size" -gt "$max_bytes" ] || return 0
+  local tmp="${log_file}.rotate.tmp"
+  tail -n "$keep_lines" "$log_file" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  cat "$tmp" > "$log_file"
+  rm -f "$tmp"
+  cm_log "Przycieto $log_file (bylo ${size} bajtow, zachowano ostatnie ${keep_lines} linii)."
+}
+
 cm_require_config() {
   if [ ! -f "$CM_CONFIG" ]; then
     cm_log "BLAD: brak pliku konfiguracyjnego $CM_CONFIG. Skopiuj config/machines.example.json -> config/machines.json i uzupelnij."

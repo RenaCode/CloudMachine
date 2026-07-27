@@ -46,6 +46,10 @@ fi
 # common.sh, dlaczego to krytyczne dla stabilnosci backupu.
 cm_start_caffeinate
 
+# Przy okazji kazdego cyklu (co 60s) pilnujemy tez, zeby log rclone nie rosl
+# bez ograniczen - patrz komentarz przy cm_rotate_log_if_large w common.sh.
+cm_rotate_log_if_large "$CM_LOG_DIR/rclone-mount.log" || true
+
 MACHINE_KEY="$(cm_machine_key)"
 LOCAL_DIR="$(cm_local_machine_mount_dir "$MACHINE_KEY")"
 SP_MOUNT="$(cm_sparsebundle_mount_dir "$MACHINE_KEY")"

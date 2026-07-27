@@ -14,6 +14,9 @@ jobs:
       - name: swift build
         working-directory: mac-app
         run: swift build
+      - name: swift test
+        working-directory: mac-app
+        run: swift test
 
   lint-scripts:
     name: Shell script checks

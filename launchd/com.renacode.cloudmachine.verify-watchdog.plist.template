@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.renacode.cloudmachine.verify-watchdog</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__CM_ROOT__/scripts/verify-watchdog.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CM_CONFIG</key>
+    <string>__CM_CONFIG__</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <!--
+    Codziennie budzimy skrypt, zeby sprawdzil czy termin weryfikacji juz
+    minal - realna czestotliwosc weryfikacji (domyslnie raz na 7 dni,
+    CM_VERIFY_INTERVAL_DAYS) pilnuje sam skrypt przez plik stanu, NIE ten
+    interwal - `tmutil verifychecksums` na duzym backupie moze trwac
+    dlugo, wiec nie chcemy odpalac go czesciej niz trzeba.
+  -->
+  <key>StartInterval</key>
+  <integer>86400</integer>
+  <key>StandardOutPath</key>
+  <string>__CM_LOG_DIR__/launchd-verify-watchdog.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__CM_LOG_DIR__/launchd-verify-watchdog.err.log</string>
+</dict>
+</plist>

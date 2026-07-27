@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "CloudMachineApp",
             path: "Sources/CloudMachineApp"
+        ),
+        .testTarget(
+            name: "CloudMachineAppTests",
+            dependencies: ["CloudMachineApp"],
+            path: "Tests/CloudMachineAppTests"
         )
     ]
 )

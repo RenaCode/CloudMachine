@@ -44,10 +44,16 @@ if [ "$RUNNING" = "1" ]; then
   fi
 fi
 
-# 1. Odmontowanie sparsebundle, jeśli jest zamontowane
+# 1. Odmontowanie sparsebundle, jeśli jest zamontowane. `hdiutil detach` (bez
+#    -force) probujemy jako pierwszy krok normalnego, grzecznego odmontowania -
+#    ale fallback idzie przez cm_force_unmount, NIE przez synchroniczny
+#    `diskutil unmount force`, ktory potrafi zawiesic sie na dobre, jesli
+#    backend NFS pod spodem akurat nie odpowiada (patrz komentarz przy
+#    cm_force_unmount w common.sh - dokladnie ten mechanizm zawiesil kiedys
+#    caly cykl naprawy na >48h).
 if mount | grep -q "$SP_MOUNT"; then
   cm_log "Odmontowuje sparsebundle: $SP_MOUNT"
-  hdiutil detach "$SP_MOUNT" 2>/dev/null || umount "$SP_MOUNT" 2>/dev/null || diskutil unmount force "$SP_MOUNT" || true
+  hdiutil detach "$SP_MOUNT" 2>/dev/null || umount "$SP_MOUNT" 2>/dev/null || cm_force_unmount "$SP_MOUNT" 10 || true
 fi
 
 # 2. Odmontowanie NFS share
@@ -58,9 +64,9 @@ if ! mount | grep -q "$LOCAL_DIR"; then
 fi
 
 cm_log "Odmontowuje $LOCAL_DIR"
-umount "$LOCAL_DIR" 2>/dev/null || diskutil unmount "$LOCAL_DIR" 2>/dev/null || {
-  cm_log "Zwykle odmontowanie nie powiodlo sie, probuje force unmount."
-  diskutil unmount force "$LOCAL_DIR"
-}
+if ! umount "$LOCAL_DIR" 2>/dev/null && ! diskutil unmount "$LOCAL_DIR" 2>/dev/null; then
+  cm_log "Zwykle odmontowanie nie powiodlo sie, probuje force unmount (max 10s, w tle)."
+  cm_force_unmount "$LOCAL_DIR" 10 || cm_log "OSTRZEZENIE: punkt montowania nadal widnieje w tabeli po probie wymuszonego odmontowania - proces diskutil moze zostac osierocony w tle."
+fi
 cm_kill_rclone_for_remote "$REMOTE_PATH"
 cm_log "Odmontowano."

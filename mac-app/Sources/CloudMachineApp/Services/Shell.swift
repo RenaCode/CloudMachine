@@ -97,6 +97,19 @@ enum Shell {
                         process.terminate()
                     }
                 }
+                // Eskalacja do SIGKILL, jesli proces zignoruje SIGTERM (`terminate()`
+                // powyzej) - obserwowany na zywo przypadek: skrypt bash zablokowany
+                // na potomnym `diskutil`/`umount` w nieprzerywalnym oczekiwaniu jadra
+                // ignoruje SIGTERM bez konca, wiec sam "timeout" w Shell.run nigdy
+                // faktycznie nie zwalnia procesu - `isBusy` w UI zostaje zapalone na
+                // stale. SIGKILL tez nie odblokuje procesu utknietego w jadrze (nic
+                // to nie moze), ale przy zwyklym zawieszeniu na poziomie procesu
+                // (a nie jadra) daje appce realna szanse na odzyskanie kontroli.
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 5) {
+                    if process.isRunning {
+                        kill(process.processIdentifier, SIGKILL)
+                    }
+                }
             }
         }
     }

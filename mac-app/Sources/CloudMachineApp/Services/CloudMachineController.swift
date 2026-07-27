@@ -49,6 +49,13 @@ final class CloudMachineController: ObservableObject {
             return "this-mac"
         }
         let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.normalizedMachineKey(fromComputerName: raw)
+    }
+
+    /// Czysta funkcja (bez efektow ubocznych) wydzielona z `currentMachineKey()`,
+    /// zeby dalo sie ja przetestowac bez shellowania do `scutil` - patrz
+    /// CloudMachineControllerTests.
+    nonisolated static func normalizedMachineKey(fromComputerName raw: String) -> String {
         let lowered = raw.lowercased().replacingOccurrences(of: " ", with: "-")
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-")
         return String(lowered.unicodeScalars.filter { allowed.contains($0) })
@@ -215,7 +222,7 @@ final class CloudMachineController: ObservableObject {
                 fail("rclone authorize nie powiodlo sie: \(authResult.stderr)")
                 return
             }
-            guard let token = extractToken(from: authResult.stdout) else {
+            guard let token = Self.extractToken(from: authResult.stdout) else {
                 fail("Nie udalo sie odczytac tokenu z wyniku rclone authorize.")
                 return
             }
@@ -237,7 +244,9 @@ final class CloudMachineController: ObservableObject {
         }
     }
 
-    private func extractToken(from output: String) -> String? {
+    /// `static` (nie `private`) zeby dalo sie to przetestowac bez pelnej
+    /// instancji kontrolera - patrz CloudMachineControllerTests.
+    nonisolated static func extractToken(from output: String) -> String? {
         guard let startRange = output.range(of: "--->"),
               let endRange = output.range(of: "<---") else { return nil }
         let token = output[startRange.upperBound..<endRange.lowerBound]
@@ -534,7 +543,12 @@ final class CloudMachineController: ObservableObject {
         let rules = [
             "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil delete -p *",
             "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil setdestination -a *",
-            "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil startbackup*",
+            // Spacja po "startbackup" (nie goly "startbackup*") celowo wymaga co
+            // najmniej jednego argumentu odzielonego spacja (np. "--auto",
+            // "-d <ID>") - odrobine ciasniejsze niz plaski wildcard, bez utraty
+            // zadnego z realnie uzywanych wywolan (patrz runTmutilPrivileged
+            // wyzej i scripts/backup-watchdog.sh).
+            "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil startbackup *",
             "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil verifychecksums *",
             "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil removedestination *"
         ]
@@ -559,6 +573,14 @@ final class CloudMachineController: ObservableObject {
         }
     }
 
+    /// macOS nie ma publicznego API do wprost odpytania "czy ta appka ma Pelny
+    /// dostep do dysku" (TCC.db jest prywatne) - jedyny wiarygodny sposob to
+    /// probne odczytanie pliku, do ktorego dostep BEZ FDA jest zawsze
+    /// zablokowany przez sandboxing systemowy, niezaleznie od zwyklych uprawnien
+    /// unixowych. Safari Bookmarks.plist jest do tego standardowym wyborem
+    /// (uzywanym tez przez inne narzedzia open-source w tym samym celu) -
+    /// MigrationHistory.plist to fallback na wypadek, gdyby ktos usunal/nie mial
+    /// jeszcze historii Safari.
     func checkFullDiskAccess() {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let safariDir = home.appendingPathComponent("Library/Safari")

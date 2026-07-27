@@ -112,6 +112,12 @@ Jeśli skrypt `verify-backup.sh` zgłosi błąd sumy kontrolnej na dowolnym etap
 
 ---
 
+## 🩺 Weryfikacja spójności (automatyczna)
+
+Poza ręcznym `scripts/verify-backup.sh` z planu testowego, `scripts/verify-watchdog.sh` (agent `com.renacode.cloudmachine.verify-watchdog`) sam sprawdza sumy kontrolne najnowszego backupu **raz na 7 dni** (`CM_VERIFY_INTERVAL_DAYS`), bez ręcznej interwencji - dokładnie to, co sekcja "Ryzyko spójności" wyżej zaleca robić regularnie. Weryfikacja rusza tylko gdy Time Machine jest bezczynne (nie przeszkadza aktywnemu backupowi) i wymaga tej samej reguły `sudoers` (`tmutil verifychecksums`), co pozostałe watchdogi - patrz sekcja niżej. Wynik trafia do logu, a przy wykrytym problemie dostajesz powiadomienie systemowe.
+
+---
+
 ## 🔒 Automatyczne przycinanie starych kopii (limit miejsca)
 
 Osobny demon, `quota-watchdog.sh` (agent `com.renacode.cloudmachine.watchdog`), pilnuje co 6h, żeby backup tej maszyny nie przekroczył limitu z `config/machines.json`, i w razie potrzeby kasuje najstarsze kopie przez `sudo tmutil delete`.
@@ -129,7 +135,7 @@ Wklej (zastąp `TWÓJ_LOGIN` wynikiem polecenia `whoami`):
 ```
 TWÓJ_LOGIN ALL=(root) NOPASSWD: /usr/bin/tmutil delete -p *
 TWÓJ_LOGIN ALL=(root) NOPASSWD: /usr/bin/tmutil setdestination -a *
-TWÓJ_LOGIN ALL=(root) NOPASSWD: /usr/bin/tmutil startbackup*
+TWÓJ_LOGIN ALL=(root) NOPASSWD: /usr/bin/tmutil startbackup *
 TWÓJ_LOGIN ALL=(root) NOPASSWD: /usr/bin/tmutil verifychecksums *
 TWÓJ_LOGIN ALL=(root) NOPASSWD: /usr/bin/tmutil removedestination *
 ```
@@ -152,8 +158,9 @@ tmutil destinationinfo
 Aby całkowicie usunąć daemony, konfiguracje i cele Time Machine z systemu:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.renacode.cloudmachine.mount-watchdog.plist
-launchctl unload ~/Library/LaunchAgents/com.renacode.cloudmachine.watchdog.plist
+for plist in ~/Library/LaunchAgents/com.renacode.cloudmachine.*.plist; do
+  launchctl unload "$plist"
+done
 rm ~/Library/LaunchAgents/com.renacode.cloudmachine.*.plist
 sudo tmutil removedestination <ID z polecenia tmutil destinationinfo>
 ./scripts/unmount.sh
