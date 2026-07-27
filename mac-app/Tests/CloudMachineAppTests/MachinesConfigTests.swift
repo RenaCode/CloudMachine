@@ -102,4 +102,30 @@ final class MachinesConfigTests: XCTestCase {
     XCTAssertEqual(config.machines.first?.displayName, "Marcin's Mac Studio")
     XCTAssertEqual(config.machines.first?.limitGB, 3000)
   }
+
+  // MARK: - remotePath / limitGB
+
+  func testRemotePath_combinesRemoteNameRootFolderAndKey() {
+    let config = MachinesConfig(
+      driveTotalGB: 5000, safetyMarginPercent: 10, remoteName: "gdrive-cloudmachine",
+      remoteRootFolder: "CloudMachine", machines: [])
+    XCTAssertEqual(
+      config.remotePath(forMachineKey: "marcin-mac-studio"),
+      "gdrive-cloudmachine:CloudMachine/marcin-mac-studio")
+  }
+
+  func testLimitGB_returnsLimitForKnownMachine() {
+    let config = MachinesConfig(
+      driveTotalGB: 5000, safetyMarginPercent: 10, remoteName: "gdrive-cloudmachine",
+      remoteRootFolder: "CloudMachine",
+      machines: [MachineEntry(key: "mac-1", displayName: "Mac 1", limitGB: 1000)])
+    XCTAssertEqual(config.limitGB(forMachineKey: "mac-1"), 1000)
+  }
+
+  func testLimitGB_returnsNilForUnknownMachine() {
+    let config = MachinesConfig(
+      driveTotalGB: 5000, safetyMarginPercent: 10, remoteName: "gdrive-cloudmachine",
+      remoteRootFolder: "CloudMachine", machines: [])
+    XCTAssertNil(config.limitGB(forMachineKey: "nieznana-maszyna"))
+  }
 }

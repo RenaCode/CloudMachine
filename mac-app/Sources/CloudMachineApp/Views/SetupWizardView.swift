@@ -1,4 +1,3 @@
-import CloudMachineCore
 import SwiftUI
 
 struct SetupWizardView: View {

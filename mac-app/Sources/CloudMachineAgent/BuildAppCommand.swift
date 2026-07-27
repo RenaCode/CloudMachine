@@ -36,8 +36,13 @@ struct BuildApp: AsyncParsableCommand {
     print(
       "==> Buduje CloudMachineApp + cloudmachine-agent (release) - wersja \(version) (\(buildNumber))"
     )
+    // `/usr/bin/env swift` (nie zahardkodowana sciezka /usr/bin/swift), zeby
+    // respektowac PATH - deweloperzy z niestandardowym toolchainem (np.
+    // swift.org installer, TOOLCHAINS env var) moga miec inny `swift` niz
+    // ten domyslny z Xcode. Oryginalny bash robil to samo (`swift build`
+    // bez sciezki, resolved przez PATH powloki).
     let buildStatus = try await InteractiveProcess.run(
-      "/usr/bin/swift", ["build", "-c", "release", "--package-path", macAppRoot.path])
+      "/usr/bin/env", ["swift", "build", "-c", "release", "--package-path", macAppRoot.path])
     guard buildStatus == 0 else {
       print("BLAD: swift build zakonczyl sie kodem \(buildStatus).")
       throw ExitCode.failure

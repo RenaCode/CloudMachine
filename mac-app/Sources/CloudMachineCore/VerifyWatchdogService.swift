@@ -32,12 +32,10 @@ public enum VerifyWatchdogService {
     // Nie przeszkadzamy aktywnemu backupowi.
     if await TimeMachineStatus.isRunning() { return }
 
-    let now = Date()
-    if let last = try? String(contentsOf: stateFile, encoding: .utf8),
-      let lastEpoch = Double(last.trimmingCharacters(in: .whitespacesAndNewlines))
-    {
-      if now.timeIntervalSince1970 - lastEpoch < Double(intervalDays * 86400) { return }
-    }
+    let lastEpoch = CooldownGate.parseStateFile(stateFile)
+    guard
+      !CooldownGate.isWithinCooldown(lastEpoch: lastEpoch, cooldown: Double(intervalDays * 86400))
+    else { return }
 
     guard
       let listResult = try? await ProcessRunner.run(
@@ -51,7 +49,7 @@ public enum VerifyWatchdogService {
     // Zapisujemy PRZED faktyczna weryfikacja (nie po) - dluga weryfikacja
     // (potencjalnie godziny) nie powinna sama siebie wywolywac ponownie w
     // kolko, jesli nastepny cykl watchdoga trafi w trakcie jej trwania.
-    try? "\(Int(now.timeIntervalSince1970))".write(to: stateFile, atomically: true, encoding: .utf8)
+    CooldownGate.writeStateFile(stateFile)
 
     CMLogger.log(
       "[verify-watchdog] Weryfikuje sumy kontrolne najnowszego backupu: \(latestBackup) (moze potrwac dlugo)."

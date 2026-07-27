@@ -32,13 +32,9 @@ public enum BackupWatchdogService {
     // celu uzytkownika) - nie przeszkadzamy.
     if await TimeMachineStatus.isRunning() { return }
 
-    let now = Date()
-    if let last = try? String(contentsOf: stateFile, encoding: .utf8),
-      let lastEpoch = Double(last.trimmingCharacters(in: .whitespacesAndNewlines))
-    {
-      if now.timeIntervalSince1970 - lastEpoch < cooldown { return }
-    }
-    try? "\(Int(now.timeIntervalSince1970))".write(to: stateFile, atomically: true, encoding: .utf8)
+    let lastEpoch = CooldownGate.parseStateFile(stateFile)
+    guard !CooldownGate.isWithinCooldown(lastEpoch: lastEpoch, cooldown: cooldown) else { return }
+    CooldownGate.writeStateFile(stateFile)
 
     CMLogger.log(
       "[backup-watchdog] Time Machine jest bezczynne, mimo ze CloudMachine (\(destID)) powinno byc aktywne - wznawiam."
