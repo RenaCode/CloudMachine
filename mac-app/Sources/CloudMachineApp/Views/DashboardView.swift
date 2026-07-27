@@ -1,5 +1,5 @@
-import SwiftUI
 import CloudMachineCore
+import SwiftUI
 
 struct DashboardView: View {
   @EnvironmentObject private var controller: CloudMachineController

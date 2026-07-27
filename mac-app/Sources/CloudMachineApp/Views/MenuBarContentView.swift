@@ -1,6 +1,6 @@
 import AppKit
-import SwiftUI
 import CloudMachineCore
+import SwiftUI
 
 struct MenuBarContentView: View {
   @EnvironmentObject private var controller: CloudMachineController
