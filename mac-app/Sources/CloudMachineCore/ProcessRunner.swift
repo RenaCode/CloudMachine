@@ -65,13 +65,17 @@ public enum ProcessRunner {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
 
-        let remainingOut = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let remainingErr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-        queue.sync {
-          stdoutData.append(remainingOut)
-          stderrData.append(remainingErr)
-
+        // WAZNE: NIE wolno tu wolac readDataToEndOfFile() - blokuje sie do
+        // zamkniecia pisania konca potoku przez WSZYSTKICH jego posiadaczy.
+        // Procesy odpalane z "--daemon" (np. `rclone nfsmount --daemon`)
+        // forkuja dziecko, ktore dziedziczy te same FD stdout/stderr i NIGDY
+        // ich nie zamyka - terminationHandler natychmiastowego procesu-rodzica
+        // odpala sie normalnie, ale readDataToEndOfFile() wisi wtedy w
+        // nieskonczonosc, bo EOF nigdy nie nadejdzie (zaobserwowane realnie:
+        // watchdog zawieszony na >10 min po kazdym swiezym starcie rclone).
+        // `readabilityHandler` juz i tak zbiera wszystko na biezaco w miare
+        // nadchodzenia danych - nie potrzeba dodatkowego, blokujacego dobicia.
+        queue.async {
           let result = ProcessResult(
             stdout: String(data: stdoutData, encoding: .utf8) ?? "",
             stderr: String(data: stderrData, encoding: .utf8) ?? "",
