@@ -1,7 +1,9 @@
 #!/bin/bash
-# Buduje CloudMachine.app (Release) z pakietu SwiftUI (Swift Package Manager)
-# i bundluje skrypty bash tego projektu jako Resources - appka jest wiec
-# w pelni samodzielna, nie wymaga osobno sklonowanego repo obok.
+# Buduje CloudMachine.app (Release) z pakietu SwiftUI (Swift Package Manager) -
+# GUI (CloudMachineApp) ORAZ CLI (cloudmachine-agent, wolany przez launchd
+# zamiast dawnych skryptow bash) trafiaja jako dwie binarki w tym samym
+# Contents/MacOS/, plus szablony launchd/config jako Resources - appka jest
+# wiec w pelni samodzielna, nie wymaga osobno sklonowanego repo obok.
 #
 # Podpisuje lokalnym certyfikatem (patrz setup-local-signing-cert.sh), jesli
 # istnieje - a w przeciwnym razie ad-hoc (bez konta Apple Developer). Podpis
@@ -23,27 +25,33 @@ APP_BUNDLE="$BUILD_DIR/${APP_NAME}.app"
 VERSION="$(cat "$MAC_APP_ROOT/VERSION" 2>/dev/null || echo "1.0.0")"
 BUILD_NUMBER="$(git -C "$PROJECT_ROOT" rev-list --count HEAD 2>/dev/null || date +%Y%m%d%H%M)"
 
-echo "==> Buduje CloudMachineApp (release) - wersja ${VERSION} (${BUILD_NUMBER})"
+echo "==> Buduje CloudMachineApp + cloudmachine-agent (release) - wersja ${VERSION} (${BUILD_NUMBER})"
 swift build -c release --package-path "$MAC_APP_ROOT"
 
-BIN_PATH="$MAC_APP_ROOT/.build/release/${APP_NAME}App"
-if [ ! -f "$BIN_PATH" ]; then
-  echo "BLAD: nie znaleziono zbudowanej binarki pod $BIN_PATH"
-  exit 1
-fi
+APP_BIN_PATH="$MAC_APP_ROOT/.build/release/${APP_NAME}App"
+AGENT_BIN_PATH="$MAC_APP_ROOT/.build/release/cloudmachine-agent"
+for p in "$APP_BIN_PATH" "$AGENT_BIN_PATH"; do
+  if [ ! -f "$p" ]; then
+    echo "BLAD: nie znaleziono zbudowanej binarki pod $p"
+    exit 1
+  fi
+done
 
 echo "==> Skladam .app bundle w $APP_BUNDLE"
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 
-cp "$BIN_PATH" "$APP_BUNDLE/Contents/MacOS/${APP_NAME}"
+cp "$APP_BIN_PATH" "$APP_BUNDLE/Contents/MacOS/${APP_NAME}"
+# cloudmachine-agent siedzi OBOK glownej binarki GUI w tym samym Contents/MacOS -
+# to ta binarka wola launchd (patrz launchd/*.plist.template, __CM_AGENT_BIN__)
+# i to na nia wskazuje CMPaths.agentBinaryPath, gdy GUI instaluje agentow.
+cp "$AGENT_BIN_PATH" "$APP_BUNDLE/Contents/MacOS/cloudmachine-agent"
 
 sed -e "s|__CM_VERSION__|$VERSION|g" -e "s|__CM_BUILD__|$BUILD_NUMBER|g" \
   "$MAC_APP_ROOT/Resources/Info.plist" > "$APP_BUNDLE/Contents/Info.plist"
 
-# Bundlujemy skrypty bash (jedyne zrodlo prawdy dla logiki mount/backup/watchdog),
-# szablony launchd i przykladowy config - to samo, czego uzywa wersja CLI.
-cp -R "$PROJECT_ROOT/scripts" "$APP_BUNDLE/Contents/Resources/scripts"
+# Bundlujemy szablony launchd i przykladowy config jako Resources - to samo,
+# czego uzywa wersja CLI-only (patrz CMPaths.resourcesRoot).
 cp -R "$PROJECT_ROOT/launchd" "$APP_BUNDLE/Contents/Resources/launchd"
 mkdir -p "$APP_BUNDLE/Contents/Resources/config"
 cp "$PROJECT_ROOT/config/machines.example.json" "$APP_BUNDLE/Contents/Resources/config/machines.example.json"

@@ -19,7 +19,11 @@ jobs:
         run: swift test
 
   lint-scripts:
-    name: Shell script checks
+    # Tylko mac-app/scripts/*.sh (build tooling: build-app.sh, make-dmg.sh,
+    # setup-local-signing-cert.sh) - CALA logika automatyzacji (mount/watchdogi/
+    # setup) zostala przeniesiona z bash do Swift (CloudMachineCore/cloudmachine-agent),
+    # wiec repo-rootowy scripts/*.sh juz nie istnieje.
+    name: Shell script checks (build tooling)
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           status=0
-          for f in scripts/*.sh mac-app/scripts/*.sh; do
+          for f in mac-app/scripts/*.sh; do
             echo "== $f =="
             bash -n "$f" || status=1
           done
@@ -36,8 +40,4 @@ jobs:
         run: |
           set -euo pipefail
           command -v shellcheck >/dev/null 2>&1 || brew install shellcheck
-          # --severity=error: fail only on genuine bugs, not style/info nits -
-          # the scripts weren't written against shellcheck from day one, so a
-          # strict pass would fail on pre-existing style choices unrelated to
-          # correctness. Tighten this over time as the backlog is cleared.
-          shellcheck --severity=error --shell=bash scripts/*.sh mac-app/scripts/*.sh
+          shellcheck --severity=error --shell=bash mac-app/scripts/*.sh

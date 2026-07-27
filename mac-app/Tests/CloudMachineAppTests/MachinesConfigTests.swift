@@ -1,5 +1,5 @@
 import XCTest
-@testable import CloudMachineApp
+@testable import CloudMachineCore
 
 final class MachinesConfigTests: XCTestCase {
 

@@ -21,7 +21,7 @@ struct StatusView: View {
                     // Karta 1: Stan Usług i Narzędzi
                     StatusCard(title: "Status usług i narzędzi", systemImage: "checklist") {
                         VStack(spacing: 12) {
-                            StatusRow(title: "Zależności (rclone, jq)", status: dependencyStatus)
+                            StatusRow(title: "Zależności (rclone)", status: dependencyStatus)
                             StatusRow(title: "Konto Google Drive", status: driveConfigStatus)
                             StatusRow(title: "Wolumin NFS", status: mountStatus)
                             StatusRow(title: "Time Machine", status: tmStatus)

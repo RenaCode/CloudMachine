@@ -1,24 +1,24 @@
 import Foundation
 
-struct MachineEntry: Identifiable, Equatable {
-    var id: String { key }
-    var key: String
-    var displayName: String
-    var limitGB: Int
+public struct MachineEntry: Identifiable, Equatable {
+    public var id: String { key }
+    public var key: String
+    public var displayName: String
+    public var limitGB: Int
 
-    init(key: String, displayName: String, limitGB: Int) {
+    public init(key: String, displayName: String, limitGB: Int) {
         self.key = key
         self.displayName = displayName
         self.limitGB = limitGB
     }
 }
 
-struct MachinesConfig: Codable, Equatable {
-    var driveTotalGB: Int
-    var safetyMarginPercent: Int
-    var remoteName: String
-    var remoteRootFolder: String
-    var machines: [MachineEntry]
+public struct MachinesConfig: Codable, Equatable {
+    public var driveTotalGB: Int
+    public var safetyMarginPercent: Int
+    public var remoteName: String
+    public var remoteRootFolder: String
+    public var machines: [MachineEntry]
 
     enum CodingKeys: String, CodingKey {
         case driveTotalGB = "drive_total_gb"
@@ -28,7 +28,7 @@ struct MachinesConfig: Codable, Equatable {
         case machines
     }
 
-    static let empty = MachinesConfig(
+    public static let empty = MachinesConfig(
         driveTotalGB: 5000,
         safetyMarginPercent: 10,
         remoteName: "gdrive-cloudmachine",
@@ -37,16 +37,16 @@ struct MachinesConfig: Codable, Equatable {
     )
 
     /// Suma limitow przydzielonych maszynom, w GB.
-    var allocatedGB: Int { machines.reduce(0) { $0 + $1.limitGB } }
+    public var allocatedGB: Int { machines.reduce(0) { $0 + $1.limitGB } }
 
     /// Realny budzet po odjeciu marginesu bezpieczenstwa.
-    var safeBudgetGB: Int {
+    public var safeBudgetGB: Int {
         driveTotalGB - (driveTotalGB * safetyMarginPercent / 100)
     }
 
-    var isOverBudget: Bool { allocatedGB > safeBudgetGB }
+    public var isOverBudget: Bool { allocatedGB > safeBudgetGB }
 
-    init(driveTotalGB: Int, safetyMarginPercent: Int, remoteName: String, remoteRootFolder: String, machines: [MachineEntry]) {
+    public init(driveTotalGB: Int, safetyMarginPercent: Int, remoteName: String, remoteRootFolder: String, machines: [MachineEntry]) {
         self.driveTotalGB = driveTotalGB
         self.safetyMarginPercent = safetyMarginPercent
         self.remoteName = remoteName
@@ -54,7 +54,7 @@ struct MachinesConfig: Codable, Equatable {
         self.machines = machines
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         driveTotalGB = try container.decode(Int.self, forKey: .driveTotalGB)
         safetyMarginPercent = try container.decode(Int.self, forKey: .safetyMarginPercent)
@@ -65,7 +65,7 @@ struct MachinesConfig: Codable, Equatable {
             .sorted { $0.key < $1.key }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(driveTotalGB, forKey: .driveTotalGB)
         try container.encode(safetyMarginPercent, forKey: .safetyMarginPercent)
@@ -76,6 +76,17 @@ struct MachinesConfig: Codable, Equatable {
             dict[machine.key] = MachineEntryPayload(displayName: machine.displayName, limitGB: machine.limitGB)
         }
         try container.encode(dict, forKey: .machines)
+    }
+
+    /// Odpowiednik `cm_remote_path_for` z common.sh, np.
+    /// `gdrive-cloudmachine:CloudMachine/marcin-mac-studio`.
+    public func remotePath(forMachineKey key: String) -> String {
+        "\(remoteName):\(remoteRootFolder)/\(key)"
+    }
+
+    /// Odpowiednik `cm_machine_limit_gb` - `nil`, jesli maszyna nie jest zdefiniowana.
+    public func limitGB(forMachineKey key: String) -> Int? {
+        machines.first(where: { $0.key == key })?.limitGB
     }
 }
 

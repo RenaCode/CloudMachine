@@ -20,8 +20,8 @@ Rozwiązanie to **nie jest** oficjalnie wspierane ani przez Apple, ani przez Goo
 - **Wydajność i transfer**: Time Machine wykonuje wiele małych, losowych zapisów do plików „band” (~8MB każdy) wewnątrz pakietu kopii zapasowej. Google Drive nie obsługuje częściowej aktualizacji plików – każda zmiana w bandzie wymaga ponownego przesłania całego pliku o rozmiarze 8MB. Może to spowolnić pierwszy backup oraz duże przyrostowe aktualizacje i zużyć dużo transferu sieciowego.
 - **Limity API Google Drive**: Domyślny limit to około 10 zapytań na sekundę. Duża liczba operacji na małych plikach (typowa dla Time Machine) może być ograniczana (throttling) przez `rclone`, co dodatkowo spowalnia proces - patrz sekcja "Własny client_id Google" poniżej, jak to złagodzić.
 - **Duży przerwany backup może się nie zmieścić w standardowym czasie oczekiwania**: jeśli backup zostanie przerwany (np. Mac zaśnie, Wi-Fi się zerwie) w trakcie kopiowania dużej ilości danych, `rclone` musi dogonić zaległą kolejkę uploadów, zanim wolumin znów stanie się dostępny - i celowo nie uruchamia serwera NFS, dopóki tego nie zrobi. Mount-watchdog (patrz niżej) rozpoznaje ten stan i czeka cierpliwie zamiast przerywać postęp, ale samo dogonienie dużej kolejki może zająć od kilku do kilkudziesięciu minut.
-- **Ryzyko spójności**: Montowanie przez lokalną pętlę NFS (nawet z `--vfs-cache-mode full`) nie gwarantuje takiego samego poziomu blokowania plików jak lokalny dysk SSD lub fizyczny udział SMB. Dlatego projekt zawiera skrypt weryfikacji sum kontrolnych (`scripts/verify-backup.sh`) – regularna weryfikacja jest wysoce zalecana.
-- **Brak potrzeby FUSE**: Standardowy build `rclone` z Homebrew nie posiada wbudowanego wsparcia FUSE na macOS. Stąd `mount.sh` korzysta z `rclone nfsmount`, które używa wbudowanego klienta NFS systemu macOS. Dzięki temu nie trzeba instalować sterowników firm trzecich (takich jak FUSE-T lub macFUSE) ani wpisywać hasła administratora przy każdym montowaniu.
+- **Ryzyko spójności**: Montowanie przez lokalną pętlę NFS (nawet z `--vfs-cache-mode full`) nie gwarantuje takiego samego poziomu blokowania plików jak lokalny dysk SSD lub fizyczny udział SMB. Dlatego projekt zawiera narzędzie weryfikacji sum kontrolnych (`cloudmachine-agent verify-backup`) – regularna weryfikacja jest wysoce zalecana.
+- **Brak potrzeby FUSE**: Standardowy build `rclone` z Homebrew nie posiada wbudowanego wsparcia FUSE na macOS. Stąd montowanie korzysta z `rclone nfsmount`, które używa wbudowanego klienta NFS systemu macOS. Dzięki temu nie trzeba instalować sterowników firm trzecich (takich jak FUSE-T lub macFUSE) ani wpisywać hasła administratora przy każdym montowaniu.
 
 *Alternatywa*: Jeśli to rozwiązanie okaże się niestabilne dla Twojego przepływu pracy, rozważ użycie [Kopia](https://kopia.io) – narzędzia open-source z natywnym wsparciem dla Google Drive, deduplikacją, szyfrowaniem i politykami retencji. Chociaż Kopia nie integruje się z systemowym Time Machine, struktura katalogów dla wielu maszyn i watchdog mogą być łatwo do niej dostosowane.
 
@@ -31,7 +31,7 @@ Rozwiązanie to **nie jest** oficjalnie wspierane ani przez Apple, ani przez Goo
 
 - System macOS 14 (Sonoma) lub nowszy, z uprawnieniami administratora.
 - Konto Google z wolną przestrzenią (np. pakiet Google One lub Workspace) i włączonym Google Drive API.
-- **Narzędzia**: Homebrew, `rclone` oraz `jq`. Aplikacja GUI (i skrypt `install.sh`) sprawdzą ich obecność i w razie potrzeby zainstalują je automatycznie.
+- **Narzędzia**: Homebrew oraz `rclone`. Aplikacja GUI (i `cloudmachine-agent install-dependencies`) sprawdzą ich obecność i w razie potrzeby zainstalują je automatycznie.
 
 ---
 
@@ -61,11 +61,11 @@ To zalecany sposób instalacji dla większości użytkowników - Kreator w aplik
 
 ## 🩺 Watchdog montowania
 
-`scripts/mount-watchdog.sh` (agent `com.renacode.cloudmachine.mount-watchdog`, instalowany przez krok 5 kreatora / `install-launchd.sh`) sprawdza co 60 sekund, czy wolumin NFS + wirtualny dysk sparsebundle są nie tylko zamontowane, ale też realnie odpowiadają, i naprawia je automatycznie (wymuszone odmontowanie, ubicie zawieszonego procesu `rclone`, ponowne zamontowanie), jeśli nie odpowiadają - dokładnie ten scenariusz "serwer nie odpowiada -> trzeba odłączyć -> proces się zawiesza".
+`cloudmachine-agent mount-watchdog` (agent `com.renacode.cloudmachine.mount-watchdog`, instalowany przez krok 5 kreatora / `cloudmachine-agent install-launchd`) sprawdza co 60 sekund, czy wolumin NFS + wirtualny dysk sparsebundle są nie tylko zamontowane, ale też realnie odpowiadają, i naprawia je automatycznie (wymuszone odmontowanie, ubicie zawieszonego procesu `rclone`, ponowne zamontowanie), jeśli nie odpowiadają - dokładnie ten scenariusz "serwer nie odpowiada -> trzeba odłączyć -> proces się zawiesza".
 
 Watchdog rozpoznaje różnicę między "realnie zawieszony" a "`rclone` właśnie dogania dużą zaległą kolejkę uploadów po przerwanym backupie" (patrz ryzyko w sekcji Status wyżej) - w tym drugim przypadku czeka, zamiast przerywać postęp restartem.
 
-Watchdog działa dopóki dysk **powinien** być zamontowany: włącza się automatycznie po udanym montowaniu (przycisk "Zamontuj" / `mount.sh`) i wyłącza się natychmiast po kliknięciu "Odmontuj" (`unmount.sh`) - nie będzie na siłę przywracał montowania, którego jawnie się pozbyłeś. Stan ten trzyma plik `mount-desired.state` obok `machines.json`.
+Watchdog działa dopóki dysk **powinien** być zamontowany: włącza się automatycznie po udanym montowaniu (przycisk "Zamontuj" / `cloudmachine-agent mount`) i wyłącza się natychmiast po kliknięciu "Odmontuj" (`cloudmachine-agent unmount`) - nie będzie na siłę przywracał montowania, którego jawnie się pozbyłeś. Stan ten trzyma plik `mount-desired.state` obok `machines.json`.
 
 Zanim wolumin zacznie się faktycznie pojawiać jako drugi dysk w Time Machine, zarejestruj go RAZ przyciskiem "Zarejestruj w Time Machine" (krok 4 kreatora) - odtąd `tmutil` rozpoznaje go po UUID i watchdog musi już tylko utrzymywać wolumin zamontowany pod tą samą ścieżką (`/Volumes/CloudMachine-Backup-<maszyna>`).
 
@@ -103,24 +103,24 @@ Jeśli pojawi się błąd Google **"Dostęp zablokowany: aplikacja nie przeszła
    ```
 3. **Zweryfikuj integralność**:
    ```bash
-   ./scripts/verify-backup.sh
+   cloudmachine-agent verify-backup
    ```
 4. **Przetestuj kopie przyrostowe**: Uruchom proces 2-3 razy. Monitoruj czas trwania i zużycie transferu w logu `~/Library/Logs/CloudMachine/rclone-mount.log`.
 5. **Włącz pełny backup**: Jeśli weryfikacje przebiegły bez błędów, usuń tymczasowe wykluczenia i pozwól Time Machine na zabezpieczenie całego dysku.
 
-Jeśli skrypt `verify-backup.sh` zgłosi błąd sumy kontrolnej na dowolnym etapie, **natychmiast zatrzymaj backup** i przejrzyj logi.
+Jeśli `cloudmachine-agent verify-backup` zgłosi błąd sumy kontrolnej na dowolnym etapie, **natychmiast zatrzymaj backup** i przejrzyj logi.
 
 ---
 
 ## 🩺 Weryfikacja spójności (automatyczna)
 
-Poza ręcznym `scripts/verify-backup.sh` z planu testowego, `scripts/verify-watchdog.sh` (agent `com.renacode.cloudmachine.verify-watchdog`) sam sprawdza sumy kontrolne najnowszego backupu **raz na 7 dni** (`CM_VERIFY_INTERVAL_DAYS`), bez ręcznej interwencji - dokładnie to, co sekcja "Ryzyko spójności" wyżej zaleca robić regularnie. Weryfikacja rusza tylko gdy Time Machine jest bezczynne (nie przeszkadza aktywnemu backupowi) i wymaga tej samej reguły `sudoers` (`tmutil verifychecksums`), co pozostałe watchdogi - patrz sekcja niżej. Wynik trafia do logu, a przy wykrytym problemie dostajesz powiadomienie systemowe.
+Poza ręcznym `cloudmachine-agent verify-backup` z planu testowego, `cloudmachine-agent verify-watchdog` (agent `com.renacode.cloudmachine.verify-watchdog`) sam sprawdza sumy kontrolne najnowszego backupu **raz na 7 dni** (`CM_VERIFY_INTERVAL_DAYS`), bez ręcznej interwencji - dokładnie to, co sekcja "Ryzyko spójności" wyżej zaleca robić regularnie. Weryfikacja rusza tylko gdy Time Machine jest bezczynne (nie przeszkadza aktywnemu backupowi) i wymaga tej samej reguły `sudoers` (`tmutil verifychecksums`), co pozostałe watchdogi - patrz sekcja niżej. Wynik trafia do logu, a przy wykrytym problemie dostajesz powiadomienie systemowe.
 
 ---
 
 ## 🔒 Automatyczne przycinanie starych kopii (limit miejsca)
 
-Osobny demon, `quota-watchdog.sh` (agent `com.renacode.cloudmachine.watchdog`), pilnuje co 6h, żeby backup tej maszyny nie przekroczył limitu z `config/machines.json`, i w razie potrzeby kasuje najstarsze kopie przez `sudo tmutil delete`.
+Osobny demon, `cloudmachine-agent quota-watchdog` (agent `com.renacode.cloudmachine.watchdog`), pilnuje co 6h, żeby backup tej maszyny nie przekroczył limitu z `config/machines.json`, i w razie potrzeby kasuje najstarsze kopie przez `sudo tmutil delete`.
 
 **W aplikacji GUI** to wszystko konfiguruje się jednym kliknięciem: przycisk "Zezwól na automatyczne przycinanie backupów" (krok 5 kreatora) dopisuje regułę `sudoers` z NOPASSWD dla wszystkich potrzebnych podkomend `tmutil` (`delete`, `setdestination`, `startbackup`, `verifychecksums`, `removedestination`) za jednym poproszeniem o hasło administratora - te same przyciski w Statusie/Kreatorze korzystają potem z tej reguły bez kolejnych promptów.
 
@@ -163,49 +163,50 @@ for plist in ~/Library/LaunchAgents/com.renacode.cloudmachine.*.plist; do
 done
 rm ~/Library/LaunchAgents/com.renacode.cloudmachine.*.plist
 sudo tmutil removedestination <ID z polecenia tmutil destinationinfo>
-./scripts/unmount.sh
+cloudmachine-agent unmount
 ```
 
 ---
 
 ## 🖥️ Instalacja z linii poleceń (zaawansowane / bez GUI)
 
-Te same kroki co Kreator w aplikacji GUI, wykonywane ręcznie skrypt po skrypcie. Przydatne do automatyzacji, debugowania albo jeśli wolisz nie instalować aplikacji GUI.
+Te same kroki co Kreator w aplikacji GUI, wykonywane ręcznie przez `cloudmachine-agent` (natywny CLI, nie skrypty bash - patrz [Budowanie aplikacji](#-budowanie-aplikacji-ze-źródeł) niżej, jak go skompilować). Przydatne do automatyzacji, debugowania albo jeśli wolisz nie instalować aplikacji GUI.
 
 ### 1. Zainstaluj zależności
 ```bash
-./scripts/install.sh
+cloudmachine-agent install-dependencies
 ```
 
 ### 2. Skonfiguruj limity maszyn
-Skopiuj przykładowy plik konfiguracyjny i dostosuj nazwy komputerów oraz limity pamięci:
+Skopiuj przykładowy plik konfiguracyjny do `~/Library/Application Support/CloudMachine/machines.json` i dostosuj nazwy komputerów oraz limity pamięci:
 ```bash
-cp config/machines.example.json config/machines.json
-$EDITOR config/machines.json
+mkdir -p ~/Library/Application\ Support/CloudMachine
+cp config/machines.example.json ~/Library/Application\ Support/CloudMachine/machines.json
+$EDITOR ~/Library/Application\ Support/CloudMachine/machines.json
 ```
-Klucze maszyn w pliku JSON muszą odpowiadać znormalizowanym nazwom komputerów (małe litery, cyfry i myślniki, np. `macbook-pro-biuro`). Jeśli nie masz pewności, jaki klucz generuje Twój Mac, uruchom dowolny skrypt (np. `scripts/common.sh`), który wypisze wykryty identyfikator.
+Klucze maszyn w pliku JSON muszą odpowiadać znormalizowanym nazwom komputerów (małe litery, cyfry i myślniki, np. `macbook-pro-biuro`) - te same, jakie wpisujesz w zakładce Maszyny w GUI.
 
 ### 3. Połącz z Google Drive
 Autoryzuj `rclone` do dostępu do Twojego konta Google Drive (otworzy się przeglądarka w celu zalogowania się przez OAuth):
 ```bash
-./scripts/configure-remote.sh
+cloudmachine-agent configure-remote
 ```
 Rozważ od razu użycie [własnego client_id](#-własny-client_id-google-zalecane) zamiast domyślnego, współdzielonego.
 
 ### 4. Zamontuj wolumin
 ```bash
-./scripts/mount.sh
+cloudmachine-agent mount
 ```
-*Uwaga:* Przy pierwszym uruchomieniu skrypt automatycznie utworzy wirtualny obraz `.sparsebundle` i wyśle go bezpośrednio do chmury (bypassing NFS). Może to zająć od 15 do 45 sekund w zależności od Twojego łącza i opóźnień API Google Drive. Każde kolejne montowanie będzie natychmiastowe (mniej niż 3 sekundy), o ile nie ma zaległej kolejki uploadów do dogonienia (patrz sekcja Status).
+*Uwaga:* Przy pierwszym uruchomieniu automatycznie utworzy wirtualny obraz `.sparsebundle` i wyśle go bezpośrednio do chmury (bypassing NFS). Może to zająć od 15 do 45 sekund w zależności od Twojego łącza i opóźnień API Google Drive. Każde kolejne montowanie będzie natychmiastowe (mniej niż 3 sekundy), o ile nie ma zaległej kolejki uploadów do dogonienia (patrz sekcja Status).
 
 ### 5. Zarejestruj cel w Time Machine
 ```bash
-./scripts/setup-timemachine.sh
+cloudmachine-agent setup-timemachine
 ```
 
 ### 6. Włącz automatyzację w tle
 ```bash
-./scripts/install-launchd.sh
+cloudmachine-agent install-launchd
 ```
 
 ---
@@ -215,15 +216,15 @@ Rozważ od razu użycie [własnego client_id](#-własny-client_id-google-zalecan
 ```bash
 cd mac-app
 ./scripts/setup-local-signing-cert.sh   # RAZ - lokalny certyfikat, zeby FDA przetrwalo rebuildy (patrz sekcja FDA)
-./scripts/build-app.sh                  # Kompilacja wersji Release, budowanie paczki .app
+./scripts/build-app.sh                  # Kompilacja wersji Release, budowanie paczki .app (GUI + cloudmachine-agent)
 ./scripts/make-dmg.sh                   # Pakowanie build/CloudMachine.app do pliku build/CloudMachine-<wersja>.dmg
 ```
 
-Aplikacja jest lekką nakładką graficzną na skrypty z folderu `scripts/` - te same skrypty stoją za każdym przyciskiem w GUI, więc CLI i GUI zawsze zachowują się identycznie.
+`build-app.sh` kompiluje dwie binarki z tego samego pakietu Swift Package (`mac-app/`): `CloudMachine.app` (GUI) i `cloudmachine-agent` (CLI, wołany przez launchd i z linii poleceń) - obie dzielą tę samą logikę mount/watchdog/setup (biblioteka `CloudMachineCore`), więc CLI i GUI zawsze zachowują się identycznie. Do budowania samego CLI bez pakowania `.app`: `cd mac-app && swift build -c release --product cloudmachine-agent`.
 
 ### CI i wydania
 
-- Każdy push/PR uruchamia [CI](.github/workflows/ci.yml): kompilację pakietu Swift oraz sprawdzenie składni i `shellcheck` dla wszystkich skryptów bash.
+- Każdy push/PR uruchamia [CI](.github/workflows/ci.yml): `swift build` i `swift test` dla całego pakietu (GUI, CLI, wspólna biblioteka logiki).
 - Push tagu w formacie `vX.Y.Z` uruchamia [Release DMG](.github/workflows/release.yml): buduje appkę (podpis ad-hoc, bez konta Apple Developer) i publikuje `CloudMachine-<wersja>.dmg` jako załącznik GitHub Release.
 
 ---

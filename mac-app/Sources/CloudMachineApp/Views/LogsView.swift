@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CloudMachineCore
 
 struct LogsView: View {
     @EnvironmentObject private var controller: CloudMachineController
@@ -52,7 +53,7 @@ struct LogsView: View {
                 .buttonStyle(.bordered)
 
                 Button(action: {
-                    NSWorkspace.shared.open(Paths.logDir)
+                    NSWorkspace.shared.open(CMPaths.logDir)
                 }) {
                     Label("Folder logów", systemImage: "folder")
                 }

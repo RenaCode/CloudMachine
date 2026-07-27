@@ -1,12 +1,11 @@
 import Foundation
 import AppKit
+import CloudMachineCore
 
 @MainActor
 final class CloudMachineController: ObservableObject {
     @Published var config: MachinesConfig
     @Published var status = AppStatus()
-
-    private let requiredTools = ["rclone", "jq"]
 
     /// Chroni przed lawina nakladajacych sie subprocessow (rclone size/about,
     /// tmutil, launchctl...) - `MenuBarContentView` odpala `refreshAll()` w
@@ -16,31 +15,18 @@ final class CloudMachineController: ObservableObject {
     private let refreshAllMinInterval: TimeInterval = 5
 
     init() {
-        switch ConfigStore.loadResult() {
-        case .loaded(let loaded):
-            config = loaded
-        case .missing:
-            // mount.sh/quota-watchdog.sh wymagaja istniejacego pliku configu - bez
-            // tego pierwsze klikniecie "Zamontuj" (zanim ktokolwiek dotknie zakladki
-            // Maszyny) konczy sie cichym bledem "brak pliku konfiguracyjnego"
-            // widocznym tylko w logu.
-            config = .empty
-            try? ConfigStore.save(.empty)
-        case .corrupt(let error):
-            // NIE zapisujemy tu `.empty` na dysk (w przeciwienstwie do galezi
-            // .missing wyzej) - plik istnieje, wiec moze byc do odzyskania recznie.
-            // Zamiast cicho go nadpisac, robimy kopie zapasowa obok i pokazujemy
-            // czerwony baner bledu, zeby uzytkownik NIE dotknal zakladki Maszyny
-            // (co odpalyloby auto-zapis pustej konfiguracji przez onChange) zanim
-            // nie przejrzy, co poszlo nie tak.
-            config = .empty
-            let backupPath = ConfigStore.backupCorruptFile()
-            let backupNote = backupPath.map { " Kopia zapisana jako: \($0.lastPathComponent)." } ?? ""
-            status.errorMessage = "Plik konfiguracyjny (machines.json) jest uszkodzony i nie zostal wczytany - pokazuje pusta konfiguracje, ZEBY NIE NADPISAC oryginalu.\(backupNote) Blad: \(error.localizedDescription)"
+        let (loaded, corruption) = ConfigStore.loadOrInitialize()
+        config = loaded
+        if let corruption {
+            // NIE zapisujemy tu nic na dysk - `ConfigStore.loadOrInitialize()`
+            // juz zrobil kopie zapasowa uszkodzonego pliku i NIE nadpisal go.
+            // Czerwony baner ma powstrzymac uzytkownika od dotkniecia zakladki
+            // Maszyny (co odpalyloby auto-zapis pustej konfiguracji) zanim
+            // przejrzy, co poszlo nie tak.
+            status.errorMessage = "Plik konfiguracyjny (machines.json) jest uszkodzony i nie zostal wczytany - pokazuje pusta konfiguracje, ZEBY NIE NADPISAC oryginalu (kopia zapasowa zapisana obok). Blad: \(corruption.localizedDescription)"
         }
         Task {
-            let key = await currentMachineKey()
-            status.currentMachineKey = key
+            status.currentMachineKey = await MachineIdentity.currentKey()
         }
     }
 
@@ -65,22 +51,8 @@ final class CloudMachineController: ObservableObject {
         }
     }
 
-    /// Znormalizowany klucz tej maszyny, taki sam jak `cm_machine_key` w common.sh.
     func currentMachineKey() async -> String {
-        guard let result = try? await Shell.run("/usr/sbin/scutil", ["--get", "ComputerName"]) else {
-            return "this-mac"
-        }
-        let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return Self.normalizedMachineKey(fromComputerName: raw)
-    }
-
-    /// Czysta funkcja (bez efektow ubocznych) wydzielona z `currentMachineKey()`,
-    /// zeby dalo sie ja przetestowac bez shellowania do `scutil` - patrz
-    /// CloudMachineControllerTests.
-    nonisolated static func normalizedMachineKey(fromComputerName raw: String) -> String {
-        let lowered = raw.lowercased().replacingOccurrences(of: " ", with: "-")
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-")
-        return String(lowered.unicodeScalars.filter { allowed.contains($0) })
+        await MachineIdentity.currentKey()
     }
 
     var currentMachine: MachineEntry? {
@@ -124,35 +96,20 @@ final class CloudMachineController: ObservableObject {
     }
 
     func refreshLogTail() {
-        guard let data = try? String(contentsOf: Paths.combinedLogFile, encoding: .utf8) else { return }
+        guard let data = try? String(contentsOf: CMPaths.combinedLogFile, encoding: .utf8) else { return }
         status.logTail = String(data.suffix(20_000))
     }
 
-    // MARK: - Zaleznosci (rclone, jq)
+    // MARK: - Zaleznosci (rclone)
 
     func checkDependencies() async {
         status.dependencyState = .checking
-        var missing: [String] = []
-        for tool in requiredTools {
-            let result = try? await Shell.run("/usr/bin/which", [tool])
-            if result == nil || !(result!.succeeded) {
-                missing.append(tool)
-            }
-        }
+        let missing = await DependencyInstaller.missingTools()
         status.dependencyState = missing.isEmpty ? .ready : .missing(missing)
     }
 
-    /// Sciezka do binarki brew, jesli Homebrew jest juz zainstalowany (Apple
-    /// Silicon: /opt/homebrew, Intel: /usr/local) - sprawdzamy oba wprost,
-    /// bo swiezo zainstalowany brew moze nie byc jeszcze w PATH tego procesu.
-    private func resolvedBrewPath() -> String? {
-        ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].first {
-            FileManager.default.isExecutableFile(atPath: $0)
-        }
-    }
-
     private func homebrewPrefix() async -> String {
-        let arch = (try? await Shell.run("/usr/bin/uname", ["-m"]))?
+        let arch = (try? await ProcessRunner.run("/usr/bin/uname", ["-m"]))?
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return arch == "arm64" ? "/opt/homebrew" : "/usr/local"
     }
@@ -160,14 +117,15 @@ final class CloudMachineController: ObservableObject {
     /// Instaluje wszystko od zera, bez zadnych zalozen o stanie maszyny:
     /// jesli brakuje Homebrew, instaluje najpierw jego (jeden dialog autoryzacji
     /// administratora zamiast interaktywnego sudo, ktorego nie ma jak pokazac z
-    /// procesu bez terminala), a potem rclone i jq.
+    /// procesu bez terminala), a potem rclone (przez `DependencyInstaller`,
+    /// wspoldzielony z CLI).
     func installDependencies() async {
         guard !status.isBusy else { return }
         clearError()
         status.isBusy = true
         defer { status.isBusy = false }
 
-        if resolvedBrewPath() == nil {
+        if DependencyInstaller.resolvedBrewPath() == nil {
             let prefix = await homebrewPrefix()
             status.busyLabel = "Homebrew nie jest zainstalowany - przygotowuje \(prefix) (autoryzacja administratora)..."
             do {
@@ -184,13 +142,13 @@ final class CloudMachineController: ObservableObject {
 
             status.busyLabel = "Pobieram i instaluje Homebrew (moze potrwac kilka minut)..."
             let installCommand = "NONINTERACTIVE=1 /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-            guard let installResult = try? await Shell.run("/bin/bash", ["-c", installCommand], timeout: 900) else {
+            guard let installResult = try? await ProcessRunner.run("/bin/bash", ["-c", installCommand], timeout: 900) else {
                 fail("Instalacja Homebrew nie powiodla sie (proces nie odpowiedzial).")
                 await checkDependencies()
                 return
             }
             appendLog(installResult.stdout)
-            if resolvedBrewPath() == nil {
+            if DependencyInstaller.resolvedBrewPath() == nil {
                 fail("Instalacja Homebrew nie powiodla sie: \(installResult.stderr.isEmpty ? installResult.stdout : installResult.stderr)")
                 await checkDependencies()
                 return
@@ -198,21 +156,11 @@ final class CloudMachineController: ObservableObject {
             appendLog("Homebrew zainstalowany pomyslnie w \(prefix).")
         }
 
-        guard let brewPath = resolvedBrewPath() else {
-            fail("Nie udalo sie zlokalizowac Homebrew po instalacji.")
-            await checkDependencies()
-            return
-        }
-
-        status.busyLabel = "Instaluje rclone i jq przez Homebrew..."
-        do {
-            let result = try await Shell.run(brewPath, ["install", "rclone", "jq"], timeout: 600)
-            appendLog(result.stdout)
-            if !result.succeeded {
-                fail("Instalacja rclone/jq nie powiodla sie: \(result.stderr.isEmpty ? result.stdout : result.stderr)")
-            }
-        } catch {
-            fail("Blad instalacji rclone/jq: \(error.localizedDescription)")
+        status.busyLabel = "Instaluje rclone przez Homebrew..."
+        let result = await DependencyInstaller.installRclone()
+        appendLog(result.message)
+        if !result.succeeded {
+            fail(result.message)
         }
         await checkDependencies()
     }
@@ -220,13 +168,11 @@ final class CloudMachineController: ObservableObject {
     // MARK: - Polaczenie z Google Drive
 
     func remoteConfigured() async -> Bool {
-        guard let result = try? await Shell.runRclone(["listremotes"]) else { return false }
-        return result.stdout.contains("\(config.remoteName):")
+        await RemoteConfigurer.isConfigured(remoteName: config.remoteName)
     }
 
     /// Uruchamia `rclone authorize "drive"`, ktore samo otwiera przegladarke do
-    /// logowania Google, po czym zapisuje zwrocony token jako nowy remote -
-    /// bez potrzeby przechodzenia przez interaktywny kreator `rclone config`.
+    /// logowania Google (przez `RemoteConfigurer`, wspoldzielony z CLI).
     func connectGoogleDrive() async {
         guard !status.isBusy else { return }
         clearError()
@@ -238,68 +184,37 @@ final class CloudMachineController: ObservableObject {
         status.busyLabel = "Czekam na logowanie do Google w przegladarce..."
         defer { status.isBusy = false }
 
-        do {
-            let authResult = try await Shell.runRclone(["authorize", "drive"], timeout: 300)
-            guard authResult.succeeded else {
-                fail("rclone authorize nie powiodlo sie: \(authResult.stderr)")
-                return
-            }
-            guard let token = Self.extractToken(from: authResult.stdout) else {
-                fail("Nie udalo sie odczytac tokenu z wyniku rclone authorize.")
-                return
-            }
-
-            let createResult = try await Shell.runRclone(
-                ["config", "create", config.remoteName, "drive", "token=\(token)"]
-            )
-            guard createResult.succeeded else {
-                fail("rclone config create nie powiodlo sie: \(createResult.stderr)")
-                return
-            }
-            appendLog("Polaczono z Google Drive jako remote '\(config.remoteName)'.")
+        let key = await currentMachineKey()
+        let result = await RemoteConfigurer.connect(config: config, machineKey: key)
+        if result.succeeded {
+            appendLog(result.message)
             status.remoteConfigured = true
-
-            let key = await currentMachineKey()
-            _ = try? await Shell.runRclone(["mkdir", "\(config.remoteName):\(config.remoteRootFolder)/\(key)"])
-        } catch {
-            fail("Blad polaczenia z Google Drive: \(error.localizedDescription)")
+        } else {
+            fail(result.message)
         }
-    }
-
-    /// `static` (nie `private`) zeby dalo sie to przetestowac bez pelnej
-    /// instancji kontrolera - patrz CloudMachineControllerTests.
-    nonisolated static func extractToken(from output: String) -> String? {
-        guard let startRange = output.range(of: "--->"),
-              let endRange = output.range(of: "<---") else { return nil }
-        let token = output[startRange.upperBound..<endRange.lowerBound]
-        return token.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Montowanie
 
     func refreshMountState() async {
         let key = await currentMachineKey()
-        let localDir = "\(NSHomeDirectory())/CloudMachine-Mount/\(key)"
-        let sparsebundleDir = "/Volumes/CloudMachine-Backup-\(key)"
-        guard let result = try? await Shell.run("/sbin/mount", []) else {
-            status.mountState = .unknown
-            return
-        }
-        let nfsMounted = result.stdout.contains(localDir)
-        let spMounted = result.stdout.contains(sparsebundleDir)
+        let localDir = CMPaths.localMachineMountDir(machineKey: key).path
+        let sparsebundleDir = CMPaths.sparsebundleMountDir(machineKey: key).path
+        let nfsMounted = await MountHealth.isMounted(localDir)
+        let spMounted = await MountHealth.isMounted(sparsebundleDir)
         status.mountState = (nfsMounted && spMounted) ? .mounted : (nfsMounted ? .mounting : .notMounted)
     }
 
     func mountNow() async {
         // Bez tej straznicy, klikniecie przycisku kilka razy z rzedu (np. z
         // kreatora, gdzie ten przycisk nie zawsze byl blokowany w trakcie
-        // isBusy) odpalalo kilka rownoleglych Task { await mountNow() } -
-        // kazdy wywolywal osobne mount.sh, co obserwowalismy jako kilka
-        // nakladajacych sie montowan na tej samej sciezce naraz.
+        // isBusy) odpalaloby kilka rownoleglych Task { await mountNow() } -
+        // `MountService.mount` ma wlasna blokade PID-owa, ale i tak nie ma
+        // sensu tego robic z poziomu UI.
         guard !status.isBusy else { return }
         clearError()
         guard status.dependencyState == .ready else {
-            fail("rclone/jq nie sa zainstalowane - wykonaj krok 1 w Kreatorze.")
+            fail("rclone nie jest zainstalowane - wykonaj krok 1 w Kreatorze.")
             return
         }
         guard status.remoteConfigured else {
@@ -310,40 +225,12 @@ final class CloudMachineController: ObservableObject {
         status.busyLabel = "Montuje Google Drive..."
         defer { status.isBusy = false }
 
-        // mount.sh moze zrobic 2 proby (sprzatanie + retry przy "Resource busy"),
-        // wiec potrzebuje wiecej czasu niz pojedyncza proba montowania.
-        var result: ShellResult?
-        do {
-            result = try await Shell.runScript("mount.sh", timeout: 180)
-        } catch {
-            fail("Blad montowania: \(error.localizedDescription)")
-        }
-
-        // "Resource busy" na tym etapie oznacza wewnetrznie zawieszony punkt
-        // montowania (np. po nieczystym zamknieciu appki/Maca w trakcie
-        // montowania) - zwykle nie da sie tego posprzatac bez uprawnien roota,
-        // wiec probujemy raz wymuszonego odmontowania przez natywny dialog
-        // autoryzacji, po czym powtarzamy mount.sh.
-        let output = (result?.stderr ?? "") + (result?.stdout ?? "")
-        let looksBusy = result?.succeeded == false && output.localizedCaseInsensitiveContains("resource busy")
-        if looksBusy {
-            status.busyLabel = "Wykryto zawieszony punkt montowania - probuje wymuszonego odmontowania (autoryzacja administratora)..."
-            let key = await currentMachineKey()
-            let localDir = "\(NSHomeDirectory())/CloudMachine-Mount/\(key)"
-            if (try? await Shell.runPrivileged("umount -f '\(localDir)' 2>/dev/null; exit 0")) != nil {
-                appendLog("Wymuszono odmontowanie zawieszonego punktu, probuje zamontowac ponownie.")
-                status.busyLabel = "Montuje ponownie po naprawie..."
-                result = try? await Shell.runScript("mount.sh", timeout: 180)
-            }
-        }
-
-        if let finalResult = result, !finalResult.succeeded {
-            fail("Montowanie nie powiodlo sie: \(finalResult.stderr.isEmpty ? finalResult.stdout : finalResult.stderr)")
-        }
+        let key = await currentMachineKey()
+        let ok = await MountService.mount(config: config, machineKey: key)
 
         await refreshMountState()
-        if status.mountState != .mounted && status.errorMessage == nil {
-            fail("Montowanie zakonczylo sie bez bledu, ale wolumin nadal nie jest widoczny - sprawdz zakladke Logi.")
+        if !ok || status.mountState != .mounted {
+            fail("Montowanie nie powiodlo sie - sprawdz zakladke Logi.")
         }
     }
 
@@ -353,26 +240,20 @@ final class CloudMachineController: ObservableObject {
         status.isBusy = true
         status.busyLabel = "Odmontowuje..."
         defer { status.isBusy = false }
-        do {
-            let result = try await Shell.runScript("unmount.sh", timeout: 30)
-            if !result.succeeded {
-                fail("Odmontowanie nie powiodlo sie: \(result.stderr.isEmpty ? result.stdout : result.stderr)")
-            }
-        } catch {
-            fail("Blad odmontowania: \(error.localizedDescription)")
-        }
+        let key = await currentMachineKey()
+        await UnmountService.unmount(config: config, machineKey: key)
         await refreshMountState()
+        if status.mountState == .mounted {
+            fail("Odmontowanie nie powiodlo sie - wolumin nadal jest zamontowany. Sprawdz zakladke Logi.")
+        }
     }
 
     // MARK: - Time Machine
 
     func refreshTimeMachineState() async {
-        guard let result = try? await Shell.run("/usr/bin/tmutil", ["destinationinfo"]) else {
-            status.timeMachineState = .unknown
-            return
-        }
         let key = await currentMachineKey()
-        status.timeMachineState = result.stdout.contains("CloudMachine-Backup-\(key)") ? .registered : .notRegistered
+        let registered = await TimeMachineSetup.isRegistered(machineKey: key)
+        status.timeMachineState = registered ? .registered : .notRegistered
     }
 
     func registerTimeMachineDestination() async {
@@ -383,7 +264,7 @@ final class CloudMachineController: ObservableObject {
             return
         }
         let key = await currentMachineKey()
-        let sparsebundleDir = "/Volumes/CloudMachine-Backup-\(key)"
+        let sparsebundleDir = CMPaths.sparsebundleMountDir(machineKey: key).path
         status.isBusy = true
         status.busyLabel = "Rejestruje cel Time Machine..."
         defer { status.isBusy = false }
@@ -421,7 +302,7 @@ final class CloudMachineController: ObservableObject {
     }
 
     /// `tmutil stopbackup` NIE wymaga sudo (w przeciwienstwie do startbackup) -
-    /// patrz ten sam komentarz w scripts/unmount.sh. Bezpieczne wywolac nawet
+    /// patrz ten sam komentarz w `UnmountService`. Bezpieczne wywolac nawet
     /// gdy akurat nic nie kopiuje (tmutil po prostu nic wtedy nie robi).
     func stopBackupNow() async {
         guard !status.isBusy else { return }
@@ -430,7 +311,7 @@ final class CloudMachineController: ObservableObject {
         status.busyLabel = "Zatrzymuje backup Time Machine..."
         defer { status.isBusy = false }
         do {
-            let result = try await Shell.run("/usr/bin/tmutil", ["stopbackup"], timeout: 30)
+            let result = try await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 30)
             if result.succeeded {
                 appendLog("Zatrzymano backup Time Machine.")
             } else {
@@ -450,17 +331,16 @@ final class CloudMachineController: ObservableObject {
         status.busyLabel = "Weryfikuje spojnosc backupu (moze potrwac dlugo)..."
         defer { status.isBusy = false }
         let key = await currentMachineKey()
-        let sparsebundleDir = "/Volumes/CloudMachine-Backup-\(key)"
+        let sparsebundleDir = CMPaths.sparsebundleMountDir(machineKey: key).path
 
-        guard let listResult = try? await Shell.run("/usr/bin/tmutil", ["listbackups", "-d", sparsebundleDir]),
-              let latest = listResult.stdout.split(separator: "\n").last else {
+        guard let latest = await BackupVerifier.latestBackupPath(spMount: sparsebundleDir) else {
             status.lastVerify = LastRunResult(succeeded: false, message: "Brak backupow do zweryfikowania.", date: Date())
             fail("Brak backupow Time Machine do zweryfikowania pod \(sparsebundleDir).")
             return
         }
 
         do {
-            let result = try await runTmutilPrivileged(["verifychecksums", String(latest)])
+            let result = try await runTmutilPrivileged(["verifychecksums", latest])
             if result.succeeded {
                 status.lastVerify = LastRunResult(succeeded: true, message: "Sumy kontrolne OK dla \(latest)", date: Date())
                 appendLog("Weryfikacja OK: \(latest)")
@@ -492,13 +372,13 @@ final class CloudMachineController: ObservableObject {
     /// Najpierw probuje bez pytania o haslo (`sudo -n`) - jesli regula
     /// sudoers jeszcze nie istnieje (pierwsze uzycie), dopisuje ja (jeden
     /// prompt autoryzacji administratora) i probuje ponownie.
-    private func runTmutilPrivileged(_ args: [String]) async throws -> ShellResult {
-        if let result = try? await Shell.run("/usr/bin/sudo", ["-n", "/usr/bin/tmutil"] + args, timeout: 300),
+    private func runTmutilPrivileged(_ args: [String]) async throws -> ProcessResult {
+        if let result = try? await ProcessRunner.run("/usr/bin/sudo", ["-n", "/usr/bin/tmutil"] + args, timeout: 300),
            result.succeeded {
             return result
         }
         try await ensureTmutilSudoersRule()
-        return try await Shell.run("/usr/bin/sudo", ["-n", "/usr/bin/tmutil"] + args, timeout: 300)
+        return try await ProcessRunner.run("/usr/bin/sudo", ["-n", "/usr/bin/tmutil"] + args, timeout: 300)
     }
 
     // MARK: - Quota
@@ -506,15 +386,9 @@ final class CloudMachineController: ObservableObject {
     func refreshQuota() async {
         let key = await currentMachineKey()
         guard let machine = config.machines.first(where: { $0.key == key }) else { return }
-        let remotePath = "\(config.remoteName):\(config.remoteRootFolder)/\(key)"
-        guard let result = try? await Shell.runRclone(["size", remotePath, "--json"], timeout: 60),
-              result.succeeded,
-              let data = result.stdout.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let bytes = json["bytes"] as? Double else {
-            return
-        }
-        status.quota = QuotaStatus(usedGB: bytes / 1_073_741_824, limitGB: machine.limitGB, lastChecked: Date())
+        let remotePath = config.remotePath(forMachineKey: key)
+        guard let usedGB = await RcloneSize.usedGB(remotePath: remotePath) else { return }
+        status.quota = QuotaStatus(usedGB: usedGB, limitGB: machine.limitGB, lastChecked: Date())
     }
 
     /// Realne zajecie calego konta Google Drive (`rclone about`) - to na tym,
@@ -522,7 +396,7 @@ final class CloudMachineController: ObservableObject {
     /// Mac w zakladce Maszyny.
     func refreshDriveInfo() async {
         guard status.remoteConfigured else { return }
-        guard let result = try? await Shell.runRclone(["about", "\(config.remoteName):", "--json"], timeout: 30),
+        guard let result = try? await ProcessRunner.runRclone(["about", "\(config.remoteName):", "--json"], timeout: 30),
               result.succeeded,
               let data = result.stdout.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -550,9 +424,8 @@ final class CloudMachineController: ObservableObject {
     // MARK: - Watchdog / launchd
 
     func refreshWatchdogInstalled() async {
-        guard let result = try? await Shell.run("/bin/launchctl", ["list"]) else { return }
-        status.watchdogInstalled = result.stdout.contains("com.renacode.cloudmachine.watchdog")
-        status.mountWatchdogInstalled = result.stdout.contains("com.renacode.cloudmachine.mount-watchdog")
+        status.watchdogInstalled = await LaunchdInstaller.isInstalled(label: "com.renacode.cloudmachine.watchdog")
+        status.mountWatchdogInstalled = await LaunchdInstaller.isInstalled(label: "com.renacode.cloudmachine.mount-watchdog")
     }
 
     func installLaunchdAgents() async {
@@ -561,14 +434,10 @@ final class CloudMachineController: ObservableObject {
         status.isBusy = true
         status.busyLabel = "Instaluje automatyzacje (launchd)..."
         defer { status.isBusy = false }
-        do {
-            let result = try await Shell.runScript("install-launchd.sh", timeout: 30)
-            appendLog(result.stdout)
-            if !result.succeeded {
-                fail("Instalacja automatyzacji nie powiodla sie: \(result.stderr.isEmpty ? result.stdout : result.stderr)")
-            }
-        } catch {
-            fail("Blad instalacji launchd: \(error.localizedDescription)")
+        let result = await LaunchdInstaller.install()
+        appendLog(result.message)
+        if !result.succeeded {
+            fail(result.message)
         }
         await refreshWatchdogInstalled()
     }
@@ -589,8 +458,7 @@ final class CloudMachineController: ObservableObject {
             // Spacja po "startbackup" (nie goly "startbackup*") celowo wymaga co
             // najmniej jednego argumentu odzielonego spacja (np. "--auto",
             // "-d <ID>") - odrobine ciasniejsze niz plaski wildcard, bez utraty
-            // zadnego z realnie uzywanych wywolan (patrz runTmutilPrivileged
-            // wyzej i scripts/backup-watchdog.sh).
+            // zadnego z realnie uzywanych wywolan.
             "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil startbackup *",
             "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil verifychecksums *",
             "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil removedestination *"
@@ -628,7 +496,7 @@ final class CloudMachineController: ObservableObject {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let safariDir = home.appendingPathComponent("Library/Safari")
         let bookmarksPath = safariDir.appendingPathComponent("Bookmarks.plist")
-        
+
         do {
             _ = try Data(contentsOf: bookmarksPath)
             status.hasFullDiskAccess = true
@@ -654,14 +522,11 @@ final class CloudMachineController: ObservableObject {
     /// Panel Status pokazywal dotad WYLACZNIE wyniki akcji klikanych recznie w
     /// GUI (`lastBackup`/`lastVerify`) - jesli watchdogi (mount-watchdog,
     /// backup-watchdog, verify-watchdog) naprawily/zweryfikowaly cos w tle przez
-    /// launchd, GUI o tym nie wiedzialo i dashboard moglby bez konca pokazywac
-    /// "nigdy nie zweryfikowano", mimo ze automatyczna weryfikacja realnie dziala
-    /// co tydzien. Skanujemy wiec `cloudmachine.log` (wspolny log wszystkich
-    /// skryptow, pisany przez `cm_log`) w poszukiwaniu ostatniej linii kazdego
-    /// watchdoga - plik jest mały (rotowany osobno od ogromnego
-    /// rclone-mount.log), wiec pelne skanowanie jest tanie.
+    /// launchd, GUI o tym nie wiedzialo. Skanujemy `cloudmachine.log` (wspolny
+    /// log wszystkich serwisow, pisany przez `CMLogger`) w poszukiwaniu
+    /// ostatniej linii kazdego watchdoga.
     func refreshBackgroundWatchdogActivity() {
-        guard let data = try? String(contentsOf: Paths.combinedLogFile, encoding: .utf8) else { return }
+        guard let data = try? String(contentsOf: CMPaths.combinedLogFile, encoding: .utf8) else { return }
         let lines = data.split(separator: "\n").map(String.init)
         status.backgroundActivity = BackgroundActivity(
             lastMountRepair: lines.last(where: { $0.contains("[mount-watchdog] Naprawa zakonczona powodzeniem") }),

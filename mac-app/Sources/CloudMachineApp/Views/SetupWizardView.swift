@@ -1,4 +1,5 @@
 import SwiftUI
+import CloudMachineCore
 
 struct SetupWizardView: View {
     @EnvironmentObject private var controller: CloudMachineController
@@ -51,7 +52,7 @@ struct SetupWizardView: View {
                     number: 1,
                     title: "Zainstaluj wymagane narzędzia",
                     status: step1Done ? .completed : .active,
-                    description: "Aplikacja wymaga narzędzi 'rclone' oraz 'jq'. Kliknij poniżej, aby zainstalować je automatycznie za pomocą Homebrew."
+                    description: "Aplikacja wymaga narzędzia 'rclone'. Kliknij poniżej, aby zainstalować je automatycznie za pomocą Homebrew."
                 ) {
                     Button(action: {
                         Task { await controller.installDependencies() }

@@ -6,31 +6,25 @@
   <string>com.renacode.cloudmachine.mount-watchdog</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>__CM_ROOT__/scripts/mount-watchdog.sh</string>
+    <string>__CM_AGENT_BIN__</string>
+    <string>mount-watchdog</string>
   </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>CM_CONFIG</key>
-    <string>__CM_CONFIG__</string>
-    <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>StartInterval</key>
   <integer>60</integer>
   <!--
     KRYTYCZNE: bez tego launchd zabija CALA grupe procesow tego joba, gdy
-    tylko glowny proces (ten skrypt bash) zakonczy dzialanie - a to
+    tylko glowny proces (cloudmachine-agent) zakonczy dzialanie - a to
     obejmuje TEZ zdaemonizowany `rclone nfsmount --daemon`, ktory ten
-    skrypt uruchamia podczas naprawy (mount.sh). Bez AbandonProcessGroup
-    kazda udana naprawa byla natychmiast (w ciagu <1s po zakonczeniu
-    skryptu) cofana - obserwowane bezposrednio jako "Signal received:
-    terminated" w logu rclone DOKLADNIE w tej samej sekundzie co
-    "Naprawa zakonczona powodzeniem", w kolko, bez konca. Ten klucz mowi
-    launchd, zeby NIE sprzatal procesow potomnych, ktore zyja dalej po
-    zakonczeniu glownego procesu joba.
+    proces uruchamia podczas naprawy. Bez AbandonProcessGroup kazda udana
+    naprawa byla natychmiast (w ciagu <1s po zakonczeniu procesu) cofana -
+    obserwowane bezposrednio jako "Signal received: terminated" w logu
+    rclone DOKLADNIE w tej samej sekundzie co "Naprawa zakonczona
+    powodzeniem", w kolko, bez konca. Ten klucz mowi launchd, zeby NIE
+    sprzatal procesow potomnych, ktore zyja dalej po zakonczeniu glownego
+    procesu joba - dziala identycznie niezaleznie od tego, czy glowny
+    proces to bash czy skompilowana binarka Swift.
   -->
   <key>AbandonProcessGroup</key>
   <true/>
