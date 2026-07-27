@@ -400,10 +400,16 @@ final class CloudMachineController: ObservableObject {
   /// prompt autoryzacji administratora) i probuje ponownie.
   private func runTmutilPrivileged(_ args: [String]) async throws -> ProcessResult {
     if let result = try? await ProcessRunner.run(
-      "/usr/bin/sudo", ["-n", "/usr/bin/tmutil"] + args, timeout: 300),
-      result.succeeded
+      "/usr/bin/sudo", ["-n", "/usr/bin/tmutil"] + args, timeout: 300)
     {
-      return result
+      // Prawdziwy blad samego tmutil (zly cel, brak miejsca...) NIE jest
+      // brakiem reguly sudoers - proba ponowienia po przepisaniu sudoers i
+      // tak zawiedzie identycznie, wiec nie ma sensu straszyc uzytkownika
+      // dodatkowym promptem autoryzacji administratora za kazdym razem, gdy
+      // tmutil po prostu zwroci realny blad.
+      if result.succeeded || !result.isSudoAuthFailure {
+        return result
+      }
     }
     try await ensureTmutilSudoersRule()
     return try await ProcessRunner.run(

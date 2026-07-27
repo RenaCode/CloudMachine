@@ -21,7 +21,7 @@ public enum UnmountService {
       CMLogger.log(
         "Time Machine aktywnie kopiuje - zatrzymuje backup przed odmontowaniem, zeby nie uszkodzic sparsebundle."
       )
-      _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"])
+      _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 20)
       var waited = 0
       while waited < 30 {
         if !(await TimeMachineStatus.isRunning()) { break }
@@ -39,7 +39,13 @@ public enum UnmountService {
 
     if await MountHealth.isMounted(spMount.path) {
       CMLogger.log("Odmontowuje sparsebundle: \(spMount.path)")
-      let detach = try? await ProcessRunner.run("/usr/bin/hdiutil", ["detach", spMount.path])
+      // WAZNE: timeout tutaj jest konieczny - `hdiutil detach` na sparsebundle
+      // nad NFS-em rclone potrafi utknac w jadrze w nieprzerywalnym
+      // oczekiwaniu (zaobserwowane realnie na zywo, patrz komentarz przy
+      // `ProcessRunner.run(timeout:)`). Bez tego kliknięcie "Odmontuj" w GUI
+      // mogloby zawiesic sie na zawsze.
+      let detach = try? await ProcessRunner.run(
+        "/usr/bin/hdiutil", ["detach", spMount.path], timeout: 20)
       if detach?.succeeded != true {
         await MountHealth.forceUnmount(spMount.path, timeoutS: 10)
       }
@@ -52,10 +58,10 @@ public enum UnmountService {
     }
 
     CMLogger.log("Odmontowuje \(localDir.path)")
-    let unmount = try? await ProcessRunner.run("/sbin/umount", [localDir.path])
+    let unmount = try? await ProcessRunner.run("/sbin/umount", [localDir.path], timeout: 15)
     if unmount?.succeeded != true {
       let diskutilUnmount = try? await ProcessRunner.run(
-        "/usr/sbin/diskutil", ["unmount", localDir.path])
+        "/usr/sbin/diskutil", ["unmount", localDir.path], timeout: 15)
       if diskutilUnmount?.succeeded != true {
         CMLogger.log("Zwykle odmontowanie nie powiodlo sie, probuje force unmount.")
         if !(await MountHealth.forceUnmount(localDir.path, timeoutS: 10)) {

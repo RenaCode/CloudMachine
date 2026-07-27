@@ -22,8 +22,15 @@ public enum BackupWatchdogService {
 
     // Interweniujemy WYLACZNIE gdy nasz wlasny mount jest w tabeli `mount` -
     // jesli jest zepsuty/brakujacy, to zadanie mount-watchdog, nie nasze.
-    guard await MountHealth.isMounted(localDir.path), await MountHealth.isMounted(spMount.path)
-    else { return }
+    let nfsReady = await MountHealth.isMounted(localDir.path)
+    let spReady = await MountHealth.isMounted(spMount.path)
+    let mountReady = nfsReady && spReady
+    EdgeTriggeredLog.log(
+      marker: CMPaths.logDir.appendingPathComponent(".backup-watchdog-mount-not-ready"),
+      active: !mountReady,
+      "[backup-watchdog] Mount CloudMachine nie jest gotowy - pomijam kolejne przebiegi w milczeniu, dopoki mount-watchdog go nie naprawi."
+    )
+    guard mountReady else { return }
 
     guard let destID = await TimeMachineStatus.destinationID(forMountPointContaining: spMount.path)
     else { return }
@@ -42,9 +49,13 @@ public enum BackupWatchdogService {
     let result = try? await ProcessRunner.runTmutilUnattended(["startbackup", "-d", destID])
     if result?.succeeded == true {
       CMLogger.log("[backup-watchdog] Wznowiono backup.")
+    } else if result?.isSudoAuthFailure == true {
+      CMLogger.log(
+        "[backup-watchdog] Nie udalo sie wznowic backupu - brak reguly sudoers dla 'tmutil startbackup'. Skonfiguruj automatyczne przycinanie w GUI (albo dopisz regule recznie w /etc/sudoers.d/cloudmachine)."
+      )
     } else {
       CMLogger.log(
-        "[backup-watchdog] Nie udalo sie wznowic backupu (sudo bez hasla niedostepne lub inny blad) - sprawdz regule w /etc/sudoers.d/cloudmachine."
+        "[backup-watchdog] Nie udalo sie wznowic backupu - tmutil zglosilo blad. Sprawdz Logi/Console.app."
       )
     }
   }

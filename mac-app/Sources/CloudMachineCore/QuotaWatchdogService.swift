@@ -89,7 +89,11 @@ public enum QuotaWatchdogService {
       let deleteResult = try? await ProcessRunner.run(
         "/usr/bin/sudo", ["-n", "/usr/bin/tmutil", "delete", "-p", backupPath])
       guard deleteResult?.succeeded == true else {
-        CMLogger.log("BLAD przy usuwaniu \(backupPath) (sudo bez hasla niedostepne lub inny blad).")
+        if deleteResult?.isSudoAuthFailure == true {
+          CMLogger.log("BLAD przy usuwaniu \(backupPath): brak reguly sudoers dla 'tmutil delete'.")
+        } else {
+          CMLogger.log("BLAD przy usuwaniu \(backupPath): tmutil zglosilo blad.")
+        }
         break
       }
       deleted += 1

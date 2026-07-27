@@ -19,10 +19,11 @@ public enum RuntimeState {
   /// `caffeinate -s` blokuje sen systemowy (na zasilaniu AC) przez caly czas
   /// trwania "mount_desired=on" - bez tego Mac usypia w przerwach miedzy
   /// probami backupu i budzi sie z polamanym mountem/polaczeniami sieciowymi.
-  public static func startCaffeinate() {
+  public static func startCaffeinate() async {
     if let pidString = try? String(contentsOf: CMPaths.caffeinatePidFile, encoding: .utf8),
       let pid = pid_t(pidString.trimmingCharacters(in: .whitespacesAndNewlines)),
-      ProcessRunner.isProcessRunning(pid: pid)
+      ProcessRunner.isProcessRunning(pid: pid),
+      await commandName(ofPid: pid)?.contains("caffeinate") == true
     {
       return
     }
@@ -42,5 +43,17 @@ public enum RuntimeState {
     else { return }
     kill(pid, SIGTERM)
     try? FileManager.default.removeItem(at: CMPaths.caffeinatePidFile)
+  }
+
+  /// `kill(pid, 0) == 0` samo w sobie nie wystarcza do stwierdzenia "to
+  /// nadal NASZ caffeinate" - po reboocie liczniki PID zaczynaja od nowa od
+  /// niskich wartosci, wiec stary numer z pliku (sprzed restartu) moze trafic
+  /// na zupelnie inny, niepowiazany proces systemowy, ktory akurat dostal ten
+  /// sam PID. Bez tej dodatkowej weryfikacji nazwy polecenia kod myslalby, ze
+  /// caffeinate juz dziala, i nigdy by go nie uruchomil.
+  private static func commandName(ofPid pid: pid_t) async -> String? {
+    guard let result = try? await ProcessRunner.run("/bin/ps", ["-p", "\(pid)", "-o", "comm="])
+    else { return nil }
+    return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 }

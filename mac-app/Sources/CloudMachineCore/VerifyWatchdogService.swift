@@ -27,7 +27,13 @@ public enum VerifyWatchdogService {
     guard RuntimeState.mountDesired else { return }
 
     let spMount = CMPaths.sparsebundleMountDir(machineKey: machineKey)
-    guard await MountHealth.isMounted(spMount.path) else { return }
+    let spReady = await MountHealth.isMounted(spMount.path)
+    EdgeTriggeredLog.log(
+      marker: CMPaths.logDir.appendingPathComponent(".verify-watchdog-mount-not-ready"),
+      active: !spReady,
+      "[verify-watchdog] Mount CloudMachine nie jest gotowy - pomijam kolejne przebiegi w milczeniu, dopoki mount-watchdog go nie naprawi."
+    )
+    guard spReady else { return }
 
     // Nie przeszkadzamy aktywnemu backupowi.
     if await TimeMachineStatus.isRunning() { return }
@@ -59,9 +65,16 @@ public enum VerifyWatchdogService {
     ])
     if result?.succeeded == true {
       CMLogger.log("[verify-watchdog] OK: sumy kontrolne sie zgadzaja.")
+    } else if result?.isSudoAuthFailure == true {
+      // Brak reguly sudoers to problem konfiguracji, NIE dowod na
+      // uszkodzony backup - nie strasz uzytkownika notyfikacja sugerujaca
+      // realna niespojnosc danych za cos, co jest tylko brakiem uprawnien.
+      CMLogger.log(
+        "[verify-watchdog] BLAD: brak reguly sudoers dla 'tmutil verifychecksums' - skonfiguruj automatyczne przycinanie w GUI (albo dopisz regule recznie w /etc/sudoers.d/cloudmachine), zeby weryfikacja mogla dzialac bez nadzoru."
+      )
     } else {
       CMLogger.log(
-        "[verify-watchdog] UWAGA: verifychecksums zglosilo problem (albo sudo bez hasla niedostepne). Rozwaz uruchomienie weryfikacji recznie."
+        "[verify-watchdog] UWAGA: verifychecksums wykryto realny problem z sumami kontrolnymi backupu."
       )
       _ = try? await ProcessRunner.run(
         "/usr/bin/osascript",

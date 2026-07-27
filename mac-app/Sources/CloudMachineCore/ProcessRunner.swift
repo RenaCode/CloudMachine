@@ -5,15 +5,51 @@ public struct ProcessResult {
   public var stderr: String
   public var exitCode: Int32
   public var succeeded: Bool { exitCode == 0 }
+
+  /// `true`, jesli to niepowodzenie to `sudo -n` odmawiajace natychmiast z
+  /// powodu brakujacej reguly NOPASSWD w sudoers (a NIE realny blad
+  /// polecenia, ktore sudo zdazylo faktycznie uruchomic) - odroznia "trzeba
+  /// dopisac regule i sprobowac ponownie" od "polecenie i tak zawiedzie
+  /// identycznie przy ponownej probie", wiec nie ma sensu prosic uzytkownika
+  /// o haslo administratora ani straszyc go w logu/notyfikacji fikcyjnym
+  /// problemem z danymi.
+  public var isSudoAuthFailure: Bool {
+    let text = (stderr + stdout).lowercased()
+    return text.contains("a password is required") || text.contains("no tty present")
+  }
 }
 
 public enum ProcessRunnerError: LocalizedError {
   case launchFailed(String)
+  case timedOut(String)
 
   public var errorDescription: String? {
     switch self {
     case .launchFailed(let msg): return msg
+    case .timedOut(let executable):
+      return
+        "\(executable) nie odpowiedzialo w wyznaczonym czasie (proces zostal osierocony w tle)."
     }
+  }
+}
+
+/// Chroni `continuation` przed podwojnym wznowieniem - potrzebne, odkad
+/// `run(timeout:)` moze "poddac sie" i zwrocic blad, ZANIM proces faktycznie
+/// sie zakonczy (patrz komentarz przy `timeout` nizej). Jesli terminationHandler
+/// i tak pozniej sie odpali, MUSI juz nic nie robic zamiast wywolac fatal error
+/// przez powtorne `continuation.resume`.
+private final class ContinuationGuard: @unchecked Sendable {
+  private let lock = NSLock()
+  private var done = false
+
+  /// Zwraca `true` tylko za PIERWSZYM razem - a wiec "to Ty masz prawo
+  /// wznowic continuation", kazde kolejne wywolanie dostaje `false`.
+  func claim() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    if done { return false }
+    done = true
+    return true
   }
 }
 
@@ -47,6 +83,7 @@ public enum ProcessRunner {
       let queue = DispatchQueue(label: "com.renacode.cloudmachine.process-pipe")
       var stdoutData = Data()
       var stderrData = Data()
+      let resumeGuard = ContinuationGuard()
 
       stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
         let data = handle.availableData
@@ -81,16 +118,20 @@ public enum ProcessRunner {
             stderr: String(data: stderrData, encoding: .utf8) ?? "",
             exitCode: proc.terminationStatus
           )
-          continuation.resume(returning: result)
+          if resumeGuard.claim() {
+            continuation.resume(returning: result)
+          }
         }
       }
 
       do {
         try process.run()
       } catch {
-        continuation.resume(
-          throwing: ProcessRunnerError.launchFailed(
-            "Nie mozna uruchomic \(executable): \(error.localizedDescription)"))
+        if resumeGuard.claim() {
+          continuation.resume(
+            throwing: ProcessRunnerError.launchFailed(
+              "Nie mozna uruchomic \(executable): \(error.localizedDescription)"))
+        }
         return
       }
 
@@ -106,6 +147,25 @@ public enum ProcessRunner {
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 5) {
           if process.isRunning {
             kill(process.processIdentifier, SIGKILL)
+          }
+        }
+        // WAZNE: SIGKILL NIE dziala na proces zawieszony w jadrze w
+        // nieprzerywalnym oczekiwaniu (stan "U" w `ps`, np. hdiutil/
+        // diskimages-helper czekajacy na I/O przez martwy/wolny NFS -
+        // zaobserwowane realnie na zywo). Bez tej ostatecznej granicy
+        // `timeout` NIE bylby prawdziwym gornym ograniczeniem czasu
+        // oczekiwania, wbrew temu co sugeruje parametr - `continuation`
+        // czekalaby w nieskonczonosc na `terminationHandler`, ktory nigdy by
+        // sie nie odpalil. Tutaj poddajemy sie i zwracamy blad zamiast
+        // wisiec; proces zostaje osierocony w tle (nieszkodliwie - kiedys
+        // sam dokonczy, gdy jadro w koncu dostanie odpowiedz, a
+        // `resumeGuard` zapobiegnie podwojnemu wznowieniu, jesli
+        // `terminationHandler` odpali sie pozniej).
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 10) {
+          if resumeGuard.claim() {
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            continuation.resume(throwing: ProcessRunnerError.timedOut(executable))
           }
         }
       }

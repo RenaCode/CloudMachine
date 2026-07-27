@@ -147,7 +147,7 @@ public enum MountService {
       await mountSparsebundle(localDir: localDir, spMount: spMount)
       CMLogger.log("Narzedzie CloudMachine gotowe do pracy.")
       RuntimeState.setMountDesired(true)
-      RuntimeState.startCaffeinate()
+      await RuntimeState.startCaffeinate()
       return true
     } else {
       CMLogger.log("BLAD: montowanie nie powiodlo sie po 2 probach.")
@@ -223,13 +223,29 @@ public enum MountService {
     CMLogger.log("Montuje wirtualny dysk sparsebundle pod \(spMount.path)...")
     let sparsebundlePath = localDir.appendingPathComponent("backup.sparsebundle").path
     for attempt in 1...3 {
-      let result = try? await ProcessRunner.run(
-        "/usr/bin/hdiutil",
-        [
-          "attach", "-noverify", "-noautoopen", "-nobrowse",
-          "-mountpoint", spMount.path, sparsebundlePath,
-        ])
-      if result?.succeeded == true { return }
+      do {
+        let result = try await ProcessRunner.run(
+          "/usr/bin/hdiutil",
+          [
+            "attach", "-noverify", "-noautoopen", "-nobrowse",
+            "-mountpoint", spMount.path, sparsebundlePath,
+          ], timeout: 180)
+        if result.succeeded { return }
+      } catch {
+        if case ProcessRunnerError.timedOut = error {
+          // WAZNE: hdiutil attach nad NFS-em rclone bywa legalnie bardzo
+          // wolny (zaobserwowane na zywo: >7 min po dogonieniu duzej
+          // zaleglej kolejki uploadow po przerwanym backupie). Po timeout
+          // NIE probujemy od razu drugi raz - dwa rownolegle hdiutil attach
+          // na ten sam mountpoint tylko namieszaja (osierocony pierwszy
+          // moze wciaz skonczyc sie sam w tle). Kolejny cykl watchdoga (60s
+          // pozniej) sam sprawdzi przez `isMounted`, czy sie jednak udalo.
+          CMLogger.log(
+            "Proba \(attempt) montowania sparsebundle nie zdazyla w 180s - moze jeszcze dokonczyc sie w tle, sprawdze przy nastepnej okazji zamiast probowac rownolegle."
+          )
+          return
+        }
+      }
       if attempt < 3 {
         CMLogger.log("Proba \(attempt) montowania sparsebundle nie powiodla sie, ponawiam za 3s...")
         try? await Task.sleep(nanoseconds: 3_000_000_000)

@@ -14,10 +14,11 @@ public enum LaunchdInstaller {
       return CMActionResult(
         succeeded: false, message: "Nie znaleziono katalogu launchd/ z szablonami.")
     }
-    guard let agentBin = CMPaths.agentBinaryPath else {
+    guard let resolvedAgentBin = CMPaths.agentBinaryPath else {
       return CMActionResult(
         succeeded: false, message: "Nie znaleziono skompilowanej binarki cloudmachine-agent.")
     }
+    let agentBin = stableAgentBinaryPath(resolvedFrom: resolvedAgentBin)
 
     try? FileManager.default.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
 
@@ -68,6 +69,29 @@ public enum LaunchdInstaller {
     }
     return CMActionResult(
       succeeded: true, message: "Zainstalowano agentow: \(installedLabels.joined(separator: ", "))")
+  }
+
+  /// Jesli `resolved` wskazuje do wewnatrz `.build/` checkoutu
+  /// deweloperskiego (przypadek 3 w `CMPaths.agentBinaryPath` - GUI/CLI
+  /// odpalone przez `swift run` w drzewie repo), zywa automatyzacja launchd
+  /// wskazywalaby WPROST na plik, ktory kazdy kolejny `swift build`/`git
+  /// clean` w repo moze podmienic albo skasowac (zaobserwowane realnie: to
+  /// dokladnie sciezka, ktora prowadzila produkcyjne watchdogi tej
+  /// instalacji). Kopiujemy wiec binarke RAZ, przy kazdej instalacji, do
+  /// stabilnej lokalizacji poza drzewem repo - launchd wskazuje na TA kopie.
+  /// Binarka spakowana w .app (przypadek 1/2) jest juz stabilna sama w
+  /// sobie i nie wymaga kopiowania.
+  private static func stableAgentBinaryPath(resolvedFrom resolved: URL) -> URL {
+    guard resolved.path.contains("/.build/") else { return resolved }
+    let stableDir = CMPaths.appSupportDir.appendingPathComponent("bin")
+    try? FileManager.default.createDirectory(at: stableDir, withIntermediateDirectories: true)
+    let stableBin = stableDir.appendingPathComponent("cloudmachine-agent")
+    try? FileManager.default.removeItem(at: stableBin)
+    guard (try? FileManager.default.copyItem(at: resolved, to: stableBin)) != nil else {
+      return resolved
+    }
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stableBin.path)
+    return stableBin
   }
 
   public static func isInstalled(label: String) async -> Bool {

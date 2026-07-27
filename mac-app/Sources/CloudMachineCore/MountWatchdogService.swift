@@ -69,7 +69,7 @@ public enum MountWatchdogService {
   private static func runLocked(config: MachinesConfig, machineKey: String) async {
     guard RuntimeState.mountDesired else { return }
 
-    RuntimeState.startCaffeinate()
+    await RuntimeState.startCaffeinate()
     CMLogger.rotateIfLarge(CMPaths.rcloneMountLogFile, maxBytes: 200 * 1024 * 1024, keepLines: 5000)
 
     let localDir = CMPaths.localMachineMountDir(machineKey: machineKey)
@@ -96,12 +96,18 @@ public enum MountWatchdogService {
           "[mount-watchdog] NFS zdrowy, ale wirtualny dysk sparsebundle nie jest zamontowany pod \(spMount.path) - montuje."
         )
         let sparsebundlePath = localDir.appendingPathComponent("backup.sparsebundle").path
+        // WAZNE: timeout tutaj jest konieczny - bez niego zawieszony hdiutil
+        // (zaobserwowane realnie: hdiutil attach nad NFS-em rclone potrafi
+        // utknac w jadrze na wiele minut) blokowalby CALY ten przebieg
+        // watchdoga w nieskonczonosc, co - poniewaz StartInterval launchd
+        // nie odpala nowej instancji, dopoki poprzednia zyje - skutecznie
+        // WYLACZALOBY samo-naprawe montowania do konca sesji.
         let result = try? await ProcessRunner.run(
           "/usr/bin/hdiutil",
           [
             "attach", "-noverify", "-noautoopen", "-nobrowse", "-mountpoint", spMount.path,
             sparsebundlePath,
-          ])
+          ], timeout: 180)
         if result?.succeeded != true {
           CMLogger.log(
             "[mount-watchdog] Nie udalo sie zamontowac sparsebundle w tym przebiegu, sprobuje ponownie w nastepnym cyklu."
