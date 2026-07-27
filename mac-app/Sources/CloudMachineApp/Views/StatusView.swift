@@ -73,6 +73,12 @@ struct StatusView: View {
           }
         }
 
+        // Karta 2b: Zywy postep aktualnie trwajacego backupu (widoczna tylko
+        // gdy Time Machine cos faktycznie kopiuje) - procent, dane, predkosc.
+        if let progress = controller.status.backupProgress {
+          BackupProgressCard(progress: progress)
+        }
+
         // Karta 3: Ostatnie operacje (na całą szerokość)
         StatusCard(
           title: "Historia ostatnich operacji (ta sesja aplikacji)",
@@ -364,6 +370,106 @@ struct QuotaProgressGauge: View {
       }
       .padding(.top, 4)
     }
+  }
+}
+
+/// Karta z zywym postepem trwajacego backupu Time Machine - pokazuje sie
+/// tylko wtedy, gdy `tmutil status` faktycznie raportuje aktywne kopiowanie
+/// (patrz `CloudMachineController.refreshBackupProgress`).
+struct BackupProgressCard: View {
+  var progress: BackupProgressInfo
+
+  var body: some View {
+    StatusCard(title: "Postęp backupu", systemImage: "clock.arrow.2.circlepath") {
+      VStack(alignment: .leading, spacing: 12) {
+        HStack {
+          Text(phaseLabel)
+            .font(.subheadline.bold())
+          Spacer()
+          if let percent = progress.percent {
+            Text(String(format: "%.1f%%", percent * 100))
+              .font(.headline.bold())
+              .foregroundStyle(Color.accentColor)
+          }
+        }
+
+        if let percent = progress.percent {
+          GeometryReader { geo in
+            ZStack(alignment: .leading) {
+              Capsule()
+                .fill(Color.secondary.opacity(0.12))
+                .frame(height: 10)
+              Capsule()
+                .fill(
+                  LinearGradient(
+                    colors: [.accentColor, .blue], startPoint: .leading, endPoint: .trailing)
+                )
+                .frame(width: geo.size.width * CGFloat(min(percent, 1.0)), height: 10)
+            }
+          }
+          .frame(height: 10)
+        }
+
+        HStack {
+          if let bytesDone = progress.bytesDone, let bytesTotal = progress.bytesTotal,
+            bytesTotal > 0
+          {
+            Label(
+              "\(formatGB(bytesDone)) / \(formatGB(bytesTotal))", systemImage: "internaldrive"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          }
+          Spacer()
+          if let rate = progress.transferRateMBs, rate > 0 {
+            Label(String(format: "%.1f MB/s", rate), systemImage: "speedometer")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+
+        HStack {
+          if let filesDone = progress.filesDone, let filesTotal = progress.filesTotal {
+            Label("\(filesDone.formatted()) / \(filesTotal.formatted()) plików", systemImage: "doc.on.doc")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+          }
+          Spacer()
+          if let remaining = progress.timeRemainingSeconds, remaining > 0 {
+            Label("Pozostało: \(formatDuration(remaining))", systemImage: "hourglass")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+          }
+        }
+      }
+    }
+  }
+
+  private var phaseLabel: String {
+    switch progress.phase {
+    case "Copying": return "Kopiowanie danych"
+    case "ThinningPreBackup", "ThinningPostBackup": return "Zwalnianie miejsca (thinning)"
+    case "FindingChanges": return "Wyszukiwanie zmian"
+    case "MountingBackupVolume": return "Montowanie wolumenu backupu"
+    case "Mounting": return "Montowanie"
+    case "CleaningUp": return "Porządkowanie"
+    case .some(let other): return other
+    case nil: return "Backup w toku"
+    }
+  }
+
+  private func formatGB(_ bytes: Double) -> String {
+    String(format: "%.1f GB", bytes / 1_073_741_824)
+  }
+
+  private func formatDuration(_ seconds: Double) -> String {
+    let totalMinutes = Int(seconds / 60)
+    let hours = totalMinutes / 60
+    let minutes = totalMinutes % 60
+    if hours > 0 {
+      return "\(hours) godz. \(minutes) min"
+    }
+    return "\(minutes) min"
   }
 }
 

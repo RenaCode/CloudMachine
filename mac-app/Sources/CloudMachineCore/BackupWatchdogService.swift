@@ -11,7 +11,26 @@ public enum BackupWatchdogService {
   }
 
   public static func run(config: MachinesConfig, machineKey: String) async {
-    await withCMLock("backup-watchdog") { await runLocked(config: config, machineKey: machineKey) }
+    await withCMLock("backup-watchdog") {
+      await runWithDeviceLock(config: config, machineKey: machineKey)
+    }
+  }
+
+  /// Patrz komentarz przy analogicznej funkcji w MountWatchdogService -
+  /// blokada urzadzenia zapobiega wznowieniu backupu w trakcie np. naprawy
+  /// mountu czy przycinania quoty na tym samym sparsebundle.
+  private static func runWithDeviceLock(config: MachinesConfig, machineKey: String) async {
+    guard
+      await withCMLock(
+        deviceLockName(machineKey: machineKey),
+        { await runLocked(config: config, machineKey: machineKey) }
+      ) != nil
+    else {
+      CMLogger.log(
+        "[backup-watchdog] Inna operacja trwa na tym urzadzeniu (mount/unmount/naprawa/przycinanie/weryfikacja) - pomijam ten przebieg."
+      )
+      return
+    }
   }
 
   private static func runLocked(config: MachinesConfig, machineKey: String) async {

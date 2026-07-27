@@ -20,7 +20,27 @@ public enum QuotaWatchdogService {
   public static func triggerGB(forLimitGB limitGB: Int) -> Int { Int(Double(limitGB) * 0.9) }
 
   public static func run(config: MachinesConfig, machineKey: String) async {
-    await withCMLock("quota-watchdog") { await runLocked(config: config, machineKey: machineKey) }
+    await withCMLock("quota-watchdog") {
+      await runWithDeviceLock(config: config, machineKey: machineKey)
+    }
+  }
+
+  /// Patrz komentarz przy analogicznej funkcji w MountWatchdogService -
+  /// blokada urzadzenia zapobiega przycinaniu (i wywolywanym przez nie
+  /// `tmutil delete`) w trakcie np. naprawy mountu czy weryfikacji checksumow
+  /// na tym samym sparsebundle.
+  private static func runWithDeviceLock(config: MachinesConfig, machineKey: String) async {
+    guard
+      await withCMLock(
+        deviceLockName(machineKey: machineKey),
+        { await runLocked(config: config, machineKey: machineKey) }
+      ) != nil
+    else {
+      CMLogger.log(
+        "[quota-watchdog] Inna operacja trwa na tym urzadzeniu (mount/unmount/naprawa/weryfikacja) - pomijam ten przebieg."
+      )
+      return
+    }
   }
 
   private static func runLocked(config: MachinesConfig, machineKey: String) async {
@@ -51,7 +71,7 @@ public enum QuotaWatchdogService {
     }
     CMLogger.log("Aktualne wykorzystanie: \(String(format: "%.1f", usedGB)) GB / \(limitGB) GB")
 
-    guard Int(usedGB) >= triggerGB else {
+    guard usedGB >= Double(triggerGB) else {
       CMLogger.log("Ponizej progu, nic do zrobienia.")
       return
     }
@@ -103,7 +123,7 @@ public enum QuotaWatchdogService {
       }
       usedGB = refreshed
       CMLogger.log("Po usunieciu: \(String(format: "%.1f", usedGB)) GB / \(limitGB) GB")
-      if Int(usedGB) < triggerGB { break }
+      if usedGB < Double(triggerGB) { break }
     }
 
     CMLogger.log("Zakonczono. Usunieto \(deleted) backup(ow).")

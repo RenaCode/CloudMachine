@@ -37,7 +37,21 @@ public enum RemoteConfigurer {
     guard createResult?.succeeded == true else {
       return CMActionResult(succeeded: false, message: "rclone config create nie powiodlo sie.")
     }
-    _ = try? await ProcessRunner.runRclone(["mkdir", config.remotePath(forMachineKey: machineKey)])
+    let mkdirResult = try? await ProcessRunner.runRclone([
+      "mkdir", config.remotePath(forMachineKey: machineKey),
+    ])
+    guard mkdirResult?.succeeded == true else {
+      // WAZNIE ZWRACAMY BLAD zamiast "sukces" tutaj - remote sam w sobie
+      // dziala (config create sie udalo), ale bez folderu tej maszyny
+      // pierwszy mount i tak musialby go sam utworzyc przez sciezke "brak
+      // sparsebundle w chmurze". Lepiej powiedziec uzytkownikowi wprost, ze
+      // cos nie do konca sie udalo, niz pokazac fikcyjny pelny sukces.
+      return CMActionResult(
+        succeeded: false,
+        message:
+          "Polaczono z Google Drive, ale nie udalo sie utworzyc folderu maszyny '\(machineKey)' - sprobuj zamontowac recznie, mount sam go utworzy przy pierwszej probie."
+      )
+    }
     return CMActionResult(
       succeeded: true, message: "Polaczono z Google Drive jako remote '\(config.remoteName)'.")
   }

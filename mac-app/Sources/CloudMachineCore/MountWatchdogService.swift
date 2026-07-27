@@ -57,11 +57,73 @@ public enum MountWatchdogService {
     try? FileManager.default.removeItem(at: streakFile)
   }
 
+  /// Nie remontuj czesciej niz raz na 15 minut z powodu utknietego bandu -
+  /// pojedynczy remont moze nie wystarczyc, jesli Time Machine natychmiast
+  /// wraca do pisania w to samo miejsce, a bez cooldownu watchdog probowalby
+  /// to co 60s w kolko, bez sensu.
+  private static let stuckBandCooldown: TimeInterval = 900
+  private static var stuckBandStateFile: URL {
+    CMPaths.logDir.appendingPathComponent(".mount-watchdog-stuckband-last-remount")
+  }
+
+  /// Sprawdza, czy jakis band utknal w petli "queuing for upload" bez konca
+  /// (patrz `MountHealth.detectStuckBand`/`stuckBand` - band modyfikowany
+  /// czesciej niz okno ciszy `--vfs-write-back` nigdy nie dostaje szansy na
+  /// upload, znany wzorzec rclone: github.com/rclone/rclone#4763 "file has
+  /// changed", #6857 "stuck in a failed upload loop"). Jesli tak - bezpiecznie
+  /// remontuje (przez juz-odblokowane `unmountLocked`/`mountLocked`, ktore
+  /// same NIE biora blokady urzadzenia - juz ja trzymamy w tym przebiegu),
+  /// zeby dac rclone czysty restart stanu writeback zamiast czekac
+  /// (potencjalnie godzinami) az sam sie odetka.
+  private static func checkForStuckBandAndRemount(
+    config: MachinesConfig, machineKey: String, remotePath: String
+  ) async {
+    guard RuntimeState.mountDesired, await TimeMachineStatus.isRunning() else { return }
+    guard let stuckBand = await MountHealth.stuckBand(remotePath: remotePath) else { return }
+
+    let lastEpoch = CooldownGate.parseStateFile(stuckBandStateFile)
+    guard !CooldownGate.isWithinCooldown(lastEpoch: lastEpoch, cooldown: stuckBandCooldown) else {
+      return
+    }
+    CooldownGate.writeStateFile(stuckBandStateFile)
+
+    CMLogger.log(
+      "[mount-watchdog] Band '\(stuckBand)' jest modyfikowany czesciej niz okno ciszy rclone (vfs-write-back) i nigdy nie konczy uploadu - remontuje, zeby odswiezyc stan writeback (znany wzorzec rclone, patrz github.com/rclone/rclone#4763)."
+    )
+    await UnmountService.unmountLocked(config: config, machineKey: machineKey)
+    _ = await MountService.mountLocked(config: config, machineKey: machineKey)
+    _ = try? await ProcessRunner.run(
+      "/usr/bin/osascript",
+      [
+        "-e",
+        "display notification \"Wykryto zawieszony upload jednego z fragmentow dysku i zrestartowano polaczenie z chmura.\" with title \"CloudMachine\"",
+      ])
+  }
+
   public static func run(config: MachinesConfig, machineKey: String) async {
     guard
       await withCMLock(
-        "mount-watchdog", { await runLocked(config: config, machineKey: machineKey) }) != nil
+        "mount-watchdog", { await runWithDeviceLock(config: config, machineKey: machineKey) }
+      ) != nil
     else {
+      return
+    }
+  }
+
+  /// Nested pod wlasna blokada "mount-watchdog" (zapobiega nakladaniu sie
+  /// dwoch przebiegow TEGO watchdoga) - a wewnatrz, pod wspolna blokada
+  /// urzadzenia, zeby ten przebieg nigdy nie wykonal sie rownolegle z
+  /// mount/unmount, backup-watchdog, quota-watchdog czy verify-watchdog.
+  private static func runWithDeviceLock(config: MachinesConfig, machineKey: String) async {
+    guard
+      await withCMLock(
+        deviceLockName(machineKey: machineKey),
+        { await runLocked(config: config, machineKey: machineKey) }
+      ) != nil
+    else {
+      CMLogger.log(
+        "[mount-watchdog] Inna operacja trwa na tym urzadzeniu (mount/unmount/przycinanie/weryfikacja) - pomijam ten przebieg."
+      )
       return
     }
   }
@@ -113,6 +175,9 @@ public enum MountWatchdogService {
             "[mount-watchdog] Nie udalo sie zamontowac sparsebundle w tym przebiegu, sprobuje ponownie w nastepnym cyklu."
           )
         }
+      } else {
+        await checkForStuckBandAndRemount(
+          config: config, machineKey: machineKey, remotePath: remotePath)
       }
       return
 

@@ -2,7 +2,26 @@ import Foundation
 
 /// Port `unmount.sh` - odmontowuje wolumin CloudMachine i sparsebundle.
 public enum UnmountService {
+  /// Wczesniej ta funkcja nie brala ZADNEJ blokady - klikniecie "Odmontuj" w
+  /// GUI moglo wystartowac rownolegle z naprawa mount-watchdoga (albo z
+  /// przycinaniem quoty czy weryfikacja checksumow), bo wszystkie one dotykaly
+  /// tego samego hdiutil/rclone bez wzajemnego wykluczenia. Patrz
+  /// `deviceLockName` w CMLock.swift.
   public static func unmount(config: MachinesConfig, machineKey: String) async {
+    let didRun: Void? = await withCMLock(deviceLockName(machineKey: machineKey)) {
+      await unmountLocked(config: config, machineKey: machineKey)
+    }
+    if didRun == nil {
+      CMLogger.log(
+        "Inna operacja na tym urzadzeniu juz trwa (mount/naprawa/przycinanie/weryfikacja) - pomijam odmontowanie w tym przebiegu."
+      )
+    }
+  }
+
+  /// Bez `private` (celowo) - patrz analogiczny komentarz przy
+  /// `MountService.mountLocked`: `MountWatchdogService` wola to bezposrednio
+  /// gdy juz trzyma blokade urzadzenia z zewnatrz.
+  static func unmountLocked(config: MachinesConfig, machineKey: String) async {
     let localDir = CMPaths.localMachineMountDir(machineKey: machineKey)
     let spMount = CMPaths.sparsebundleMountDir(machineKey: machineKey)
     let remotePath = config.remotePath(forMachineKey: machineKey)

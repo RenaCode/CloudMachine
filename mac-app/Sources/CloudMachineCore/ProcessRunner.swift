@@ -163,8 +163,24 @@ public enum ProcessRunner {
         // `terminationHandler` odpali sie pozniej).
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 10) {
           if resumeGuard.claim() {
-            stdoutPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            // WAZNE: NIE zerujemy handlera do `nil` - to zostawia potok bez
+            // ZADNEGO czytelnika. Jesli proces przetrwal nawet SIGKILL
+            // (zawieszony w jadrze w nieprzerywalnym I/O - patrz komentarz
+            // wyzej) i kiedys jednak wznowi dzialanie, dalej moze pisac do
+            // stdout/stderr; bez czytelnika zapelniony bufor potoku
+            // zablokowalby go na `write()` NA ZAWSZE, zamieniajac
+            // "niegrozny osierocony proces" w trwale zawieszony zombie,
+            // ktory nigdy nie zostanie sprzatniety. Podmieniamy wiec handler
+            // na taki, ktory nadal drenuje i odrzuca dane - wynik i tak juz
+            // nie zostanie odczytany (continuation ponizej wznawia sie
+            // bledem timeoutu), ale osierocony proces moze swobodnie
+            // dokonczyc zapis i zakonczyc sie samodzielnie.
+            stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+              _ = handle.availableData
+            }
+            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+              _ = handle.availableData
+            }
             continuation.resume(throwing: ProcessRunnerError.timedOut(executable))
           }
         }

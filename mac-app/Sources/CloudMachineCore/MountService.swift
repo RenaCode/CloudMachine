@@ -5,28 +5,59 @@ import Foundation
 /// rclone na macOS jest budowany bez wsparcia FUSE), gotowy do wskazania jako
 /// cel Time Machine.
 public enum MountService {
-  private static let vfsCacheMaxSize = "40G"
   private static let rcloneTransfers = "32"
   private static let rcloneCheckers = "32"
   private static let rcloneTpsLimit = "50"
   private static let rcloneVfsWriteBack = "5s"
+
+  /// Wczesniej sztywne "40G" - zbyt male, gdy pojedynczy "goracy" band
+  /// (dziennik/metadane APFS dopisywane bez przerwy przez caly czas trwania
+  /// backupu) nigdy nie dostaje 5-sekundowego okna ciszy potrzebnego do
+  /// uploadu (patrz `MountHealth.detectStuckBand`) i rosnie w lokalnym cache
+  /// bez konca - zaobserwowane realnie: cache przekroczyl skonfigurowany
+  /// max. Rclone i tak nie wymusza twardego limitu (eviction jest leniwe, nie
+  /// blokujace - patrz rclone docs), ale hojniejszy margines zmniejsza szanse
+  /// na sytuacje, w ktorej cache jest pod ciagla presja zamiast miec zapas.
+  /// Ograniczone do [40, 200] GB i do 1/4 faktycznie wolnego miejsca, zeby
+  /// nie obiecywac wiecej niz lokalny dysk realnie ma.
+  private static func vfsCacheMaxSize() -> String {
+    let freeGB = localFreeDiskGB() ?? 160
+    let capped = min(max(freeGB / 4, 40), 200)
+    return "\(capped)G"
+  }
+
+  private static func localFreeDiskGB() -> Int? {
+    guard
+      let values = try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(
+        forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+      let bytes = values.volumeAvailableCapacityForImportantUsage
+    else { return nil }
+    return Int(bytes / 1_073_741_824)
+  }
 
   /// Zwraca `true`, jesli po zakonczeniu wolumin NFS jest zamontowany
   /// (sparsebundle moglo sie nie udac oddzielnie - to nie jest fatalne, patrz
   /// `mountSparsebundle`).
   @discardableResult
   public static func mount(config: MachinesConfig, machineKey: String) async -> Bool {
-    let result = await withCMLock("mount-\(machineKey)") {
+    let result = await withCMLock(deviceLockName(machineKey: machineKey)) {
       await mountLocked(config: config, machineKey: machineKey)
     }
     guard let result else {
-      CMLogger.log("Inna instancja mount dla tej maszyny juz dziala, pomijam ten przebieg.")
+      CMLogger.log(
+        "Inna operacja na tym urzadzeniu juz trwa (mount/unmount/naprawa/przycinanie/weryfikacja), pomijam ten przebieg."
+      )
       return await MountHealth.isMounted(CMPaths.localMachineMountDir(machineKey: machineKey).path)
     }
     return result
   }
 
-  private static func mountLocked(config: MachinesConfig, machineKey: String) async -> Bool {
+  /// Bez `private` (celowo) - `MountWatchdogService` wola to bezposrednio
+  /// przy remoncie po wykryciu utknietego bandu, gdy JUZ trzyma blokade
+  /// urzadzenia z zewnatrz (`deviceLockName`) - ponowne wejscie przez
+  /// publiczne `mount()` (ktore samo probuje ja wziac) zaklinowaloby sie na
+  /// wlasnej blokadzie, bo `CMLock` nie jest rekurencyjny.
+  static func mountLocked(config: MachinesConfig, machineKey: String) async -> Bool {
     let remotePath = config.remotePath(forMachineKey: machineKey)
     let localDir = CMPaths.localMachineMountDir(machineKey: machineKey)
     let spMount = CMPaths.sparsebundleMountDir(machineKey: machineKey)
@@ -62,7 +93,21 @@ public enum MountService {
         "/usr/bin/hdiutil",
         [
           "create", "-size", "\(limitGB)g", "-fs", "APFS",
-          "-volname", "CloudMachine-Backup-\(machineKey)", "-type", "SPARSEBUNDLE", tmpSp,
+          "-volname", "CloudMachine-Backup-\(machineKey)", "-type", "SPARSEBUNDLE",
+          // WAZNE: domyslny band-size hdiutil to ~8MB. Wszystkie bandy
+          // sparsebundle musza usiedziec w JEDNYM katalogu, a macOS/APFS
+          // zaczyna zawodzic w okolicy ~100 000 plikow w katalogu - przy
+          // 8MB bandach to zaledwie ~800GB (100 000 x 8MB), duzo ponizej
+          // typowych limitow maszyn (np. 3500GB tutaj), wiec sparsebundle
+          // mial realna szanse trafic w ta sciane dlugo przed zapelnieniem
+          // limitu. 128MB bandy (sprawdzony w spolecznosci rozmiar dla
+          // Time Machine po sieci, patrz "sparse-band-size=262144" =
+          // 262144 sektorow x 512B = 128MB) dają margines do ~12-13TB
+          // przy tym samym limicie plikow, ORAZ - jako efekt uboczny -
+          // duzo mniej plikow do zsynchronizowania przez rclone/NFS, co
+          // bylo tez zrodlem spowolnien przy duzej liczbie malych plikow.
+          "-imagekey", "sparse-band-size=262144",
+          tmpSp,
         ])
       guard createResult?.succeeded == true else {
         CMLogger.log("BLAD: nie udalo sie utworzyc lokalnego sparsebundle.")
@@ -94,7 +139,7 @@ public enum MountService {
       }
 
       CMLogger.log(
-        "Montuje \(remotePath) -> \(localDir.path) (vfs-cache-mode=full, cache max=\(vfsCacheMaxSize))"
+        "Montuje \(remotePath) -> \(localDir.path) (vfs-cache-mode=full, cache max=\(vfsCacheMaxSize()))"
       )
 
       for attempt in 1...2 {
@@ -130,6 +175,7 @@ public enum MountService {
           await MountHealth.killRcloneForRemote(remotePath)
           try? await Task.sleep(nanoseconds: 1_000_000_000)
           if !(await MountHealth.isMounted(localDir.path)) {
+            cleanupOldStuckDirs(localDir: localDir, keepNewest: 2)
             let stuckDir = localDir.deletingLastPathComponent()
               .appendingPathComponent(
                 "\(localDir.lastPathComponent)-zaklinowany-\(Int(Date().timeIntervalSince1970))")
@@ -157,6 +203,28 @@ public enum MountService {
         }
       }
       return false
+    }
+  }
+
+  /// Kazda nieudana proba mountowania odklada zawieszony katalog na bok
+  /// (`<klucz>-zaklinowany-<epoch>`) zamiast go kasowac, na wypadek gdyby
+  /// przydal sie do diagnozy - ale bez sprzatania te katalogi rosly bez
+  /// ograniczen przy powtarzajacych sie awariach mountu. Trzymamy tylko
+  /// `keepNewest` najswiezszych, reszte usuwamy.
+  private static func cleanupOldStuckDirs(localDir: URL, keepNewest: Int) {
+    let parent = localDir.deletingLastPathComponent()
+    let prefix = "\(localDir.lastPathComponent)-zaklinowany-"
+    guard
+      let entries = try? FileManager.default.contentsOfDirectory(
+        at: parent, includingPropertiesForKeys: nil)
+    else { return }
+    let stuckDirs =
+      entries
+      .filter { $0.lastPathComponent.hasPrefix(prefix) }
+      .sorted { $0.lastPathComponent > $1.lastPathComponent }  // najnowszy (najwiekszy epoch) pierwszy
+    guard stuckDirs.count > keepNewest else { return }
+    for old in stuckDirs.dropFirst(keepNewest) {
+      try? FileManager.default.removeItem(at: old)
     }
   }
 
@@ -198,7 +266,7 @@ public enum MountService {
       "nfsmount", remotePath, localDir.path,
       "--volname", "CloudMachine-\(localDir.lastPathComponent)",
       "--vfs-cache-mode", "full",
-      "--vfs-cache-max-size", vfsCacheMaxSize,
+      "--vfs-cache-max-size", vfsCacheMaxSize(),
       "--vfs-cache-max-age", "72h",
       "--vfs-write-back", rcloneVfsWriteBack,
       "--dir-cache-time", "1h",

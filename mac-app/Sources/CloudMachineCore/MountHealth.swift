@@ -90,9 +90,74 @@ public enum MountHealth {
     return !(await isMounted(mountPoint))
   }
 
+  /// Czysta logika dopasowania - wydzielona z `isMounted(_:)` zeby dalo sie
+  /// ja przetestowac bez shellowania do `/sbin/mount` (patrz
+  /// CloudMachineCoreTests). Dopasowuje `path` jako PELNY punkt montowania w
+  /// linii `mount` (otoczony " on " i " (" - dokladnie ten format, w jakim
+  /// `/sbin/mount` go drukuje), nie zwyklym "zawieraniem podciagu" - ten
+  /// drugi dawal falszywy pozytyw, gdy jeden klucz maszyny byl prefiksem
+  /// innego (np. "imac" bylby "zamontowany" tylko dlatego, ze "imac-2"
+  /// faktycznie jest).
+  public static func isMountedIn(_ mountOutput: String, path: String) -> Bool {
+    let marker = " on \(path) ("
+    return mountOutput.split(separator: "\n").contains { $0.contains(marker) }
+  }
+
   public static func isMounted(_ path: String) async -> Bool {
     guard let result = try? await ProcessRunner.run("/sbin/mount", []) else { return false }
-    return result.stdout.contains(path)
+    return isMountedIn(result.stdout, path: path)
+  }
+
+  /// Czysta logika wykrywania "utknietego bandu" - wydzielona z `stuckBand`
+  /// zeby dalo sie ja przetestowac na goto tekscie logu bez shellowania.
+  /// Rclone kolejkuje plik do uploadu dopiero po `--vfs-write-back` (domyslnie
+  /// 5s) OD OSTATNIEGO zapisu - kazdy kolejny zapis w tym oknie resetuje
+  /// timer (udokumentowane zachowanie, patrz rclone#4763 "file has changed"/
+  /// #6857 "stuck in a failed upload loop"). Band, ktory jest modyfikowany
+  /// czesciej niz raz na 5s (np. dziennik/metadane APFS zywe przez caly czas
+  /// backupu) NIGDY nie dostaje szansy na upload i moze tak zostac w
+  /// nieskonczonosc - zaobserwowane realnie: setki powtorzen "queuing for
+  /// upload" dla TEGO SAMEGO bandu bez ani jednego zakonczonego uploadu, przy
+  /// jednoczesnym spadku ogolnej przepustowosci backupu o rzad wielkosci.
+  /// Zwraca nazwe pierwszego bandu spelniajacego ten wzorzec, `nil` w
+  /// przeciwnym razie.
+  public static func detectStuckBand(logLines: [Substring], minQueueEvents: Int = 200) -> String? {
+    var queueCounts: [String: Int] = [:]
+    var completed: Set<String> = []
+    for line in logLines {
+      guard let bandsRange = line.range(of: "bands/") else { continue }
+      let afterBands = line[bandsRange.upperBound...]
+      guard let colonRange = afterBands.range(of: ":") else { continue }
+      let band = String(afterBands[afterBands.startIndex..<colonRange.lowerBound])
+      guard !band.isEmpty else { continue }
+      if line.contains("queuing for upload") {
+        queueCounts[band, default: 0] += 1
+      } else if line.contains("Copied (") || line.contains("upload succeeded") {
+        completed.insert(band)
+      }
+    }
+    return queueCounts.first(where: { $0.value >= minQueueEvents && !completed.contains($0.key) })?
+      .key
+  }
+
+  /// Zwraca nazwe utknietego bandu (patrz `detectStuckBand`) dla danego
+  /// remote, jesli proces rclone dla niego zyje - `nil`, jesli nic nie zyje,
+  /// log nie istnieje, albo zaden band nie pasuje do wzorca zawieszenia.
+  public static func stuckBand(
+    remotePath: String, tailLines: Int = 3000, minQueueEvents: Int = 200
+  ) async -> String? {
+    let pattern = "rclone nfsmount \(remotePath) "
+    guard let pgrep = try? await ProcessRunner.run("/usr/bin/pgrep", ["-f", pattern]),
+      pgrep.succeeded
+    else {
+      return nil
+    }
+    guard let content = try? String(contentsOf: CMPaths.rcloneMountLogFile, encoding: .utf8)
+    else {
+      return nil
+    }
+    let recentLines = content.split(separator: "\n").suffix(tailLines)
+    return detectStuckBand(logLines: Array(recentLines), minQueueEvents: minQueueEvents)
   }
 
   /// Ubija istniejace procesy `rclone nfsmount` dla danego remote - najpierw
@@ -150,6 +215,14 @@ public enum MountHealth {
     guard parts.count >= 2 else { return false }
     let timestampString = "\(parts[0]) \(parts[1])"
     let formatter = DateFormatter()
+    // WAZNE: bez wymuszonego locale/strefy, parsowanie ciszej niepowodzenie
+    // (`date(from:) == nil`) na systemie z innymi ustawieniami regionalnymi
+    // powodowaloby, ze ta funkcja ZAWSZE zwracalaby `false` ("nie dogania
+    // kolejki") - a to jest dokladnie sytuacja, w ktorej watchdog NIE MOZE
+    // zabic procesu rclone (patrz komentarz nad funkcja), wiec cichy blad
+    // parsowania bylby najgorszym mozliwym defaultem.
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone.current
     formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
     guard let lastActivity = formatter.date(from: timestampString) else { return false }
     return Date().timeIntervalSince(lastActivity) < quietThreshold

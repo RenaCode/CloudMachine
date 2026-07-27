@@ -4,6 +4,19 @@ import Foundation
 /// oba to wlasciwie "plist-jak" tekst, nie prawdziwy JSON/plist, wiec
 /// najprosciej i najbezpieczniej parsowac linia po linii, tak jak robily to
 /// oryginalne `awk` w bash.
+/// Postep aktywnego backupu, wyciagniety z bloku `Progress = { ... }` w
+/// `tmutil status`. Wszystkie pola opcjonalne - macOS nie zawsze wypelnia
+/// caly blok (np. w fazach innych niz "Copying" czesc pol moze brakowac).
+public struct TimeMachineProgress: Equatable {
+  public var phase: String?
+  public var percent: Double?
+  public var bytes: Double?
+  public var totalBytes: Double?
+  public var files: Int?
+  public var totalFiles: Int?
+  public var timeRemainingSeconds: Double?
+}
+
 public enum TimeMachineStatus {
   public static func isRunning() async -> Bool {
     guard let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["status"]) else {
@@ -16,6 +29,40 @@ public enum TimeMachineStatus {
       }
     }
     return false
+  }
+
+  /// Parsuje `tmutil status` linia po linii (ten sam styl co reszta pliku) -
+  /// klucze wewnatrz bloku `Progress` (`bytes`, `files`, `TimeRemaining`...)
+  /// sa unikalne w calym wyjsciu, wiec nie trzeba osobno sledzic zagniezdzenia
+  /// nawiasow klamrowych. Zwraca `nil`, jesli aktualnie nic nie kopiuje.
+  public static func currentProgress() async -> TimeMachineProgress? {
+    guard let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["status"]) else {
+      return nil
+    }
+    var running = false
+    var progress = TimeMachineProgress()
+
+    for rawLine in result.stdout.split(separator: "\n") {
+      let line = rawLine.trimmingCharacters(in: .whitespaces)
+      guard let eqIndex = line.firstIndex(of: "=") else { continue }
+      let key = line[line.startIndex..<eqIndex].trimmingCharacters(in: .whitespaces)
+      var value = String(line[line.index(after: eqIndex)...]).trimmingCharacters(in: .whitespaces)
+      if value.hasSuffix(";") { value.removeLast() }
+      value = value.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+
+      switch key {
+      case "Running": running = (value == "1")
+      case "BackupPhase": progress.phase = value
+      case "Percent": progress.percent = Double(value)
+      case "bytes": progress.bytes = Double(value)
+      case "totalBytes": progress.totalBytes = Double(value)
+      case "files": progress.files = Int(value)
+      case "totalFiles": progress.totalFiles = Int(value)
+      case "TimeRemaining": progress.timeRemainingSeconds = Double(value)
+      default: break
+      }
+    }
+    return running ? progress : nil
   }
 
   /// Odpowiednik `tmutil destinationinfo | awk ... -v mp="$SP_MOUNT"` - szuka

@@ -88,6 +88,15 @@ public enum LaunchdInstaller {
     let stableBin = stableDir.appendingPathComponent("cloudmachine-agent")
     try? FileManager.default.removeItem(at: stableBin)
     guard (try? FileManager.default.copyItem(at: resolved, to: stableBin)) != nil else {
+      // WAZNE: NIE cichy fallback - jesli kopiowanie zawiedzie (dysk pelny,
+      // uprawnienia) PO tym jak stary stabilny plik juz usunieto powyzej,
+      // bez tego ostrzezenia launchd zostalby po cichu wskazany z powrotem
+      // na krucha sciezke deweloperska .build, ktora dokladnie ten mechanizm
+      // mial omijac (kolejny `swift build`/`git clean` moze ja podmienic
+      // albo skasowac spod dzialajacych juz watchdogow).
+      CMLogger.log(
+        "OSTRZEZENIE: nie udalo sie skopiowac cloudmachine-agent do stabilnej lokalizacji (\(stableBin.path)) - launchd bedzie wskazywal na \(resolved.path), ktora moze zniknac przy kolejnym build/clean."
+      )
       return resolved
     }
     try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stableBin.path)

@@ -95,49 +95,9 @@ struct MenuBarContentView: View {
 
       Divider()
 
-      // Główne przyciski operacyjne
-      VStack(spacing: 8) {
-        // Przycisk montowania/odmontowania
-        Button(action: {
-          Task {
-            if controller.status.mountState == .mounted {
-              await controller.unmountNow()
-            } else {
-              await controller.mountNow()
-            }
-          }
-        }) {
-          HStack {
-            let isMounted = controller.status.mountState == .mounted
-            Image(systemName: isMounted ? "eject.fill" : "play.fill")
-            Text(isMounted ? "Odmontuj dysk".localized : "Zamontuj dysk".localized)
-            Spacer()
-            if controller.status.mountState == .mounting {
-              ProgressView().scaleEffect(0.5)
-            }
-          }
-          .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .tint(controller.status.mountState == .mounted ? .red : .accentColor)
-        .disabled(controller.status.isBusy)
-
-        // Przycisk wyzwalania backupu
-        Button(action: {
-          Task { await controller.startBackupNow() }
-        }) {
-          HStack {
-            Image(systemName: "icloud.and.arrow.up.fill")
-            Text("Rozpocznij backup teraz".localized)
-            Spacer()
-          }
-          .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(controller.status.isBusy || controller.status.mountState != .mounted)
-      }
-
-      Divider()
+      // Montowanie i backup przenieione do pelnego Panelu sterowania (karta
+      // Status) - tam jest tez miejsce na info o postepie/predkosci, ktorego
+      // w waskim popupie paska menu nie dalo sie sensownie pokazac.
 
       // Menu sterowania / preferencji
       HStack(spacing: 8) {

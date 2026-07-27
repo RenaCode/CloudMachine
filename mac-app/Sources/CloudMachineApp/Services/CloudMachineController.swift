@@ -14,6 +14,10 @@ final class CloudMachineController: ObservableObject {
   private var lastRefreshAllAt: Date?
   private let refreshAllMinInterval: TimeInterval = 5
 
+  /// Ostatnia znana probka (bajty, znacznik czasu) do liczenia predkosci
+  /// transferu miedzy dwoma odswiezeniami - `tmutil` nie podaje tego sam.
+  private var lastProgressSample: (bytes: Double, date: Date)?
+
   init() {
     let (loaded, corruption) = ConfigStore.loadOrInitialize()
     config = loaded
@@ -270,6 +274,41 @@ final class CloudMachineController: ObservableObject {
     status.timeMachineState = registered ? .registered : .notRegistered
   }
 
+  /// Odswieza zywy postep aktualnie trwajacego backupu (procent, bajty,
+  /// pozostaly czas) - `nil`, gdy Time Machine akurat nic nie kopiuje.
+  /// Predkosc transferu liczymy sami z delty bajtow wzgledem poprzedniego
+  /// odswiezenia, bo `tmutil status` samo w sobie tego nie podaje.
+  func refreshBackupProgress() async {
+    guard let progress = await TimeMachineStatus.currentProgress() else {
+      status.backupProgress = nil
+      lastProgressSample = nil
+      return
+    }
+
+    var transferRateMBs: Double?
+    if let bytes = progress.bytes {
+      if let last = lastProgressSample {
+        let elapsed = Date().timeIntervalSince(last.date)
+        let deltaBytes = bytes - last.bytes
+        if elapsed > 1, deltaBytes >= 0 {
+          transferRateMBs = (deltaBytes / elapsed) / 1_048_576
+        }
+      }
+      lastProgressSample = (bytes: bytes, date: Date())
+    }
+
+    status.backupProgress = BackupProgressInfo(
+      phase: progress.phase,
+      percent: progress.percent,
+      bytesDone: progress.bytes,
+      bytesTotal: progress.totalBytes,
+      filesDone: progress.files,
+      filesTotal: progress.totalFiles,
+      timeRemainingSeconds: progress.timeRemainingSeconds,
+      transferRateMBs: transferRateMBs
+    )
+  }
+
   func registerTimeMachineDestination() async {
     guard !status.isBusy else { return }
     clearError()
@@ -482,35 +521,49 @@ final class CloudMachineController: ObservableObject {
     await refreshWatchdogInstalled()
   }
 
-  /// Dopisuje wpisy sudoers (NOPASSWD) dla wszystkich podkomend `tmutil`,
-  /// ktorych ta appka potrzebuje bez interaktywnego hasla: `delete` (dla
-  /// watchdoga limitu dzialajacego bez sesji GUI) oraz `setdestination` /
-  /// `startbackup` / `verifychecksums` / `removedestination` (dla
-  /// przyciskow w GUI - patrz komentarz przy `runTmutilPrivileged`,
-  /// dlaczego to NIE jest przez AppleScript). Nadpisuje istniejacy plik za
-  /// kazdym razem (idempotentne, bezpieczne tez gdy user ma juz starszy
-  /// wpis sprzed tej zmiany).
+  /// Dopisuje wpisy sudoers (NOPASSWD) dla podkomend `tmutil`, ktorych ta
+  /// appka potrzebuje bez interaktywnego hasla: `delete` (dla watchdoga
+  /// limitu dzialajacego bez sesji GUI) oraz `setdestination` / `startbackup`
+  /// / `verifychecksums` (dla przyciskow w GUI - patrz komentarz przy
+  /// `runTmutilPrivileged`, dlaczego to NIE jest przez AppleScript).
+  /// Nadpisuje istniejacy plik za kazdym razem (idempotentne, bezpieczne tez
+  /// gdy user ma juz starszy, szerszy wpis sprzed tej zmiany).
+  ///
+  /// Dwie zmiany bezpieczenstwa wzgledem poprzedniej wersji:
+  /// 1. `delete -p` i `setdestination -a` sa zawezone do sciezek pod
+  ///    `/Volumes/CloudMachine-Backup-*` (jedyne sciezki, z ktorymi appka
+  ///    faktycznie je wywoluje - patrz QuotaWatchdogService/TimeMachineSetup)
+  ///    zamiast golego `*`, ktory dawal NOPASSWD na kasowanie/wyrejestrowanie
+  ///    DOWOLNEGO celu Time Machine tego uzytkownika, nie tylko CloudMachine.
+  ///    `removedestination` w ogole zniknal z listy - appka go nigdzie nie
+  ///    wywoluje, wiec nie ma powodu przyznawac tej destrukcyjnej zdolnosci.
+  /// 2. Regula jest walidowana (`visudo -c -f`) na pliku TYMCZASOWYM przed
+  ///    aktywacja, nie na docelowym `/etc/sudoers.d/cloudmachine` po fakcie -
+  ///    przerwany zapis (np. brak miejsca) usuwa tylko plik tymczasowy,
+  ///    zamiast zostawic uszkodzony fragment w /etc/sudoers.d/, ktory
+  ///    blokowalby `sudo` w calym systemie do recznej naprawy.
   private func ensureTmutilSudoersRule() async throws {
     let user = NSUserName()
+    let cmBackupGlob = "/Volumes/CloudMachine-Backup-*"
     let rules = [
-      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil delete -p *",
-      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil setdestination -a *",
-      // Spacja po "startbackup" (nie goly "startbackup*") celowo wymaga co
-      // najmniej jednego argumentu odzielonego spacja (np. "--auto",
-      // "-d <ID>") - odrobine ciasniejsze niz plaski wildcard, bez utraty
-      // zadnego z realnie uzywanych wywolan.
+      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil delete -p \(cmBackupGlob)",
+      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil setdestination -a \(cmBackupGlob)",
+      // startbackup bierze "--auto" albo "-d <destination-UUID>", nie
+      // sciezke - nie da sie zawezic przez glob sciezki jak powyzej, ale
+      // samo uruchomienie backupu (w przeciwienstwie do delete/setdestination)
+      // nie kasuje ani nie przepina niczyich danych.
       "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil startbackup *",
-      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil verifychecksums *",
-      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil removedestination *",
+      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil verifychecksums \(cmBackupGlob)",
     ]
-    let writeCommands = rules.enumerated().map { index, line in
-      "echo '\(line)' \(index == 0 ? ">" : ">>") /etc/sudoers.d/cloudmachine"
-    }.joined(separator: " && ")
-    let command =
-      "\(writeCommands) && chmod 440 /etc/sudoers.d/cloudmachine && visudo -c -f /etc/sudoers.d/cloudmachine"
+    let tmpPath = "/etc/sudoers.d/.cloudmachine.tmp.$$"
+    let writeBody = rules.map { "echo '\($0)'" }.joined(separator: "; ")
+    let command = """
+      { \(writeBody); } > \(tmpPath) && chmod 440 \(tmpPath) && visudo -c -f \(tmpPath) \
+      && mv -f \(tmpPath) /etc/sudoers.d/cloudmachine || { rm -f \(tmpPath); exit 1; }
+      """
     _ = try await Shell.runPrivileged(command)
     appendLog(
-      "Skonfigurowano uprawnienia sudoers dla tmutil (setdestination/startbackup/verifychecksums/delete)."
+      "Skonfigurowano uprawnienia sudoers dla tmutil (setdestination/startbackup/verifychecksums/delete), zawezone do sciezek CloudMachine."
     )
   }
 
@@ -605,6 +658,7 @@ final class CloudMachineController: ObservableObject {
     status.remoteConfigured = await remoteConfigured()
     await refreshMountState()
     await refreshTimeMachineState()
+    await refreshBackupProgress()
     await refreshQuota()
     await refreshDriveInfo()
     await refreshWatchdogInstalled()
