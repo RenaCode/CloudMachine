@@ -55,7 +55,7 @@ To zalecany sposób instalacji dla większości użytkowników - Kreator w aplik
 > Przed uruchomieniem skryptów lub aplikacji dodaj aplikację **Terminal** (oraz **CloudMachine.app**, jeśli korzystasz z GUI) w panelu:
 > *Ustawienia systemowe -> Prywatność i bezpieczeństwo -> Dostęp do pełnego dysku*.
 >
-> Jeśli budujesz aplikację samodzielnie ze źródeł: domyślny podpis ad-hoc generuje nowy identyfikator przy **każdej** przebudowie, więc macOS cofa wcześniej przyznane Full Disk Access po każdym rebuildzie. Uruchom `mac-app/scripts/setup-local-signing-cert.sh` raz (tworzy lokalny, samopodpisany certyfikat code-signing), żeby tożsamość appki - a więc i przyznane uprawnienie - przetrwały kolejne przebudowy. `build-app.sh` użyje go automatycznie, jeśli istnieje.
+> Jeśli budujesz aplikację samodzielnie ze źródeł: domyślny podpis ad-hoc generuje nowy identyfikator przy **każdej** przebudowie, więc macOS cofa wcześniej przyznane Full Disk Access po każdym rebuildzie. Uruchom `cloudmachine-agent setup-signing-cert` raz (tworzy lokalny, samopodpisany certyfikat code-signing), żeby tożsamość appki - a więc i przyznane uprawnienie - przetrwały kolejne przebudowy. `build-app` użyje go automatycznie, jeśli istnieje.
 
 ---
 
@@ -213,18 +213,20 @@ cloudmachine-agent install-launchd
 
 ## 🛠️ Budowanie aplikacji ze źródeł
 
+Same narzędzia budowania (`build-app`, `make-dmg`, `setup-signing-cert`) są subkomendami `cloudmachine-agent` - cały projekt, łącznie z tooling'iem, jest teraz w Swift, bez żadnego bash. `swift run` sam skompiluje `cloudmachine-agent` (w trybie debug) przy pierwszym użyciu, jeśli jeszcze nie istnieje.
+
 ```bash
 cd mac-app
-./scripts/setup-local-signing-cert.sh   # RAZ - lokalny certyfikat, zeby FDA przetrwalo rebuildy (patrz sekcja FDA)
-./scripts/build-app.sh                  # Kompilacja wersji Release, budowanie paczki .app (GUI + cloudmachine-agent)
-./scripts/make-dmg.sh                   # Pakowanie build/CloudMachine.app do pliku build/CloudMachine-<wersja>.dmg
+swift run cloudmachine-agent setup-signing-cert   # RAZ - lokalny certyfikat, zeby FDA przetrwalo rebuildy (patrz sekcja FDA)
+swift run cloudmachine-agent build-app            # Kompilacja wersji Release, budowanie paczki .app (GUI + cloudmachine-agent)
+swift run cloudmachine-agent make-dmg             # Pakowanie build/CloudMachine.app do pliku build/CloudMachine-<wersja>.dmg
 ```
 
-`build-app.sh` kompiluje dwie binarki z tego samego pakietu Swift Package (`mac-app/`): `CloudMachine.app` (GUI) i `cloudmachine-agent` (CLI, wołany przez launchd i z linii poleceń) - obie dzielą tę samą logikę mount/watchdog/setup (biblioteka `CloudMachineCore`), więc CLI i GUI zawsze zachowują się identycznie. Do budowania samego CLI bez pakowania `.app`: `cd mac-app && swift build -c release --product cloudmachine-agent`.
+`build-app` kompiluje dwie binarki z tego samego pakietu Swift Package (`mac-app/`): `CloudMachine.app` (GUI) i `cloudmachine-agent` (CLI, wołany przez launchd i z linii poleceń) - obie dzielą tę samą logikę mount/watchdog/setup (biblioteka `CloudMachineCore`), więc CLI i GUI zawsze zachowują się identycznie. Do budowania samego CLI bez pakowania `.app`: `cd mac-app && swift build -c release --product cloudmachine-agent`.
 
 ### CI i wydania
 
-- Każdy push/PR uruchamia [CI](.github/workflows/ci.yml): `swift build` i `swift test` dla całego pakietu (GUI, CLI, wspólna biblioteka logiki).
+- Każdy push/PR uruchamia [CI](.github/workflows/ci.yml): `swift format lint`, `swift build` i `swift test` dla całego pakietu (GUI, CLI, wspólna biblioteka logiki) - zero bash do lintowania, cały projekt jest w Swift.
 - Push tagu w formacie `vX.Y.Z` uruchamia [Release DMG](.github/workflows/release.yml): buduje appkę (podpis ad-hoc, bez konta Apple Developer) i publikuje `CloudMachine-<wersja>.dmg` jako załącznik GitHub Release.
 
 ---

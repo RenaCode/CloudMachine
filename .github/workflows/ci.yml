@@ -11,33 +11,12 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - name: swift format lint
+        working-directory: mac-app
+        run: swift format lint --strict --recursive Sources Tests
       - name: swift build
         working-directory: mac-app
         run: swift build
       - name: swift test
         working-directory: mac-app
         run: swift test
-
-  lint-scripts:
-    # Tylko mac-app/scripts/*.sh (build tooling: build-app.sh, make-dmg.sh,
-    # setup-local-signing-cert.sh) - CALA logika automatyzacji (mount/watchdogi/
-    # setup) zostala przeniesiona z bash do Swift (CloudMachineCore/cloudmachine-agent),
-    # wiec repo-rootowy scripts/*.sh juz nie istnieje.
-    name: Shell script checks (build tooling)
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - name: Syntax check (bash -n)
-        run: |
-          set -euo pipefail
-          status=0
-          for f in mac-app/scripts/*.sh; do
-            echo "== $f =="
-            bash -n "$f" || status=1
-          done
-          exit $status
-      - name: shellcheck
-        run: |
-          set -euo pipefail
-          command -v shellcheck >/dev/null 2>&1 || brew install shellcheck
-          shellcheck --severity=error --shell=bash mac-app/scripts/*.sh

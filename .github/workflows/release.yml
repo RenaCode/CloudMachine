@@ -7,7 +7,7 @@ name: Release DMG
 #
 # TODO (po zalozeniu konta Apple Developer): dodac krok `codesign` z realnym
 # Developer ID certyfikatem (zaimportowanym z sekretow repo) i `notarytool`
-# przed `make-dmg.sh`, zeby usunac to ostrzezenie.
+# przed `make-dmg`, zeby usunac to ostrzezenie.
 
 on:
   push:
@@ -27,11 +27,11 @@ jobs:
 
       - name: Build .app (ad-hoc signed)
         working-directory: mac-app
-        run: ./scripts/build-app.sh
+        run: swift run cloudmachine-agent build-app
 
       - name: Package .dmg
         working-directory: mac-app
-        run: ./scripts/make-dmg.sh
+        run: swift run cloudmachine-agent make-dmg
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
