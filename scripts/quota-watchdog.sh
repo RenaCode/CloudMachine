@@ -20,11 +20,33 @@ if ! cm_acquire_lock "quota-watchdog"; then
   exit 0
 fi
 
+# Jedyny watchdog dzialajacy bezwarunkowo (niezaleznie od stanu mountu), wiec
+# to najlepsze miejsce na okresowe pilnowanie rozmiaru wspolnego
+# cloudmachine.log - w przeciwienstwie do rclone-mount.log (rotowanego w
+# mount-watchdog.sh) ten plik rosnie nawet, gdy dysk jest odmontowany. Prog
+# nizszy niz dla rclone-mount.log (10 MB vs 200 MB), bo cm_log() pisze duzo
+# mniej danych i plik jest tez czytany przez GUI (zakladka Logi, karta
+# "Automatyzacja w tle") - trzymamy go malym i szybkim do przeskanowania.
+cm_rotate_log_if_large "$CM_LOG_DIR/cloudmachine.log" $((10 * 1024 * 1024)) 3000 || true
+
 MACHINE_KEY="$(cm_machine_key)"
 LOCAL_DIR="$(cm_local_machine_mount_dir "$MACHINE_KEY")"
 SP_MOUNT="$(cm_sparsebundle_mount_dir "$MACHINE_KEY")"
 REMOTE_PATH="$(cm_remote_path_for "$MACHINE_KEY")"
 LIMIT_GB="$(cm_machine_limit_gb "$MACHINE_KEY")"
+
+# Zabezpieczenie przed literowka w machines.json (recznie edytowanym pliku -
+# GUI ma wlasna walidacje >= 100GB w MachinesConfigView, ale to nie chroni
+# instalacji CLI-only). Limit <=0 sprawiłby, ze prog przycinania ponizej tez
+# jest <=0 - watchdog uznalby, ze ZAWSZE jest nad limitem i zaczalby co 6h
+# aktywnie kasowac prawdziwe backupy Time Machine az do ostatniego. To
+# najprawdopodobniej pomylka, nie zamierzone dzialanie - przerywamy zamiast
+# ryzykowac utrate danych.
+MIN_SANE_LIMIT_GB=10
+if [ "$LIMIT_GB" -lt "$MIN_SANE_LIMIT_GB" ] 2>/dev/null; then
+  cm_log "BLAD: limit skonfigurowany dla '${MACHINE_KEY}' (${LIMIT_GB} GB) jest podejrzanie niski (<${MIN_SANE_LIMIT_GB} GB) - to prawie na pewno pomylka w machines.json, nie zamierzona wartosc. Przerywam, ZEBY NIE SKASOWAC wszystkich backupow. Popraw limit_gb recznie."
+  exit 1
+fi
 
 # Sprawdzaj przy 90% limitu, zeby zdazyc przyciac zanim TM sam zablokuje zapis.
 TRIGGER_GB=$(awk -v l="$LIMIT_GB" 'BEGIN { printf "%d", l * 0.9 }')

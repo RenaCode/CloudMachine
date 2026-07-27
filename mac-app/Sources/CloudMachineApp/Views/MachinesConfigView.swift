@@ -3,6 +3,18 @@ import SwiftUI
 struct MachinesConfigView: View {
     @EnvironmentObject private var controller: CloudMachineController
 
+    /// Dolna granica limitu maszyny. `Slider` ponizej byl juz chroniony przez
+    /// swoj `in:` (100...), ale sasiednie pole tekstowe pisalo BEZPOSREDNIO do
+    /// `machine.limitGB` bez zadnej walidacji - literowka (np. przypadkowe
+    /// "0" przy poprawianiu liczby) ustawialaby limit na 0 lub ujemny.
+    /// scripts/quota-watchdog.sh liczy prog przycinania jako `limit * 0.9` i
+    /// kasuje najstarsze backupy Time Machine az do zejscia ponizej niego -
+    /// przy limicie <=0 uznalby, ze ZAWSZE jest nad limitem i zaczal aktywnie
+    /// kasowac prawdziwe kopie zapasowe co 6h, az do ostatniej. To nie jest
+    /// kosmetyczny bug w UI - to bezposrednia sciezka do utraty realnych
+    /// backupow, wiec oba pola (Slider i TextField) musza dzielic ta sama dolna granice.
+    static let minimumMachineLimitGB = 100
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -150,12 +162,15 @@ struct MachinesConfigView: View {
                                             get: { Double(machineBinding.wrappedValue.limitGB) },
                                             set: { machineBinding.wrappedValue.limitGB = Int($0) }
                                         ),
-                                        in: 100...sliderMax(for: machineBinding.wrappedValue),
+                                        in: Double(Self.minimumMachineLimitGB)...sliderMax(for: machineBinding.wrappedValue),
                                         step: 50
                                     )
-                                    
+
                                     HStack(spacing: 4) {
-                                        TextField("Limit", value: machineBinding.limitGB, formatter: NumberFormatter())
+                                        TextField("Limit", value: Binding(
+                                            get: { machineBinding.wrappedValue.limitGB },
+                                            set: { machineBinding.wrappedValue.limitGB = max($0, Self.minimumMachineLimitGB) }
+                                        ), formatter: NumberFormatter())
                                             .textFieldStyle(.roundedBorder)
                                             .frame(width: 80)
                                             .multilineTextAlignment(.trailing)

@@ -6,9 +6,13 @@ struct SetupWizardView: View {
     @State private var displayName: String = ""
     @State private var limitGBText: String = "1000"
     
-    // Statusy walidacji dla kroku 3
+    // Statusy walidacji dla kroku 3. Dolna granica taka sama jak w
+    // MachinesConfigView (MachinesConfigView.minimumMachineLimitGB) - `> 0`
+    // samo w sobie nie wystarczy, bo bardzo mala wartosc (np. "1" GB) i tak
+    // ustawia scripts/quota-watchdog.sh na tryb ciaglego, agresywnego
+    // przycinania backupow niemal do zera.
     private var isLimitValid: Bool {
-        if let limit = Int(limitGBText), limit > 0 {
+        if let limit = Int(limitGBText), limit >= MachinesConfigView.minimumMachineLimitGB {
             return true
         }
         return false
@@ -115,7 +119,7 @@ struct SetupWizardView: View {
                         }
                         
                         if !limitGBText.isEmpty && !isLimitValid {
-                            Text("Wprowadź prawidłową liczbę większą niż 0")
+                            Text("Wprowadź liczbę co najmniej \(MachinesConfigView.minimumMachineLimitGB) GB")
                                 .font(.caption2)
                                 .foregroundStyle(.red)
                         }
