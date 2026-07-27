@@ -4,6 +4,17 @@ struct DashboardView: View {
   @EnvironmentObject private var controller: CloudMachineController
   @State private var selectedTab: Tab = .status
 
+  /// W przeciwienstwie do `MenuBarContentView` (ktorego `.task` odpala sie
+  /// na nowo za KAZDYM razem, gdy uzytkownik otwiera popup paska menu - patrz
+  /// komentarz przy `refreshAllMinInterval` w `CloudMachineController`), to
+  /// okno raz otwarte zyje dlugo i NIGDY samo z siebie nie odswiezaloby
+  /// statusu ponownie - `.task` ponizej odpala sie tylko RAZ, przy pierwszym
+  /// pojawieniu sie okna. Bez tego timera stan (np. "Montowanie...") moze
+  /// pozostac zamrozony na godziny w oknie otwartym akurat w trakcie
+  /// przejsciowego problemu, mimo ze system pod spodem dawno juz wrocil do
+  /// zdrowia - zaobserwowane realnie na zywo.
+  private let refreshTimer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
+
   enum Tab: Hashable {
     case status
     case wizard
@@ -67,6 +78,9 @@ struct DashboardView: View {
     }
     .task {
       await controller.refreshAll()
+    }
+    .onReceive(refreshTimer) { _ in
+      Task { await controller.refreshAll() }
     }
   }
 
