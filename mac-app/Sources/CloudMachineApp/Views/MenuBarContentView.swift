@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import CloudMachineCore
 
 struct MenuBarContentView: View {
   @EnvironmentObject private var controller: CloudMachineController
@@ -56,7 +57,7 @@ struct MenuBarContentView: View {
       if controller.status.quota.limitGB > 0 {
         VStack(alignment: .leading, spacing: 6) {
           HStack {
-            Text("Limit przestrzeni")
+            Text("Limit przestrzeni".localized)
               .font(.caption)
               .foregroundStyle(.secondary)
             Spacer()
@@ -109,7 +110,7 @@ struct MenuBarContentView: View {
           HStack {
             let isMounted = controller.status.mountState == .mounted
             Image(systemName: isMounted ? "eject.fill" : "play.fill")
-            Text(isMounted ? "Odmontuj dysk Google" : "Zamontuj dysk Google")
+            Text(isMounted ? "Odmontuj dysk".localized : "Zamontuj dysk".localized)
             Spacer()
             if controller.status.mountState == .mounting {
               ProgressView().scaleEffect(0.5)
@@ -127,7 +128,7 @@ struct MenuBarContentView: View {
         }) {
           HStack {
             Image(systemName: "icloud.and.arrow.up.fill")
-            Text("Rozpocznij backup teraz")
+            Text("Rozpocznij backup teraz".localized)
             Spacer()
           }
           .frame(maxWidth: .infinity)
@@ -144,7 +145,7 @@ struct MenuBarContentView: View {
           openWindow(id: "dashboard")
           NSApp.activate(ignoringOtherApps: true)
         }) {
-          Label("Panel sterowania", systemImage: "gauge")
+          Label("Panel sterowania".localized, systemImage: "gauge")
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.bordered)
@@ -153,7 +154,7 @@ struct MenuBarContentView: View {
         Button(action: {
           NSApp.terminate(nil)
         }) {
-          Label("Zakończ", systemImage: "power")
+          Label("Zakończ".localized, systemImage: "power")
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -180,11 +181,11 @@ struct MenuBarContentView: View {
 
   private var mountLabel: String {
     switch controller.status.mountState {
-    case .mounted: return "Połączono"
-    case .mounting: return "Łączenie..."
-    case .notMounted: return "Rozłączono"
-    case .failed: return "Błąd"
-    default: return "Nieznany"
+    case .mounted: return "Połączono".localized
+    case .mounting: return "Łączenie...".localized
+    case .notMounted: return "Rozłączono".localized
+    case .failed: return "Błąd".localized
+    default: return "Nieznany".localized
     }
   }
 }

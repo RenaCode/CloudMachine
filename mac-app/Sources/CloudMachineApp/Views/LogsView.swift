@@ -16,6 +16,10 @@ struct LogsView: View {
     case transfers = "Transfery rclone"
 
     var id: String { self.rawValue }
+
+    var localizedName: String {
+      return self.rawValue.localized
+    }
   }
 
   var body: some View {
@@ -26,14 +30,14 @@ struct LogsView: View {
         // Pole wyszukiwania
         Image(systemName: "magnifyingglass")
           .foregroundStyle(.secondary)
-        TextField("Szukaj w logach...", text: $searchText)
+        TextField("Szukaj w logach...".localized, text: $searchText)
           .textFieldStyle(.roundedBorder)
           .frame(maxWidth: 240)
 
         // Filtry typu logów
-        Picker("Filtr:", selection: $selectedFilter) {
+        Picker("Filtr:".localized, selection: $selectedFilter) {
           ForEach(LogFilter.allCases) { filter in
-            Text(filter.rawValue).tag(filter)
+            Text(filter.localizedName).tag(filter)
           }
         }
         .pickerStyle(.segmented)
@@ -42,20 +46,20 @@ struct LogsView: View {
         Spacer()
 
         // Opcje kontrolne
-        Toggle("Autoprzewijanie", isOn: $autoScroll)
+        Toggle("Autoprzewijanie".localized, isOn: $autoScroll)
           .toggleStyle(.checkbox)
 
         Button(action: {
           controller.refreshLogTail()
         }) {
-          Label("Odśwież", systemImage: "arrow.clockwise")
+          Label("Odśwież".localized, systemImage: "arrow.clockwise")
         }
         .buttonStyle(.bordered)
 
         Button(action: {
           NSWorkspace.shared.open(CMPaths.logDir)
         }) {
-          Label("Folder logów", systemImage: "folder")
+          Label("Folder logów".localized, systemImage: "folder")
         }
         .buttonStyle(.bordered)
       }
@@ -69,7 +73,7 @@ struct LogsView: View {
             let filteredLines = filterLogLines()
 
             if filteredLines.isEmpty {
-              Text("Brak wpisów pasujących do wybranych filtrów.")
+              Text("Brak wpisów pasujących do wybranych filtrów.".localized)
                 .italic()
                 .foregroundStyle(.secondary)
                 .padding(16)
