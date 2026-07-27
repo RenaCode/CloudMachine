@@ -148,6 +148,31 @@ public enum MountWatchdogService {
     // moglibysmy trafic w sam srodek juz trwajacego, zdrowego montowania.
     if nfsListed {
       if await MountHealth.isMounted(spMount.path) {
+        // WAZNE: jesli Time Machine akurat aktywnie pisze na ten wolumin,
+        // `hdiutil detach -force` w trakcie zapisu potrafi uszkodzic
+        // metadane sparsebundle - wtedy przy nastepnym mouncie wyglada to
+        // jak "zniknal z chmury" i cala historia backupu zaczyna sie od
+        // zera. Dajemy Time Machine szanse grzecznie sie zatrzymac, tak
+        // jak robi to rowniez `UnmountService` przy recznym odmontowaniu.
+        if await TimeMachineStatus.isRunning() {
+          CMLogger.log(
+            "[mount-watchdog] Time Machine aktywnie kopiuje - zatrzymuje backup przed wymuszonym odmontowaniem, zeby nie uszkodzic sparsebundle."
+          )
+          _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 20)
+          var waited = 0
+          while waited < 30 {
+            if !(await TimeMachineStatus.isRunning()) { break }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            waited += 2
+          }
+          if await TimeMachineStatus.isRunning() {
+            CMLogger.log(
+              "[mount-watchdog] OSTRZEZENIE: Time Machine nie zatrzymalo sie po \(waited)s - odmontowuje mimo to, ryzyko uszkodzenia sparsebundle."
+            )
+          } else {
+            CMLogger.log("[mount-watchdog] Backup zatrzymany po \(waited)s.")
+          }
+        }
         _ = try? await ProcessRunner.run("/usr/bin/hdiutil", ["detach", "-force", spMount.path])
         await MountHealth.forceUnmount(spMount.path, timeoutS: 10)
       }
