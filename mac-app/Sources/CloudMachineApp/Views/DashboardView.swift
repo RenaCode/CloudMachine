@@ -1,4 +1,5 @@
 import SwiftUI
+import CloudMachineCore
 
 struct DashboardView: View {
   @EnvironmentObject private var controller: CloudMachineController
@@ -25,18 +26,18 @@ struct DashboardView: View {
   var body: some View {
     NavigationSplitView {
       List(selection: $selectedTab) {
-        Section("Narzędzia") {
+        Section("Narzędzia".localized) {
           NavigationLink(value: Tab.status) {
-            Label("Status", systemImage: "gauge.with.needle")
+            Label("Status".localized, systemImage: "gauge.with.needle")
           }
           NavigationLink(value: Tab.wizard) {
-            Label("Kreator", systemImage: "wand.and.stars")
+            Label("Kreator".localized, systemImage: "wand.and.stars")
           }
           NavigationLink(value: Tab.config) {
-            Label("Maszyny i limity", systemImage: "macbook.and.iphone")
+            Label("Maszyny i limity".localized, systemImage: "macbook.and.iphone")
           }
           NavigationLink(value: Tab.logs) {
-            Label("Logi systemowe", systemImage: "doc.text.magnifyingglass")
+            Label("Logi systemowe".localized, systemImage: "doc.text.magnifyingglass")
           }
         }
       }
@@ -86,10 +87,10 @@ struct DashboardView: View {
 
   private func navigationTitle(for tab: Tab) -> String {
     switch tab {
-    case .status: return "Stan systemu"
-    case .wizard: return "Kreator konfiguracji"
-    case .config: return "Zarządzanie maszynami i limitami"
-    case .logs: return "Logi konsoli"
+    case .status: return "Stan systemu".localized
+    case .wizard: return "Kreator konfiguracji".localized
+    case .config: return "Zarządzanie maszynami i limitami".localized
+    case .logs: return "Logi konsoli".localized
     }
   }
 }
@@ -141,17 +142,17 @@ struct SidebarStatusFooter: View {
 
   private var statusText: String {
     if controller.status.errorMessage != nil {
-      return "Problem z konfiguracją"
+      return "Problem z konfiguracją".localized
     }
     switch controller.status.mountState {
     case .mounted:
-      return "Połączono z chmurą"
+      return "Połączono z chmurą".localized
     case .mounting:
-      return "Montowanie..."
+      return "Montowanie...".localized
     case .failed:
-      return "Błąd montowania"
+      return "Błąd montowania".localized
     default:
-      return "Brak połączenia"
+      return "Brak połączenia".localized
     }
   }
 
@@ -161,13 +162,13 @@ struct SidebarStatusFooter: View {
     }
     switch controller.status.mountState {
     case .mounted:
-      return "NFS wolumin gotowy"
+      return "NFS wolumin gotowy".localized
     case .mounting:
-      return "Nawiązywanie połączenia..."
+      return "Nawiązywanie połączenia...".localized
     case .failed(let err):
       return err
     default:
-      return "Dysk nie jest zamontowany"
+      return "Dysk nie jest zamontowany".localized
     }
   }
 }
