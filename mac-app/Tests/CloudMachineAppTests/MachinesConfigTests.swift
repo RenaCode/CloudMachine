@@ -128,4 +128,28 @@ final class MachinesConfigTests: XCTestCase {
       remoteRootFolder: "CloudMachine", machines: [])
     XCTAssertNil(config.limitGB(forMachineKey: "nieznana-maszyna"))
   }
+
+  // MARK: - config/machines.example.json
+
+  /// Dekoduje PRAWDZIWY plik z repo (nie fixture w tescie) - regresja tutaj
+  /// oznaczaloby, ze wlasny przykladowy config projektu przestal sie parsowac
+  /// (np. po zmianie schematu bez zaktualizowania pliku). Sprawdza tez, ze
+  /// dodatkowe, nierozpoznane pole `_comment` jest bezpiecznie ignorowane
+  /// przez niestandardowy `init(from:)`.
+  func testDecode_realExampleConfigFileParsesCorrectly() throws {
+    let exampleConfigPath = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()  // CloudMachineAppTests
+      .deletingLastPathComponent()  // Tests
+      .deletingLastPathComponent()  // mac-app
+      .deletingLastPathComponent()  // CloudMachine (repo root)
+      .appendingPathComponent("config/machines.example.json")
+
+    let data = try Data(contentsOf: exampleConfigPath)
+    let config = try JSONDecoder().decode(MachinesConfig.self, from: data)
+
+    XCTAssertEqual(config.remoteName, "gdrive-cloudmachine")
+    XCTAssertEqual(config.remoteRootFolder, "CloudMachine")
+    XCTAssertEqual(config.machines.count, 2)
+    XCTAssertEqual(config.machines.map(\.key).sorted(), ["imac-domowy", "macbook-pro-marcin"])
+  }
 }
