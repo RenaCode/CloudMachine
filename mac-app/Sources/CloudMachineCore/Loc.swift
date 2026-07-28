@@ -66,8 +66,6 @@ public enum Loc {
       "Brak wpisów pasujących do wybranych filtrów.": "No entries matching selected filters.",
       // MenuBarContentView
       "Pokaż główne okno": "Show Main Window",
-      "Zamontuj dysk": "Mount Disk",
-      "Odmontuj dysk": "Unmount Disk",
       "Zakończ CloudMachine": "Quit CloudMachine",
       "Rozpocznij backup teraz": "Start Backup Now",
       "Panel sterowania": "Control Panel",

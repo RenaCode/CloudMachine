@@ -78,12 +78,12 @@ struct SetupWizardView: View {
         }
 
         // KROK 3: Utworzenie lokalnego woluminu i rejestracja w Time Machine
-        let step4Done =
+        let step3Done =
           controller.status.localVolume.exists && controller.status.timeMachineState == .registered
         WizardStepCard(
           number: 3,
           title: "Utwórz lokalny dysk backupu i zarejestruj w Time Machine",
-          status: step4Done ? .completed : .active,
+          status: step3Done ? .completed : .active,
           description:
             "Tworzy prawdziwy lokalny wolumin APFS (nie sieciowy) jako cel Time Machine - to jest w 100% natywny, w pełni trwały backup. Rozmiar to sufit, nie gwarancja: faktyczna dostępna przestrzeń zależy od realnie wolnego miejsca na dysku. Chcesz wykluczyć foldery z backupu? Zrób to w Ustawieniach systemowych -> Time Machine -> Opcje."
         ) {
@@ -104,12 +104,12 @@ struct SetupWizardView: View {
                 Task { await controller.createLocalVolumeAndRegister(quotaGB: quota) }
               }) {
                 Label(
-                  step4Done ? "Gotowe" : "Utwórz i zarejestruj",
-                  systemImage: step4Done ? "checkmark.circle.fill" : "externaldrive.badge.plus"
+                  step3Done ? "Gotowe" : "Utwórz i zarejestruj",
+                  systemImage: step3Done ? "checkmark.circle.fill" : "externaldrive.badge.plus"
                 )
               }
               .buttonStyle(.borderedProminent)
-              .disabled(!isQuotaValid || step4Done)
+              .disabled(!isQuotaValid || step3Done)
             }
 
             if !quotaGBText.isEmpty && !isQuotaValid {

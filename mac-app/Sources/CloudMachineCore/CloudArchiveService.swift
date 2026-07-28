@@ -10,8 +10,22 @@ import Foundation
 /// ukonczone backupy (te w trakcie kopiowania widnieja jako `.inProgress` i
 /// nie pojawiaja sie na tej liscie), a dodatkowo NIE archiwizujemy, gdy Time
 /// Machine aktywnie pisze (`TimeMachineStatus.isRunning()`) - te dwa
-/// zabezpieczenia razem gwarantuja, ze kopiowany katalog backupu jest w
-/// pelni statyczny podczas kopiowania przez rclone.
+/// zabezpieczenia razem gwarantuja, ze zawartosc backupu jest w pelni
+/// statyczna podczas kopiowania przez rclone.
+///
+/// WAZNE - kazdy lokalny backup na wolumenie APFS jest w rzeczywistosci
+/// snapshotem APFS (`com.apple.TimeMachine.<nazwa>.backup`), NIE zwyklym,
+/// zawsze dostepnym katalogiem - potwierdzone na zywo: `tmutil listbackups`
+/// zwraca sciezke pod `/Volumes/.timemachine/<UUID>/...`, ale zwykle
+/// `stat`/`rclone` na tej sciezce dostaja "No such file or directory", bo nic
+/// nie zamontowalo tego konkretnego snapshotu do globalnej przestrzeni nazw
+/// systemu plikow (`diskutil apfs listSnapshots` pokazuje snapshoty, ale
+/// `mount` nie pokazuje ich jako zamontowane, dopoki cos jawnie tego nie
+/// zrobi - Finder/Migration Assistant robia to pod maska, generyczne
+/// narzedzia jak `rclone` - nie). Dlatego kazda archiwizacja NAJPIERW montuje
+/// wlasciwy snapshot tymczasowo (`mount_apfs -s`, bez potrzeby sudo - to
+/// wolumin wlasny uzytkownika), kopiuje z tego mountu, i odmontowuje zaraz
+/// po (patrz `mountSnapshot`/`unmountSnapshot`).
 public enum CloudArchiveService {
   public struct ArchiveStatus: Equatable {
     public var lastArchivedBackup: String?
@@ -51,6 +65,50 @@ public enum CloudArchiveService {
     guard mbps > 0 else { return [] }
     let megabytesPerSecond = Double(mbps) / 8
     return ["--bwlimit", String(format: "%.2fM", megabytesPerSecond)]
+  }
+
+  /// Katalog, pod ktorym tymczasowo montujemy dokladnie JEDEN snapshot na
+  /// raz do kopiowania - staly, nie unikalny per-proba, bo `archivePending`
+  /// i tak trzyma wylaczna blokade `withCMLock` przez caly czas dzialania
+  /// (patrz nizej), wiec nie ma ryzyka dwoch rownoleglych montowan tutaj.
+  private static var snapshotMountDir: URL {
+    CMPaths.appSupportDir.appendingPathComponent("archive-snapshot-mount")
+  }
+
+  /// Montuje snapshot APFS danego backupu (`com.apple.TimeMachine.<name>`)
+  /// pod `snapshotMountDir`, zeby jego zawartosc byla widoczna dla zwyklych
+  /// operacji na plikach (patrz uzasadnienie w komentarzu na gorze pliku).
+  /// Zwraca sciezke do faktycznej zawartosci backupu wewnatrz mountu, albo
+  /// `nil` przy niepowodzeniu (np. snapshot juz zostal usuniety przez
+  /// automatyczne przycinanie Time Machine miedzy `tmutil listbackups` a tym
+  /// wywolaniem - lokalny wolumin moze byc pod duza presja miejsca).
+  private static func mountSnapshot(backupName: String, volumeMountPoint: String) async
+    -> String?
+  {
+    let mountDir = snapshotMountDir
+    try? FileManager.default.removeItem(at: mountDir)
+    guard
+      (try? FileManager.default.createDirectory(
+        at: mountDir, withIntermediateDirectories: true)) != nil
+    else { return nil }
+
+    let snapshotName = "com.apple.TimeMachine.\(backupName)"
+    let result = try? await ProcessRunner.run(
+      "/sbin/mount_apfs", ["-s", snapshotName, volumeMountPoint, mountDir.path], timeout: 30)
+    guard result?.succeeded == true else {
+      try? FileManager.default.removeItem(at: mountDir)
+      return nil
+    }
+    return mountDir.appendingPathComponent(backupName).path
+  }
+
+  /// Odmontowuje i sprzata katalog zamontowany przez `mountSnapshot` -
+  /// wywolywane BEZWARUNKOWO po probie kopiowania (sukces czy porazka), zeby
+  /// nie zostawic osieroconego mountu snapshotu na kolejny przebieg.
+  private static func unmountSnapshot() async {
+    let mountDir = snapshotMountDir
+    _ = try? await ProcessRunner.run("/usr/sbin/diskutil", ["unmount", mountDir.path], timeout: 30)
+    try? FileManager.default.removeItem(at: mountDir)
   }
 
   /// Pelne sciezki lokalnych backupow (posortowane od najstarszego przez
@@ -138,14 +196,36 @@ public enum CloudArchiveService {
     let remotePath = config.remotePath(forMachineKey: machineKey)
     var copiedCount = 0
     let bwLimitArgs = bwLimitArgs(forMbps: config.bwLimitMbps)
+    // Najnowszy JUZ zarchiwizowany backup (z tego albo poprzedniego przebiegu)
+    // - przekazywany do rclone jako `--copy-dest`, zeby pliki niezmienione
+    // wzgledem niego trafialy do nowego folderu przez SZYBKA kopie po stronie
+    // Google Drive (bez ponownego wysylania tych samych bajtow z Maca).
+    // Bez tego kazdy kolejny backup przesylalby caly swoj rozmiar OD NOWA,
+    // mimo ze wiekszosc plikow jest identyczna z poprzednim (lokalnie
+    // zaoszczedzone dzieki hardlinkom, ktorych `rclone` po prostu nie widzi).
+    var previousArchivedName = archived.sorted().last
 
     for backupPath in backups {
       let name = URL(fileURLWithPath: backupPath).lastPathComponent
       guard !archived.contains(name) else { continue }
 
+      guard let sourcePath = await mountSnapshot(backupName: name, volumeMountPoint: mountPoint)
+      else {
+        return CMActionResult(
+          succeeded: false,
+          message:
+            "Nie udalo sie zamontowac snapshotu \(name) do archiwizacji (mogl zostac usuniety przez Time Machine w miedzyczasie) - przerywam, zeby nie zerwac kolejnosci historii."
+        )
+      }
+
+      var copyArgs = ["copy", sourcePath, "\(remotePath)/\(name)"] + bwLimitArgs
+      if let previousArchivedName {
+        copyArgs += ["--copy-dest", "\(remotePath)/\(previousArchivedName)"]
+      }
       CMLogger.log("[cloud-archive] Kopiuje \(name) do \(remotePath)...")
-      let result = try? await ProcessRunner.runRclone(
-        ["copy", backupPath, "\(remotePath)/\(name)"] + bwLimitArgs, timeout: 6 * 3600)
+      let result = try? await ProcessRunner.runRclone(copyArgs, timeout: 6 * 3600)
+      await unmountSnapshot()
+
       guard result?.succeeded == true else {
         let detail = result?.stderr.isEmpty == false ? result!.stderr : (result?.stdout ?? "")
         return CMActionResult(
@@ -156,6 +236,7 @@ public enum CloudArchiveService {
       }
       archived.insert(name)
       saveArchivedNames(archived)
+      previousArchivedName = name
       copiedCount += 1
       CMLogger.log("[cloud-archive] OK: \(name) zarchiwizowany.")
     }
