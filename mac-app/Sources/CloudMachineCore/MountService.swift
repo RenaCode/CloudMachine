@@ -252,10 +252,11 @@ public enum MountService {
       let entries = try? FileManager.default.contentsOfDirectory(
         at: parent, includingPropertiesForKeys: nil)
     else { return }
+    // Sortujemy malejaco po nazwie - najnowszy (najwiekszy epoch) pierwszy.
     let stuckDirs =
       entries
       .filter { $0.lastPathComponent.hasPrefix(prefix) }
-      .sorted { $0.lastPathComponent > $1.lastPathComponent }  // najnowszy (najwiekszy epoch) pierwszy
+      .sorted { $0.lastPathComponent > $1.lastPathComponent }
     guard stuckDirs.count > keepNewest else { return }
     for old in stuckDirs.dropFirst(keepNewest) {
       try? FileManager.default.removeItem(at: old)

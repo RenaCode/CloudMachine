@@ -430,9 +430,12 @@ struct BackupProgressCard: View {
 
         HStack {
           if let filesDone = progress.filesDone, let filesTotal = progress.filesTotal {
-            Label("\(filesDone.formatted()) / \(filesTotal.formatted()) plików", systemImage: "doc.on.doc")
-              .font(.caption2)
-              .foregroundStyle(.secondary)
+            Label(
+              "\(filesDone.formatted()) / \(filesTotal.formatted()) plików",
+              systemImage: "doc.on.doc"
+            )
+            .font(.caption2)
+            .foregroundStyle(.secondary)
           }
           Spacer()
           if let remaining = progress.timeRemainingSeconds, remaining > 0 {

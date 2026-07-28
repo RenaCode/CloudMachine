@@ -11,7 +11,8 @@ final class MountHealthTests: XCTestCase {
   func testIsMountedIn_exactPath_matches() {
     XCTAssertTrue(
       MountHealth.isMountedIn(sampleMountOutput, path: "/Users/test/CloudMachine-Mount/imac"))
-    XCTAssertTrue(MountHealth.isMountedIn(sampleMountOutput, path: "/Volumes/CloudMachine-Backup-imac"))
+    XCTAssertTrue(
+      MountHealth.isMountedIn(sampleMountOutput, path: "/Volumes/CloudMachine-Backup-imac"))
   }
 
   func testIsMountedIn_pathIsPrefixOfAnotherMachineKey_doesNotFalsePositive() {
@@ -39,7 +40,10 @@ final class MountHealthTests: XCTestCase {
   func testDetectStuckBand_singleBandQueuedRepeatedlyWithoutCompleting_isDetected() {
     var lines: [Substring] = []
     for _ in 0..<250 {
-      lines.append(line("2026/07/27 21:14:54 INFO  : backup.sparsebundle/bands/2c3: vfs cache: queuing for upload in 5s"))
+      lines.append(
+        line(
+          "2026/07/27 21:14:54 INFO  : backup.sparsebundle/bands/2c3: vfs cache: queuing for upload in 5s"
+        ))
     }
     XCTAssertEqual(MountHealth.detectStuckBand(logLines: lines, minQueueEvents: 200), "2c3")
   }
