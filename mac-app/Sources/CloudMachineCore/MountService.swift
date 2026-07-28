@@ -122,7 +122,11 @@ public enum MountService {
         return false
       }
       CMLogger.log("Przesylam sparsebundle bezposrednio na Dysk Google (bypassing NFS)...")
-      let copyResult = try? await ProcessRunner.runRclone(["copy", tmpSp, sparsebundlePath])
+      var copyArgs = ["copy", tmpSp, sparsebundlePath]
+      if let bwLimit = bwLimitArg(mbps: config.bwLimitMbps) {
+        copyArgs.append(contentsOf: ["--bwlimit", bwLimit])
+      }
+      let copyResult = try? await ProcessRunner.runRclone(copyArgs)
       try? FileManager.default.removeItem(atPath: tmpSp)
       guard copyResult?.succeeded == true else {
         CMLogger.log("BLAD: nie udalo sie przeslac nowego sparsebundle na Google Drive.")
@@ -154,7 +158,8 @@ public enum MountService {
       for attempt in 1...2 {
         var started = alreadyRunning
         if !alreadyRunning {
-          started = await startRcloneDaemon(remotePath: remotePath, localDir: localDir)
+          started = await startRcloneDaemon(
+            remotePath: remotePath, localDir: localDir, bwLimitMbps: config.bwLimitMbps)
         }
         if started {
           var waited = 0
@@ -271,8 +276,20 @@ public enum MountService {
     }
   }
 
-  private static func startRcloneDaemon(remotePath: String, localDir: URL) async -> Bool {
-    let args = [
+  /// Konwertuje Mbps (megabity/s - jednostka, w ktorej dostawcy internetu
+  /// podaja predkosc lacza) na argument `--bwlimit` rclone, ktory oczekuje
+  /// megabajtow/s (dzielimy przez 8). `nil`, gdy limit wylaczony (<=0) - dla
+  /// symetrii z `Optional` zamiast magicznej wartosci w liscie argumentow.
+  private static func bwLimitArg(mbps: Int) -> String? {
+    guard mbps > 0 else { return nil }
+    let megabytesPerSecond = Double(mbps) / 8
+    return String(format: "%.2fM", megabytesPerSecond)
+  }
+
+  private static func startRcloneDaemon(remotePath: String, localDir: URL, bwLimitMbps: Int)
+    async -> Bool
+  {
+    var args = [
       "nfsmount", remotePath, localDir.path,
       "--volname", "CloudMachine-\(localDir.lastPathComponent)",
       "--vfs-cache-mode", "full",
@@ -289,6 +306,9 @@ public enum MountService {
       "-o", "nolocks,locallocks",
       "--daemon",
     ]
+    if let bwLimit = bwLimitArg(mbps: bwLimitMbps) {
+      args.append(contentsOf: ["--bwlimit", bwLimit])
+    }
     let result = try? await ProcessRunner.runRclone(args, timeout: 30)
     return result?.succeeded == true
   }

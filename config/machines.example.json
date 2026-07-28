@@ -4,6 +4,8 @@
   "safety_margin_percent": 10,
   "remote_name": "gdrive-cloudmachine",
   "remote_root_folder": "CloudMachine",
+  "_bwlimit_comment": "Limit predkosci wysylania w Mbps (megabity/s, jak u dostawcow internetu) - to ustawienie jest per-Mac, wiec kazda maszyna moze miec inna wartosc w swoim lokalnym machines.json. 0 = bez limitu.",
+  "bwlimit_mbps": 0,
   "machines": {
     "macbook-pro-marcin": {
       "display_name": "MacBook Pro Marcin",

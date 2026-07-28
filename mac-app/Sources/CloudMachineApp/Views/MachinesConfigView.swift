@@ -95,6 +95,37 @@ struct MachinesConfigView: View {
 
             Divider()
 
+            VStack(alignment: .leading, spacing: 8) {
+              HStack {
+                Text("Limit prędkości wysyłania:")
+                  .font(.subheadline.bold())
+                Spacer()
+                Text(
+                  controller.config.bwLimitMbps > 0
+                    ? "\(controller.config.bwLimitMbps) Mbps" : "Bez limitu"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+              }
+
+              Slider(
+                value: Binding(
+                  get: { Double(controller.config.bwLimitMbps) },
+                  set: { controller.config.bwLimitMbps = Int($0) }
+                ),
+                in: 0...1000,
+                step: 10
+              )
+
+              Text(
+                "Ogranicza rclone, żeby backup nie zajmował całego dostępnego łącza. Dotyczy tylko tego komputera. 0 = bez limitu."
+              )
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
             // Pasek alokacji przestrzeni dyskowej
             VStack(alignment: .leading, spacing: 8) {
               Text("Wizualizacja alokacji przestrzeni:")
