@@ -93,6 +93,24 @@ struct MenuBarContentView: View {
         .padding(.vertical, 4)
       }
 
+      // Pasek aktualnej predkosci wysylania - jedyna czesc "postepu
+      // backupu" ktora ma sens w waskim popupie paska menu (jedna linia,
+      // bez wykresow), reszta (procent/pliki/ETA) zostaje w pelnym Panelu
+      // sterowania nizej. Widoczny tylko gdy backup faktycznie kopiuje.
+      if let progress = controller.status.backupProgress, let rate = progress.transferRateMBs,
+        rate > 0
+      {
+        HStack {
+          Label("Wysyłanie".localized, systemImage: "arrow.up.circle")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Spacer()
+          Text(String(format: "%.1f MB/s", rate))
+            .font(.caption.bold())
+            .foregroundStyle(.primary)
+        }
+      }
+
       Divider()
 
       // Montowanie i backup przenieione do pelnego Panelu sterowania (karta

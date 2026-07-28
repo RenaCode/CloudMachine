@@ -77,6 +77,7 @@ public enum Loc {
       "Błąd": "Error",
       "Nieznany": "Unknown",
       "Limit przestrzeni": "Space Limit",
+      "Wysyłanie": "Uploading",
       // StatusView
       "Stan połączenia": "Connection Status",
       "Aktywne zadania": "Active Tasks",
