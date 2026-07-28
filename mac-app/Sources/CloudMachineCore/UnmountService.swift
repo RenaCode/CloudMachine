@@ -35,26 +35,8 @@ public enum UnmountService {
     // Jesli Time Machine akurat aktywnie pisze na ten wolumin, zatrzymujemy
     // backup i CZEKAMY az faktycznie stanie, ZANIM odmontujemy - wymuszone
     // odmontowanie w trakcie aktywnego zapisu potrafi uszkodzic metadane
-    // sparsebundle. `tmutil stopbackup` NIE wymaga sudo.
-    if await TimeMachineStatus.isRunning() {
-      CMLogger.log(
-        "Time Machine aktywnie kopiuje - zatrzymuje backup przed odmontowaniem, zeby nie uszkodzic sparsebundle."
-      )
-      _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 20)
-      var waited = 0
-      while waited < 30 {
-        if !(await TimeMachineStatus.isRunning()) { break }
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
-        waited += 2
-      }
-      if await TimeMachineStatus.isRunning() {
-        CMLogger.log(
-          "OSTRZEZENIE: Time Machine nie zatrzymalo sie po \(waited)s - odmontowuje mimo to, ryzyko uszkodzenia sparsebundle."
-        )
-      } else {
-        CMLogger.log("Backup zatrzymany po \(waited)s.")
-      }
-    }
+    // sparsebundle.
+    await MountHealth.stopTimeMachineIfRunning()
 
     if await MountHealth.isMounted(spMount.path) {
       CMLogger.log("Odmontowuje sparsebundle: \(spMount.path)")

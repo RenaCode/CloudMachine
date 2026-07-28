@@ -219,25 +219,7 @@ public enum MountWatchdogService {
         // jak "zniknal z chmury" i cala historia backupu zaczyna sie od
         // zera. Dajemy Time Machine szanse grzecznie sie zatrzymac, tak
         // jak robi to rowniez `UnmountService` przy recznym odmontowaniu.
-        if await TimeMachineStatus.isRunning() {
-          CMLogger.log(
-            "[mount-watchdog] Time Machine aktywnie kopiuje - zatrzymuje backup przed wymuszonym odmontowaniem, zeby nie uszkodzic sparsebundle."
-          )
-          _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 20)
-          var waited = 0
-          while waited < 30 {
-            if !(await TimeMachineStatus.isRunning()) { break }
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            waited += 2
-          }
-          if await TimeMachineStatus.isRunning() {
-            CMLogger.log(
-              "[mount-watchdog] OSTRZEZENIE: Time Machine nie zatrzymalo sie po \(waited)s - odmontowuje mimo to, ryzyko uszkodzenia sparsebundle."
-            )
-          } else {
-            CMLogger.log("[mount-watchdog] Backup zatrzymany po \(waited)s.")
-          }
-        }
+        await MountHealth.stopTimeMachineIfRunning()
         _ = try? await ProcessRunner.run("/usr/bin/hdiutil", ["detach", "-force", spMount.path])
         await MountHealth.forceUnmount(spMount.path, timeoutS: 10)
       }
@@ -251,7 +233,12 @@ public enum MountWatchdogService {
     }
 
     CMLogger.log("[mount-watchdog] Probuje zamontowac ponownie.")
-    let success = await MountService.mount(config: config, machineKey: machineKey)
+    // WAZNE: `mountLocked`, NIE publiczne `mount()` - ta funkcja dziala pod
+    // `runWithDeviceLock`, ktore JUZ trzyma `deviceLockName`. `mount()` samo
+    // probuje ja wziac (CMLock nie jest rekurencyjny), wiec zawsze
+    // przegrywaloby z samym soba i konczylo z "Inna operacja juz trwa" -
+    // to byl faktyczny powod, dla ktorego naprawa nigdy nie mogla sie udac.
+    let success = await MountService.mountLocked(config: config, machineKey: machineKey)
     if success {
       CMLogger.log("[mount-watchdog] Naprawa zakonczona powodzeniem.")
       _ = try? await ProcessRunner.run(

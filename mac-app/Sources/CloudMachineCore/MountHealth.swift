@@ -160,6 +160,37 @@ public enum MountHealth {
     return detectStuckBand(logLines: Array(recentLines), minQueueEvents: minQueueEvents)
   }
 
+  /// Jesli Time Machine akurat aktywnie pisze na wolumin obslugiwany przez
+  /// `rclone nfsmount`, zatrzymuje backup i CZEKA az faktycznie stanie, ZANIM
+  /// funkcja wroci - wymuszone odmontowanie/zabicie rclone w trakcie
+  /// aktywnego zapisu potrafi uszkodzic metadane sparsebundle (przy nastepnym
+  /// mouncie wyglada to jak "zniknal z chmury" i cala historia backupu
+  /// zaczyna sie od zera - zaobserwowane realnie: `MountService.mount()`
+  /// zabijal rclone w ten sposob bez tego zabezpieczenia i skasowal w ten
+  /// sposob ~49GB juz przeslanego backupu w trakcie stall-retry). KAZDY
+  /// wywolujacy kod, ktory moze zabic/wymusic odmontowanie rclone dla tego
+  /// remote, powinien wywolac to NAJPIERW. `tmutil stopbackup` NIE wymaga sudo.
+  public static func stopTimeMachineIfRunning() async {
+    guard await TimeMachineStatus.isRunning() else { return }
+    CMLogger.log(
+      "Time Machine aktywnie kopiuje - zatrzymuje backup przed wymuszona operacja na montowaniu, zeby nie uszkodzic sparsebundle."
+    )
+    _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 20)
+    var waited = 0
+    while waited < 30 {
+      if !(await TimeMachineStatus.isRunning()) { break }
+      try? await Task.sleep(nanoseconds: 2_000_000_000)
+      waited += 2
+    }
+    if await TimeMachineStatus.isRunning() {
+      CMLogger.log(
+        "OSTRZEZENIE: Time Machine nie zatrzymalo sie po \(waited)s - kontynuuje mimo to, ryzyko uszkodzenia sparsebundle."
+      )
+    } else {
+      CMLogger.log("Backup zatrzymany po \(waited)s.")
+    }
+  }
+
   /// Ubija istniejace procesy `rclone nfsmount` dla danego remote - najpierw
   /// TERM (grzecznie), potem KILL po 5s jesli nadal zyje.
   public static func killRcloneForRemote(_ remotePath: String) async {

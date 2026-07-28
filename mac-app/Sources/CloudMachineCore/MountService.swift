@@ -77,7 +77,15 @@ public enum MountService {
     // konfiguracyjnych bezposrednio przez NFS).
     let sparsebundlePath = "\(remotePath)/backup.sparsebundle"
     let listResult = try? await ProcessRunner.runRclone(["lsf", sparsebundlePath])
-    let sparsebundleExists = listResult?.succeeded == true
+    // WAZNE: `rclone lsf` zwraca exit 0 z PUSTYM stdout gdy folder istnieje,
+    // ale jest pusty (np. po `rclone delete` ktory zostawia katalog bez plikow).
+    // Pusty folder != istniejacy sparsebundle - trzeba sprawdzic czy lsf zwrocil
+    // jakikolwiek content (poprawny sparsebundle ZAWSZE ma co najmniej Info.plist).
+    // Bez tego warunku MountService pomijal tworzenie nowego sparsebundle i probowal
+    // zamontowac pusty folder -> "hdiutil: image not recognized" w nieskonczonosc.
+    let sparsebundleExists =
+      listResult?.succeeded == true
+      && !(listResult?.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
 
     if !sparsebundleExists {
       guard let limitGB = config.limitGB(forMachineKey: machineKey) else {
@@ -134,6 +142,7 @@ public enum MountService {
         )
         alreadyRunning = true
       } else {
+        await MountHealth.stopTimeMachineIfRunning()
         await MountHealth.killRcloneForRemote(remotePath)
         await MountHealth.forceUnmount(localDir.path, timeoutS: 10)
       }
@@ -171,6 +180,7 @@ public enum MountService {
         alreadyRunning = false
         if attempt == 1 {
           CMLogger.log("Proba \(attempt) nie powiodla sie, sprzatam i probuje ponownie...")
+          await MountHealth.stopTimeMachineIfRunning()
           await MountHealth.forceUnmount(localDir.path, timeoutS: 10)
           await MountHealth.killRcloneForRemote(remotePath)
           try? await Task.sleep(nanoseconds: 1_000_000_000)

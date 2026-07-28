@@ -27,7 +27,7 @@ public final class CMLock {
     let pidFile = lockDir.appendingPathComponent("pid")
     if let pidString = try? String(contentsOf: pidFile, encoding: .utf8),
       let pid = pid_t(pidString.trimmingCharacters(in: .whitespacesAndNewlines)),
-      kill(pid, 0) == 0
+      isProcessAlive(pid)
     {
       return false
     }
@@ -43,6 +43,72 @@ public final class CMLock {
     writePid()
     acquired = true
     return true
+  }
+
+  /// Sprawdza, czy proces z podanym PID wciaz zyje I nie jest zawieszony na
+  /// stale w nieprzerywalnym oczekiwaniu kernela (stan 'U' z `ps`).
+  /// Uzywa synchronicznego `popen("ps -p <pid> -o stat=")` bo `acquire()`
+  /// jest sync - nie mozemy tu czekac na async ProcessRunner.
+  ///
+  /// Proces w stanie U przechodzi `kill(pid, 0) == 0`, ale nigdy sam nie
+  /// zwolni blokady (SIGKILL go nie budzi z NFS/I-O wait w jadrze). Traktujemy
+  /// go jako "martwy dla celow blokady" po `stuckThreshold` minutach - prog
+  /// wystarczajaco duzy, zeby nie konfliktowac z legalnymi dlugimi operacjami
+  /// (dogananie kolejki uploadow, weryfikacja checksumow mogace trwac godziny).
+  private static let stuckLockThreshold: TimeInterval = 15 * 60  // 15 minut
+
+  private func isProcessAlive(_ pid: pid_t) -> Bool {
+    guard kill(pid, 0) == 0 else { return false }
+
+    // Synchronicznie pobierz stan procesu z `ps`.
+    if let psState = processState(pid: pid) {
+      // Stan 'U' (macOS uninterruptible NFS wait) lub 'D' (Linux disk sleep)
+      // - oba oznaczaja zawieszenie w jadrze, z ktorego SIGKILL nie wybudza.
+      if psState.uppercased().hasPrefix("U") || psState.uppercased().hasPrefix("D") {
+        // Czy blokada czeka juz od ponad progu? mtime lock.d == czas przejecia.
+        if isLockDirOlderThan(seconds: Self.stuckLockThreshold) {
+          CMLogger.log(
+            "[CMLock] OSTRZEZENIE: PID \(pid) trzymajacy blokade '\(lockDir.lastPathComponent)'"
+              + " jest zawieszony w stanie U (NFS hang?) od ponad \(Int(Self.stuckLockThreshold/60)) min."
+              + " Przejmuje blokade. SIGKILL na zawieszony proces (ignorowany przez jadro, ale"
+              + " sprzatnie PID po odmontowaniu)."
+          )
+          kill(pid, SIGKILL)
+          return false
+        }
+      }
+    }
+    return true
+  }
+
+  /// Synchroniczne uruchomienie `ps -p <pid> -o stat=` przez Process/Pipe.
+  /// Bezpieczne blokujace uzycie `readDataToEndOfFile()` bo `ps` ZAWSZE szybko
+  /// konczy i zamyka swoje FD - brak ryzyka wiecznego oczekiwania na EOF
+  /// (ten problem dotyczy wylacznie demonow takich jak rclone --daemon,
+  /// ktore forkuja dziecko dziedziczace FD i nigdy ich nie zamykaja).
+  private func processState(pid: pid_t) -> String? {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+    proc.arguments = ["-p", "\(pid)", "-o", "stat="]
+    let pipe = Pipe()
+    proc.standardOutput = pipe
+    proc.standardError = FileHandle.nullDevice
+    proc.standardInput = FileHandle.nullDevice
+    guard (try? proc.run()) != nil else { return nil }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    proc.waitUntilExit()
+    return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// Zwraca `true` jesli katalog blokady (lock.d) ma mtime starszy niz `seconds`.
+  /// mtime katalogu == czas przejecia blokady przez mkdir() - nie jest pozniej
+  /// modyfikowany, dobrze sluzy jako znacznik czasu przejecia.
+  private func isLockDirOlderThan(seconds: TimeInterval) -> Bool {
+    guard
+      let attrs = try? FileManager.default.attributesOfItem(atPath: lockDir.path),
+      let mtime = attrs[.modificationDate] as? Date
+    else { return false }
+    return Date().timeIntervalSince(mtime) > seconds
   }
 
   private func writePid() {
