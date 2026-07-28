@@ -19,6 +19,7 @@ struct Unmount: AsyncParsableCommand {
 
   func run() async throws {
     let (config, key) = await CLIContext.load()
-    await UnmountService.unmount(config: config, machineKey: key)
+    let ok = await UnmountService.unmount(config: config, machineKey: key)
+    if !ok { throw ExitCode.failure }
   }
 }

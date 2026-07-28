@@ -61,11 +61,33 @@ public enum BackupVerifier {
     CMLogger.log(
       "=== 3/3: weryfikacja sum kontrolnych najnowszego backupu: \(latestBackup) (moze potrwac dlugo) ==="
     )
-    guard
-      let verifyResult = try? await ProcessRunner.runTmutilUnattended([
-        "verifychecksums", latestBackup,
-      ]), verifyResult.succeeded
-    else {
+    // WAZNE: bez timeoutu - `tmutil verifychecksums` moze utknac w jadrze w
+    // nieprzerywalnym oczekiwaniu na zawieszonym NFS-ie, tak samo jak
+    // `hdiutil detach` gdzie indziej (patrz `ProcessRunner.run(timeout:)`).
+    // Bez tego jedna weryfikacja moze zawiesic sie na zawsze, trzymajac
+    // blokade urzadzenia i blokujac wszystkie pozostale watchdogi.
+    let verifyResult = try? await ProcessRunner.runTmutilUnattended(
+      ["verifychecksums", latestBackup], timeout: 1800)
+    guard let verifyResult else {
+      return CMActionResult(
+        succeeded: false,
+        message: "verifychecksums nie odpowiedzialo (timeout lub blad uruchomienia procesu).")
+    }
+    // WAZNE: brak reguly sudoers NOPASSWD dla 'tmutil verifychecksums' NIE
+    // jest tym samym co uszkodzony backup - to zwykly blad konfiguracji
+    // (README Krok 3 testu planu prosi o uruchomienie tego PRZED skonfiguro-
+    // waniem sudoers w Kroku 5 Kreatora). Wczesniej oba przypadki zwracaly
+    // ten sam, alarmujacy komunikat sugerujacy uszkodzenie/niewiarygodnosc
+    // montowania - myla nowego uzytkownika dokladnie tam, gdzie README
+    // najpierw go prowadzi.
+    guard !verifyResult.isSudoAuthFailure else {
+      return CMActionResult(
+        succeeded: false,
+        message:
+          "verifychecksums wymaga hasla sudo - to NIE oznacza uszkodzenia backupu, tylko brak reguly sudoers. Skonfiguruj automatyczne przycinanie w GUI (Krok 5 Kreatora) albo dopisz regule recznie w /etc/sudoers.d/cloudmachine (patrz README)."
+      )
+    }
+    guard verifyResult.succeeded else {
       return CMActionResult(
         succeeded: false,
         message:

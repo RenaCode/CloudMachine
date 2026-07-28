@@ -88,8 +88,11 @@ public enum QuotaWatchdogService {
 
     guard
       let listResult = try? await ProcessRunner.run(
-        "/usr/bin/tmutil", ["listbackups", "-d", spMount.path])
+        "/usr/bin/tmutil", ["listbackups", "-d", spMount.path], timeout: 60)
     else {
+      CMLogger.log(
+        "BLAD: 'tmutil listbackups' nie powiodlo sie - nie moge wylistowac backupow do przyciecia. Sprobuje ponownie przy nastepnym cyklu."
+      )
       return
     }
     // tmutil listbackups zwraca sciezki posortowane od najstarszego do najnowszego.
@@ -107,7 +110,7 @@ public enum QuotaWatchdogService {
       guard backups.count > deleted + 1 else { break }
       CMLogger.log("Usuwam najstarszy backup: \(backupPath)")
       let deleteResult = try? await ProcessRunner.run(
-        "/usr/bin/sudo", ["-n", "/usr/bin/tmutil", "delete", "-p", backupPath])
+        "/usr/bin/sudo", ["-n", "/usr/bin/tmutil", "delete", "-p", backupPath], timeout: 600)
       guard deleteResult?.succeeded == true else {
         if deleteResult?.isSudoAuthFailure == true {
           CMLogger.log("BLAD przy usuwaniu \(backupPath): brak reguly sudoers dla 'tmutil delete'.")
@@ -118,8 +121,21 @@ public enum QuotaWatchdogService {
       }
       deleted += 1
 
+      // WAZNE: `break` tutaj (jak bylo wczesniej) przy przejsciowej porazce
+      // `rclone size` (np. throttling API, konkurencja z aktywnym mountem -
+      // patrz komentarz w RcloneSize) zatrzymywalo CALE przycinanie po
+      // jednym udanym usunieciu, mimo ze maszyna moze wciaz byc daleko
+      // ponad limitem - dokladnie przeciwienstwo tego, co ta funkcja ma
+      // gwarantowac. Bez potwierdzonego swiezego odczytu nie wiemy, czy
+      // juz wystarczy, wiec bezpieczniej kontynuowac usuwanie najstarszych
+      // (petla i tak ma gorna granice - `backups.count > deleted + 1`
+      // zawsze zostawia co najmniej jeden backup) niz cicho przerwac z
+      // maszyna wciaz ponad budzetem.
       guard let refreshed = await RcloneSize.usedGB(remotePath: remotePath, timeout: 180) else {
-        break
+        CMLogger.log(
+          "UWAGA: 'rclone size' nie powiodlo sie po usunieciu \(backupPath) - kontynuuje przycinanie bez swiezego odczytu, zeby nie zostac trwale ponad limitem."
+        )
+        continue
       }
       usedGB = refreshed
       CMLogger.log("Po usunieciu: \(String(format: "%.1f", usedGB)) GB / \(limitGB) GB")

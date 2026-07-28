@@ -90,6 +90,36 @@ public enum MountHealth {
     return !(await isMounted(mountPoint))
   }
 
+  /// Odmontowuje sparsebundle (`hdiutil detach`), z bezpiecznym, ograniczonym
+  /// timeoutem - JEDYNY punkt w calym module, przez ktory powinno przechodzic
+  /// kazde wywolanie `hdiutil detach`, zeby ten timeout (i fallback na
+  /// `forceUnmount` ponizej) nie musial byc kopiowany osobno przy kazdym
+  /// nowym wywolujacym (dokladnie ten sam powod centralizacji, co przy
+  /// `killRcloneForRemote`/`waitForRcloneUploadsToDrain` powyzej). `hdiutil
+  /// detach` nad sparsebundle osadzonym w NFS-ie rclone potrafi utknac w
+  /// jadrze w nieprzerywalnym oczekiwaniu - `ProcessRunner.run(timeout:)` ma
+  /// juz wbudowana twarda granice czasu na taki wypadek (patrz komentarz w
+  /// ProcessRunner.swift), wiec to wywolanie nigdy nie zawiesi sie na stale.
+  /// Zwraca `true`, jesli punkt montowania faktycznie zniknal.
+  @discardableResult
+  public static func detachSparsebundle(_ mountPoint: String, force: Bool, timeoutS: Int = 20)
+    async -> Bool
+  {
+    guard await isMounted(mountPoint) else { return true }
+    var args = ["detach"]
+    if force { args.append("-force") }
+    args.append(mountPoint)
+    let result = try? await ProcessRunner.run(
+      "/usr/bin/hdiutil", args, timeout: TimeInterval(timeoutS))
+    if result?.succeeded == true, !(await isMounted(mountPoint)) {
+      return true
+    }
+    // `hdiutil detach` nie zadzialalo (timeout, blad, albo zglosilo sukces,
+    // ale punkt montowania jednak nadal widnieje) - ostatnia deska ratunku,
+    // ten sam fallback co przy zwyklym NFS unmount.
+    return await forceUnmount(mountPoint, timeoutS: 10)
+  }
+
   /// Czysta logika dopasowania - wydzielona z `isMounted(_:)` zeby dalo sie
   /// ja przetestowac bez shellowania do `/sbin/mount` (patrz
   /// CloudMachineCoreTests). Dopasowuje `path` jako PELNY punkt montowania w
@@ -173,15 +203,38 @@ public enum MountHealth {
   /// `logPrefix` pozwala wywolujacemu zachowac wlasna konwencje logow (np.
   /// mount-watchdog prefiksuje kazda linie "[mount-watchdog] ") - bez tego
   /// te linie wypadaly z atrybucji przy grepowaniu logu per-watchdog.
-  public static func stopTimeMachineIfRunning(logPrefix: String = "") async {
-    guard await TimeMachineStatus.isRunning() else { return }
-    // WAZNE: celowo "przed wymuszonym odmontowaniem/zabiciem rclone", NIE
-    // "przed montowaniem" - ta funkcja jest wywolywana zarowno przed mount-
-    // owaniem (MountService), jak i przed czystym odmontowaniem
-    // (UnmountService) - wczesniejsza tresc mowila zawsze o "montowaniu",
-    // co bylo faktycznie mylace podczas odmontowania.
+  /// Zwraca `true`, jesli bezpiecznie mozna kontynuowac (TM potwierdzone
+  /// zatrzymane albo nigdy nie bylo aktywne), `false` jesli TM NIE
+  /// potwierdzilo zatrzymania w ciagu 30s - w tym przypadku WYWOLUJACY MUSI
+  /// przerwac operacje (NIE kontynuowac force-unmount/kill), a nie tylko
+  /// zalogowac ostrzezenie i przejsc dalej. WCZESNIEJ ta funkcja nie
+  /// zwracala niczego i kazdy wywolujacy kontynuowal bezwarunkowo mimo
+  /// ostrzezenia - zaobserwowane realnie na zywo: `tmutil stopbackup` nie
+  /// zdazylo zatrzymac zapisu do "goracego" bandu (band z metadanymi APFS,
+  /// dotykany dziesiatki razy na sekunde przy aktywnym backupie - zaden
+  /// rozsadny `--vfs-write-back` nigdy mu nie da okna ciszy, dopoki TM
+  /// faktycznie nie przestanie pisac), a kod i tak wymusil odmontowanie.
+  @discardableResult
+  public static func stopTimeMachineIfRunning(logPrefix: String = "") async -> Bool {
+    // WAZNE: CELOWO bez wczesniejszego `guard isRunning() else { return }`.
+    // `TimeMachineStatus.isRunning()` zwraca `false` NIE TYLKO gdy TM
+    // faktycznie jest bezczynne, ale TEZ przy jakimkolwiek bledzie `tmutil
+    // status` (rzucony `try?`, niespodziewany format wyjscia) - a to jest
+    // dokladnie ta sama ochrona przed uszkodzeniem sparsebundle, ktora ta
+    // funkcja ma zagwarantowac. Przy przejsciowym bledzie odczytu statusu
+    // wczesniejszy kod cicho POMIJAL cala ta ochrone i pozwalal wywolujacemu
+    // przejsc prosto do wymuszonego odmontowania/killa - w najgorszym razie
+    // dokladnie w trakcie aktywnego zapisu (zaobserwowane jako realne ryzyko
+    // w audycie). `tmutil stopbackup` jest bezpiecznym no-opem, gdy TM i tak
+    // nic nie robi, wiec wywolanie go BEZWARUNKOWO nie ma wad, a zamyka luke.
+    //
+    // WAZNE tresc komunikatu: celowo "przed wymuszonym odmontowaniem/
+    // zabiciem rclone", NIE "przed montowaniem" - ta funkcja jest wywolywana
+    // zarowno przed mountowaniem (MountService), jak i przed czystym
+    // odmontowaniem (UnmountService) - wczesniejsza tresc mowila zawsze o
+    // "montowaniu", co bylo faktycznie mylace podczas odmontowania.
     CMLogger.log(
-      "\(logPrefix)Time Machine aktywnie kopiuje - zatrzymuje backup przed wymuszonym odmontowaniem/zabiciem rclone, zeby nie uszkodzic sparsebundle."
+      "\(logPrefix)Zatrzymuje ewentualny aktywny backup Time Machine przed wymuszonym odmontowaniem/zabiciem rclone, zeby nie uszkodzic sparsebundle."
     )
     _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 20)
     var waited = 0
@@ -198,13 +251,92 @@ public enum MountHealth {
       CMLogger.log("\(logPrefix)Backup zatrzymany po \(waited)s.")
     } else {
       CMLogger.log(
-        "\(logPrefix)OSTRZEZENIE: Time Machine nie zatrzymalo sie po \(waited)s - kontynuuje mimo to, ryzyko uszkodzenia sparsebundle."
+        "\(logPrefix)OSTRZEZENIE: Time Machine nie zatrzymalo sie po \(waited)s - przerywam ta operacje, zeby nie uszkodzic sparsebundle. Sprobuje ponownie przy nastepnym cyklu."
       )
     }
+    return stopped
   }
 
-  /// Ubija istniejace procesy `rclone nfsmount` dla danego remote - najpierw
-  /// TERM (grzecznie), potem KILL po 5s jesli nadal zyje.
+  /// Czeka, az kolejka wyslania rclone (`--vfs-write-back`) faktycznie sie
+  /// oproznila, PRZED jakimkolwiek unmount/kill. BEZ TEGO dane wciaz
+  /// czekajace na upload sa bezpowrotnie tracone przy zabiciu rclone -
+  /// zaobserwowane realnie WIELOKROTNIE: seria wymuszonych remontow ("stuck
+  /// band") zabijala rclone w trakcie draina, co ostatecznie doprowadzilo do
+  /// uszkodzenia kontenera APFS w sparsebundle (checksum verify failures,
+  /// "no mountable file systems").
+  ///
+  /// WAZNE: pierwsza wersja tej funkcji sprawdzala realna kolejke uploadow
+  /// przez `rclone rc vfs/stats` (lokalny `--rc`) - dokladniejsze niz to,
+  /// co ponizej. Zostalo wycofane: `--rc` koliduje z `--daemon` w tej
+  /// wersji rclone (patrz komentarz w `MountService.startRcloneDaemon`), wiec
+  /// TA funkcja w praktyce ZAWSZE natychmiast "nie znajdywala" dzialajacego
+  /// `--rc` i zwracala `true` bez ŻADNEGO realnego czekania - cicha,
+  /// NIEDZIALAJACA ochrona (potwierdzone: kontener uszkodzil sie ponownie
+  /// mimo tej "ochrony" w miejscu). Zamiast tego uzywamy dwuetapowego
+  /// podejscia bez `--rc`:
+  /// 1. Stale okno `MountService.rcloneVfsWriteBackSeconds` - daje
+  ///    write-back timerowi rclone szanse w ogole ZAKOLEJKOWAC swiezo
+  ///    dotkniete bandy (rclone kolejkuje dopiero po oknie ciszy OD
+  ///    OSTATNIEGO zapisu do pliku).
+  /// 2. Potem odpytujemy `rcloneIsBusyDraining` (log rclone-mount.log, juz
+  ///    uzywane gdzie indziej w tym pliku i sprawdzone na zywo) w petli, az
+  ///    przestanie widziec swieza aktywnosc uploadu - czyli kolejka faktycznie
+  ///    sie oprozniła, a nie tylko "minal jakis czas".
+  /// Zwraca `true`, jesli kolejka wyglada na pusta, `false` jesli minal
+  /// timeout z wciaz widoczna aktywnoscia.
+  @discardableResult
+  public static func waitForRcloneUploadsToDrain(remotePath: String, timeoutS: Int = 90) async
+    -> Bool
+  {
+    try? await Task.sleep(
+      nanoseconds: UInt64(MountService.rcloneVfsWriteBackSeconds) * 1_000_000_000)
+    let deadline = Date().addingTimeInterval(TimeInterval(timeoutS))
+    while await rcloneIsBusyDraining(remotePath) {
+      guard Date() < deadline else {
+        CMLogger.log(
+          "OSTRZEZENIE: rclone wciaz wyglada na aktywne (upload w toku) po \(timeoutS)s oczekiwania na oproznienie kolejki - kontynuuje mimo to, ryzyko utraty danych czekajacych na wyslanie."
+        )
+        return false
+      }
+      try? await Task.sleep(nanoseconds: 5_000_000_000)
+    }
+    return true
+  }
+
+  /// Zwalnia port `--rc` PRZED odpaleniem nowego demona rclone. WAZNE: rclone
+  /// traktuje niepowodzenie zbindowania `--rc-addr` jako blad KRYTYCZNY -
+  /// caly demon (WLACZNIE z montowaniem NFS) konczy sie porazka, nie tylko
+  /// samo RC (zaobserwowane realnie: druga proba montowania w tej samej
+  /// petli retry startowala zanim system zdazyl zwolnic port po zabiciu
+  /// pierwszego demona, co psulo OBIE proby montowania na okraglo). Ten sam
+  /// staly port jest uzywany dla kazdego mountu tej maszyny (patrz
+  /// `MountService.rcloneRCPort`), wiec przed KAZDYM startem demona
+  /// upewniamy sie, ze nic go nie trzyma.
+  public static func freeRCPortIfStuck() async {
+    guard
+      let result = try? await ProcessRunner.run(
+        "/usr/sbin/lsof", ["-ti", ":\(MountService.rcloneRCPort)"], timeout: 5),
+      result.succeeded,
+      !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      return
+    }
+    for pidString in result.stdout.split(separator: "\n") {
+      if let pid = pid_t(pidString.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        kill(pid, SIGKILL)
+      }
+    }
+    // Krotka pauza, zeby jadro faktycznie zwolnilo port przed kolejna proba
+    // bindowania - `kill()` jest asynchroniczny wzgledem zwolnienia zasobow.
+    try? await Task.sleep(nanoseconds: 500_000_000)
+  }
+
+  /// Ubija istniejace procesy `rclone nfsmount` dla danego remote. NAJPIERW
+  /// czeka, az kolejka uploadow sie oprozni (patrz `waitForRcloneUploadsToDrain`
+  /// powyzej - to JEDYNY punkt, przez ktory przechodzi kazdy kill/unmount w
+  /// tym module, wiec ochrona przed utrata danych jest tu, a nie rozproszona
+  /// po kazdym wywolujacym), potem TERM (grzecznie), potem KILL po 5s jesli
+  /// nadal zyje.
   public static func killRcloneForRemote(_ remotePath: String) async {
     let pattern = "rclone nfsmount \(remotePath) "
     guard let pgrep = try? await ProcessRunner.run("/usr/bin/pgrep", ["-f", pattern]),
@@ -212,6 +344,7 @@ public enum MountHealth {
     else {
       return
     }
+    _ = await waitForRcloneUploadsToDrain(remotePath: remotePath)
     CMLogger.log("Ubijam istniejace procesy 'rclone nfsmount' dla \(remotePath)...")
     _ = try? await ProcessRunner.run("/usr/bin/pkill", ["-TERM", "-f", pattern])
     for _ in 0..<5 {

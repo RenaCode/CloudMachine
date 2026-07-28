@@ -8,7 +8,24 @@ public enum MountService {
   private static let rcloneTransfers = "32"
   private static let rcloneCheckers = "32"
   private static let rcloneTpsLimit = "50"
-  private static let rcloneVfsWriteBack = "5s"
+  // Wczesniej "5s" - zbyt agresywne dla wzorca zapisow Time Machine (male,
+  // rozproszone zapisy dotykajace wielu bandow na raz). Krotkie okno
+  // powodowalo czeste "stuck band" remounty (patrz MountHealth.detectStuckBand),
+  // a KAZDY taki remount ryzykowal utrata danych wciaz czekajacych w kolejce
+  // (patrz `MountHealth.waitForRcloneUploadsToDrain` - realny incydent z
+  // uszkodzeniem kontenera APFS po serii wymuszonych remontow). Dluzsze okno
+  // zmniejsza czestotliwosc tych remontow; ochrone przed prawdziwym trwale
+  // utknietym bandem nadal daje `detectStuckBand`. Trzymane jako `Int`
+  // (sekundy), NIE String - `MountHealth.waitForRcloneUploadsToDrain`
+  // potrzebuje tej samej wartosci LICZBOWO, zeby wiedziec ile realnie czekac
+  // na oproznienie cache (patrz komentarz tam).
+  static let rcloneVfsWriteBackSeconds = 30
+  // Lokalny port rclone `--rc` (tylko 127.0.0.1, `--rc-no-auth`). Obecnie
+  // NIEUZYWANY w argumentach demona (patrz komentarz przy `--daemon` w
+  // `startRcloneDaemon`) - `--rc`+`--daemon` koliduja same ze soba w tej
+  // wersji rclone. Zostawione zdefiniowane, zeby latwo wlaczyc ponownie po
+  // znalezieniu dzialajacej kombinacji flag.
+  static let rcloneRCPort = 51820
 
   /// Wczesniej sztywne "40G" - zbyt male, gdy pojedynczy "goracy" band
   /// (dziennik/metadane APFS dopisywane bez przerwy przez caly czas trwania
@@ -62,6 +79,17 @@ public enum MountService {
     let localDir = CMPaths.localMachineMountDir(machineKey: machineKey)
     let spMount = CMPaths.sparsebundleMountDir(machineKey: machineKey)
 
+    // WAZNE: ustawiamy TU, na samym poczatku KAZDEJ proby (nie tylko przy
+    // sukcesie na koncu funkcji, jak bylo wczesniej) - `mountDesired` ma
+    // wyrazac ZAMIAR ("chcemy, zeby to bylo zamontowane"), nie WYNIK
+    // ostatniej proby. Ustawianie go tylko przy sukcesie oznaczalo, ze
+    // KAZDA nieudana proba (np. przejsciowy blad API Google Drive) gasila
+    // ten flag na trwale, a poniewaz kazdy watchdog zaczyna od `guard
+    // mountDesired else { return }`, cala automatyczna naprawa milczaco
+    // przestawala dzialac do konca sesji - bez tego wpisu w logu i bez
+    // zadnej notyfikacji (zaobserwowane jako realne ryzyko w audycie).
+    RuntimeState.setMountDesired(true)
+
     try? FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
 
     let nfsMounted = await MountHealth.isMounted(localDir.path)
@@ -75,37 +103,54 @@ public enum MountService {
     // 1. Sprawdzamy, czy sparsebundle istnieje na Google Drive (PRZED
     // montowaniem NFS, zeby uniknac problemow z cache i zapisu plikow
     // konfiguracyjnych bezposrednio przez NFS).
-    let sparsebundlePath = "\(remotePath)/backup.sparsebundle"
-    let listResult = try? await ProcessRunner.runRclone(["lsf", sparsebundlePath])
-    // WAZNE: `try?`/`succeeded != true` NIE ROZROZNIA "sprawdzenie sie nie
-    // udalo" (blad sieci, przejsciowy 429 z Google Drive API, timeout) od
-    // "potwierdzone, ze pusto/nie istnieje". Traktowanie porazki sprawdzenia
-    // jako "nie istnieje" jest niebezpieczne - ponizej kod TWORZY nowy pusty
-    // sparsebundle i `rclone copy` go NA WIERZCH istniejacej sciezki, co przy
-    // prawdziwym, w pelni przeslanym backupie nadpisuje/kasuje jego dane.
-    // Dlatego przerywamy montowanie zamiast zgadywac, gdy samo sprawdzenie
-    // zawiodlo - "nie wiem" nie moze pociagac za soba destrukcyjnej akcji.
-    guard let listResult else {
+    //
+    // WAZNE: listujemy KATALOG NADRZEDNY (`remotePath`, folder maszyny), NIE
+    // bezposrednio `remotePath/backup.sparsebundle`. `rclone lsf` na SCIEZCE,
+    // KTORA NIE ISTNIEJE, konczy sie bledem "directory not found" (exit != 0)
+    // - dokladnie tak samo, jak przy prawdziwym bledzie polaczenia/API. Gdyby
+    // listowac bezposrednio sparsebundle, nie dalo by sie odroznic "na pewno
+    // nie istnieje" (normalny, oczekiwany stan przy pierwszym backupie albo
+    // po celowym skasowaniu uszkodzonego sparsebundle) od "sprawdzenie sie
+    // nie udalo" (blad sieci/API) - a to rozroznienie jest krytyczne: pierwsze
+    // powinno pozwolic utworzyc nowy sparsebundle, drugie MUSI przerwac
+    // montowanie (patrz komentarz nizej o `rclone copy` nadpisujacym dane).
+    // Folder maszyny (`remotePath`) zwykle JUZ istnieje (od poprzednich
+    // uploadow), ale przy zupelnie pierwszym backupie danej maszyny tez moze
+    // jeszcze nie istniec - stąd sprawdzamy tresc bledu, nie tylko exit code.
+    let listResult = try? await ProcessRunner.runRclone(["lsf", remotePath])
+    let sparsebundleExists: Bool
+    if let listResult, listResult.succeeded {
+      // `rclone lsf` na istniejacym katalogu listuje jego bezposrednie dzieci
+      // (foldery z koncowym "/") - sprawdzamy, czy "backup.sparsebundle/"
+      // jest wsrod nich. Sam pusty/nieistniejacy wpis w liscie (bez wlasnej
+      // zawartosci) traktujemy jako "nie istnieje", identycznie jak wczesniej.
+      let entries = listResult.stdout.split(separator: "\n").map {
+        $0.trimmingCharacters(in: .whitespacesAndNewlines)
+      }
+      sparsebundleExists = entries.contains("backup.sparsebundle/")
+    } else if let listResult,
+      listResult.stderr.localizedCaseInsensitiveContains("directory not found")
+    {
+      // Folder maszyny sam jeszcze nie istnieje na Google Drive - normalny
+      // stan przy pierwszym backupie tej maszyny, NIE blad. rclone tworzy
+      // brakujace foldery niejawnie przy pierwszym `copy`/`mkdir`.
+      sparsebundleExists = false
+    } else {
+      // WAZNE: kazdy INNY blad (siec, przejsciowy 429 z Google Drive API,
+      // timeout, thrown error z `try?`) NIE MOZE byc cicho potraktowany jako
+      // "nie istnieje" - ponizej kod TWORZY nowy pusty sparsebundle i
+      // `rclone copy` go NA WIERZCH istniejacej sciezki, co przy prawdziwym,
+      // w pelni przeslanym backupie nadpisuje/kasuje jego dane. Dlatego
+      // przerywamy montowanie zamiast zgadywac, gdy samo sprawdzenie
+      // zawiodlo z niejasnego powodu - "nie wiem" nie moze pociagac za soba
+      // destrukcyjnej akcji.
       CMLogger.log(
-        "BLAD: nie udalo sie sprawdzic czy sparsebundle istnieje w chmurze (blad polaczenia z rclone) - przerywam, zeby nie ryzykowac nadpisania istniejacego backupu."
+        "BLAD: nie udalo sie sprawdzic czy sparsebundle istnieje w chmurze (blad polaczenia/API rclone) - przerywam, zeby nie ryzykowac nadpisania istniejacego backupu. Sprobuje ponownie przy nastepnym cyklu."
       )
       return false
     }
-    guard listResult.succeeded else {
-      CMLogger.log(
-        "BLAD: 'rclone lsf' zakonczylo sie bledem podczas sprawdzania sparsebundle w chmurze - przerywam, zeby nie ryzykowac nadpisania istniejacego backupu. Sprobuje ponownie przy nastepnym cyklu."
-      )
-      return false
-    }
-    // `rclone lsf` zwraca exit 0 z PUSTYM stdout gdy folder istnieje, ale
-    // jest pusty (np. po `rclone delete` ktory zostawia katalog bez plikow).
-    // Pusty folder != istniejacy sparsebundle - trzeba sprawdzic czy lsf zwrocil
-    // jakikolwiek content (poprawny sparsebundle ZAWSZE ma co najmniej Info.plist).
-    // Bez tego warunku MountService pomijal tworzenie nowego sparsebundle i probowal
-    // zamontowac pusty folder -> "hdiutil: image not recognized" w nieskonczonosc.
-    let sparsebundleExists =
-      !listResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
+    let sparsebundlePath = "\(remotePath)/backup.sparsebundle"
     if !sparsebundleExists {
       guard let limitGB = config.limitGB(forMachineKey: machineKey) else {
         CMLogger.log("BLAD: maszyna '\(machineKey)' nie jest zdefiniowana w konfiguracji.")
@@ -165,7 +210,17 @@ public enum MountService {
         )
         alreadyRunning = true
       } else {
-        await MountHealth.stopTimeMachineIfRunning()
+        // WAZNE: jesli TM nie potwierdzi zatrzymania, PRZERYWAMY caly ten
+        // mount (NIE tylko pomijamy kill) - startowanie nowego demona obok
+        // (potencjalnie) wciaz zywego starego, ktory moze trzymac dirty
+        // cache z aktywnego zapisu, jest tym samym ryzykiem uszkodzenia
+        // kontenera APFS, ktoremu ta ochrona ma zapobiegac.
+        guard await MountHealth.stopTimeMachineIfRunning() else {
+          CMLogger.log(
+            "Przerywam montowanie - Time Machine nie zatrzymalo sie na czas. Sprobuje ponownie przy nastepnym cyklu."
+          )
+          return false
+        }
         await MountHealth.killRcloneForRemote(remotePath)
         await MountHealth.forceUnmount(localDir.path, timeoutS: 10)
       }
@@ -204,7 +259,12 @@ public enum MountService {
         alreadyRunning = false
         if attempt == 1 {
           CMLogger.log("Proba \(attempt) nie powiodla sie, sprzatam i probuje ponownie...")
-          await MountHealth.stopTimeMachineIfRunning()
+          guard await MountHealth.stopTimeMachineIfRunning() else {
+            CMLogger.log(
+              "Przerywam montowanie - Time Machine nie zatrzymalo sie na czas. Sprobuje ponownie przy nastepnym cyklu."
+            )
+            return false
+          }
           await MountHealth.forceUnmount(localDir.path, timeoutS: 10)
           await MountHealth.killRcloneForRemote(remotePath)
           try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -226,7 +286,6 @@ public enum MountService {
       CMLogger.log("NFS gotowy, montuje wirtualny dysk...")
       await mountSparsebundle(localDir: localDir, spMount: spMount)
       CMLogger.log("Narzedzie CloudMachine gotowe do pracy.")
-      RuntimeState.setMountDesired(true)
       await RuntimeState.startCaffeinate()
       return true
     } else {
@@ -315,13 +374,18 @@ public enum MountService {
   private static func startRcloneDaemon(remotePath: String, localDir: URL, bwLimitMbps: Int)
     async -> Bool
   {
+    // WAZNE: musi isc PRZED zbudowaniem/odpaleniem demona - patrz komentarz
+    // przy `freeRCPortIfStuck`. Bez tego druga proba w tej samej petli retry
+    // (patrz `mountLocked`) moze nie zdazyc zbindowac `--rc-addr`, co u
+    // rclone jest bledem KRYTYCZNYM dla calego demona, nie tylko dla RC.
+    await MountHealth.freeRCPortIfStuck()
     var args = [
       "nfsmount", remotePath, localDir.path,
       "--volname", "CloudMachine-\(localDir.lastPathComponent)",
       "--vfs-cache-mode", "full",
       "--vfs-cache-max-size", vfsCacheMaxSize(),
       "--vfs-cache-max-age", "72h",
-      "--vfs-write-back", rcloneVfsWriteBack,
+      "--vfs-write-back", "\(rcloneVfsWriteBackSeconds)s",
       "--dir-cache-time", "1h",
       "--poll-interval", "0",
       "--tpslimit", rcloneTpsLimit,
@@ -330,6 +394,19 @@ public enum MountService {
       "--log-level", "INFO",
       "--log-file", CMPaths.rcloneMountLogFile.path,
       "-o", "nolocks,locallocks",
+      // WAZNE: `--rc` CELOWO wylaczone (mimo ze `waitForRcloneUploadsToDrain`
+      // w MountHealth.swift jest juz na to gotowe) - `--rc`+`--daemon` w
+      // rclone v1.74.4 koliduje samo ze soba przy starcie: demon probuje
+      // zbindowac `--rc-addr` DWUKROTNIE (raz w procesie-monitorze, raz w
+      // odgałęzionym dziecku) i druga proba zawsze dostaje "address already
+      // in use", nawet na zupelnie nieuzywanym porcie - `daemon exited with
+      // error code 1`, cale montowanie (NIE tylko RC) pada. Potwierdzone
+      // empirycznie osobnym testowym mountem. `waitForRcloneUploadsToDrain`
+      // i tak nie blokuje (fail-open, gdy RC niedostepne), wiec kod dzialajacy
+      // przy tym demonie jest bezpieczny bez `--rc` - po prostu nie ma jak
+      // faktycznie sprawdzic kolejki. TODO: wlaczyc ponownie po znalezieniu
+      // dzialajacej kombinacji flag (np. bez `--daemon`, wlasny mechanizm
+      // uruchamiania w tle) lub po aktualizacji rclone.
       "--daemon",
     ]
     if let bwLimit = bwLimitArg(mbps: bwLimitMbps) {

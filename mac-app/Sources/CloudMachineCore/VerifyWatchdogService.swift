@@ -65,7 +65,7 @@ public enum VerifyWatchdogService {
 
     guard
       let listResult = try? await ProcessRunner.run(
-        "/usr/bin/tmutil", ["listbackups", "-d", spMount.path]),
+        "/usr/bin/tmutil", ["listbackups", "-d", spMount.path], timeout: 60),
       let latestBackup = listResult.stdout.split(separator: "\n").last
     else {
       CMLogger.log("[verify-watchdog] Brak backupow do zweryfikowania, pomijam ten przebieg.")
@@ -80,9 +80,12 @@ public enum VerifyWatchdogService {
     CMLogger.log(
       "[verify-watchdog] Weryfikuje sumy kontrolne najnowszego backupu: \(latestBackup) (moze potrwac dlugo)."
     )
-    let result = try? await ProcessRunner.runTmutilUnattended([
-      "verifychecksums", String(latestBackup),
-    ])
+    // WAZNE: timeout (patrz analogiczny komentarz w BackupVerifier) - bez
+    // niego zawieszony NFS moze zablokowac ten proces (i blokade urzadzenia,
+    // ktora trzyma) na stale, wylaczajac backup/quota/mount-watchdog na czas
+    // nieokreslony (zamiast na max. 15 min do przejecia blokady przez CMLock).
+    let result = try? await ProcessRunner.runTmutilUnattended(
+      ["verifychecksums", String(latestBackup)], timeout: 1800)
     if result?.succeeded == true {
       CMLogger.log("[verify-watchdog] OK: sumy kontrolne sie zgadzaja.")
     } else if result?.isSudoAuthFailure == true {
@@ -91,6 +94,17 @@ public enum VerifyWatchdogService {
       // realna niespojnosc danych za cos, co jest tylko brakiem uprawnien.
       CMLogger.log(
         "[verify-watchdog] BLAD: brak reguly sudoers dla 'tmutil verifychecksums' - skonfiguruj automatyczne przycinanie w GUI (albo dopisz regule recznie w /etc/sudoers.d/cloudmachine), zeby weryfikacja mogla dzialac bez nadzoru."
+      )
+    } else if result == nil {
+      // WAZNE: `result == nil` oznacza, ze proces w ogole nie zwrocil
+      // wyniku (timeout powyzej, mount odpadl w trakcie weryfikacji, blad
+      // uruchomienia) - to problem OPERACYJNY, NIE dowod na uszkodzone sumy
+      // kontrolne. Wczesniej ten przypadek wpadal w ta sama galaz co
+      // faktyczne niezgodnosci sum, wiec zwykly zanik mountu w trakcie
+      // wielogodzinnej weryfikacji strasyl uzytkownika falszywym alarmem o
+      // uszkodzonym backupie.
+      CMLogger.log(
+        "[verify-watchdog] BLAD: verifychecksums nie zakonczylo sie poprawnie (timeout lub mount odpadl w trakcie weryfikacji) - to problem operacyjny, nie potwierdzenie uszkodzonych danych. Sprobuje ponownie przy nastepnym cyklu."
       )
     } else {
       CMLogger.log(

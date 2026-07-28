@@ -90,14 +90,41 @@ public enum MountWatchdogService {
     CMLogger.log(
       "[mount-watchdog] Band '\(stuckBand)' jest modyfikowany czesciej niz okno ciszy rclone (vfs-write-back) i nigdy nie konczy uploadu - remontuje, zeby odswiezyc stan writeback (znany wzorzec rclone, patrz github.com/rclone/rclone#4763)."
     )
-    await UnmountService.unmountLocked(config: config, machineKey: machineKey)
-    _ = await MountService.mountLocked(config: config, machineKey: machineKey)
+    let didUnmount = await UnmountService.unmountLocked(
+      config: config, machineKey: machineKey, userInitiated: false)
+    guard didUnmount else {
+      // TM nie potwierdzilo zatrzymania - `unmountLocked` juz przerwalo sie
+      // bezpiecznie samo, wolumin zostal zamontowany tak jak byl. Nie ma co
+      // remontowac; sprobujemy ponownie przy nastepnym wykryciu (cooldown
+      // powyzej i tak ogranicza czestotliwosc tych probe).
+      CMLogger.log(
+        "[mount-watchdog] Remont zawieszonego banda odlozony - Time Machine nie zatrzymalo sie na czas."
+      )
+      return
+    }
+    let remounted = await MountService.mountLocked(config: config, machineKey: machineKey)
     _ = try? await ProcessRunner.run(
       "/usr/bin/osascript",
       [
         "-e",
         "display notification \"Wykryto zawieszony upload jednego z fragmentow dysku i zrestartowano polaczenie z chmura.\" with title \"CloudMachine\"",
       ])
+
+    // WAZNE: `tmutil stopbackup` (wewnatrz `unmountLocked` -> `stopTimeMachineIfRunning`)
+    // NIGDY sam z siebie nie wznawia backupu - bez tego wznowienie czekaloby
+    // na kolejny cykl backup-watchdoga (StartInterval 120s), czyli do 2 minut
+    // bezczynnosci PO KAZDYM cyklu tego remontu (a przy dlugim, w pelni
+    // pierwszym backupie zdarza sie to co ok. 15 minut). Skoro juz wiemy, ze
+    // TM bylo aktywne PRZED tym remontem (sprawdzone na gorze funkcji) i mount
+    // sie udal, wznawiamy od razu zamiast czekac na osobny watchdog.
+    guard remounted else { return }
+    let spMountPath = CMPaths.sparsebundleMountDir(machineKey: machineKey).path
+    guard let destID = await TimeMachineStatus.destinationID(forMountPointContaining: spMountPath)
+    else { return }
+    let result = try? await ProcessRunner.runTmutilUnattended(["startbackup", "-d", destID])
+    if result?.succeeded == true {
+      CMLogger.log("[mount-watchdog] Backup wznowiony od razu po remoncie zawieszonego banda.")
+    }
   }
 
   public static func run(config: MachinesConfig, machineKey: String) async {
@@ -223,23 +250,32 @@ public enum MountWatchdogService {
       // `killRcloneForRemote` dla samego NFS mogly wykonac sie bez ochrony -
       // dokladnie ten sam typ bledu, ktory ta funkcja ma zapobiegac (patrz
       // incydent z utrata ~49GB backupu).
-      await MountHealth.stopTimeMachineIfRunning(logPrefix: "[mount-watchdog] ")
-      if await MountHealth.isMounted(spMount.path) {
-        // WAZNE: jesli Time Machine akurat aktywnie pisze na ten wolumin,
-        // `hdiutil detach -force` w trakcie zapisu potrafi uszkodzic
-        // metadane sparsebundle - wtedy przy nastepnym mouncie wyglada to
-        // jak "zniknal z chmury" i cala historia backupu zaczyna sie od
-        // zera. Dajemy Time Machine szanse grzecznie sie zatrzymac, tak
-        // jak robi to rowniez `UnmountService` przy recznym odmontowaniu.
-        _ = try? await ProcessRunner.run("/usr/bin/hdiutil", ["detach", "-force", spMount.path])
-        await MountHealth.forceUnmount(spMount.path, timeoutS: 10)
-      }
-      await MountHealth.forceUnmount(localDir.path, timeoutS: 10)
-      await MountHealth.killRcloneForRemote(remotePath)
-      if await MountHealth.isMounted(localDir.path) {
-        CMLogger.log(
-          "[mount-watchdog] Punkt montowania nadal widnieje w tabeli po probie wymuszonego odmontowania - mount przeniesie go na bok i utworzy nowy."
-        )
+      // WAZNE: jesli TM NIE potwierdzi zatrzymania, NIE wolno kontynuowac
+      // ponizszego wymuszonego demontazu/killa w tym przebiegu - to byl
+      // dokladnie mechanizm, ktory realnie uszkodzil kontener APFS
+      // (zaobserwowane na zywo: "goracy" band z metadanymi APFS dotykany
+      // dziesiatki razy na sekunde nigdy nie dostaje szansy na upload,
+      // dopoki TM naprawde nie przestanie pisac). Watchdog po prostu
+      // sprobuje ponownie przy nastepnym cyklu (60s).
+      if await MountHealth.stopTimeMachineIfRunning(logPrefix: "[mount-watchdog] ") {
+        if await MountHealth.isMounted(spMount.path) {
+          // WAZNE: jesli Time Machine akurat aktywnie pisze na ten wolumin,
+          // `hdiutil detach -force` w trakcie zapisu potrafi uszkodzic
+          // metadane sparsebundle - wtedy przy nastepnym mouncie wyglada to
+          // jak "zniknal z chmury" i cala historia backupu zaczyna sie od
+          // zera. Dajemy Time Machine szanse grzecznie sie zatrzymac, tak
+          // jak robi to rowniez `UnmountService` przy recznym odmontowaniu.
+          // Timeout/fallback na wypadek zawieszonego NFS-a jest scentralizowany
+          // w `detachSparsebundle` (patrz komentarz przy jej definicji).
+          _ = await MountHealth.detachSparsebundle(spMount.path, force: true)
+        }
+        await MountHealth.forceUnmount(localDir.path, timeoutS: 10)
+        await MountHealth.killRcloneForRemote(remotePath)
+        if await MountHealth.isMounted(localDir.path) {
+          CMLogger.log(
+            "[mount-watchdog] Punkt montowania nadal widnieje w tabeli po probie wymuszonego odmontowania - mount przeniesie go na bok i utworzy nowy."
+          )
+        }
       }
     }
 
