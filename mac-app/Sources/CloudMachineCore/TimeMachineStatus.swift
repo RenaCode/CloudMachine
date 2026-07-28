@@ -87,6 +87,34 @@ public enum TimeMachineStatus {
     return nil
   }
 
+  /// Limit (GB) skonfigurowany dla celu TM pod danym punktem montowania -
+  /// parsuje linie "Quota" (np. "300 GB") z bloku znalezionego tak samo jak
+  /// w `destinationID`. `nil`, jesli TM nie raportuje limitu dla tego celu.
+  public static func destinationQuotaGB(forMountPointContaining mountPoint: String) async
+    -> Double?
+  {
+    guard let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["destinationinfo"])
+    else {
+      return nil
+    }
+    var found = false
+    for rawLine in result.stdout.split(separator: "\n") {
+      let line = String(rawLine)
+      if line.hasPrefix("Mount Point") {
+        found = line.contains(mountPoint)
+        continue
+      }
+      if found, line.hasPrefix("Quota") {
+        let parts = line.split(separator: ":", maxSplits: 1)
+        guard parts.count == 2 else { continue }
+        let valueText = parts[1].trimmingCharacters(in: .whitespaces)
+        let numberText = valueText.split(separator: " ").first.map(String.init) ?? valueText
+        return Double(numberText)
+      }
+    }
+    return nil
+  }
+
   /// Wszystkie zarejestrowane ID celow Time Machine - uzywane przez
   /// `LocalBackupService.setAsDestination` do usuniecia poprzednich celow
   /// przed zarejestrowaniem nowego (ta architektura utrzymuje dokladnie

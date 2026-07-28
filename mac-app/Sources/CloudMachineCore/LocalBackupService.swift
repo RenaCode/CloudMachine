@@ -48,15 +48,28 @@ public enum LocalBackupService {
         exists: false, mountPoint: nil, totalGB: nil, usedGB: nil, freeContainerGB: nil,
         destinationID: nil)
     }
-    let totalBytes = plist["TotalSize"] as? Double
-    let usedBytes = plist["VolumeUsedSpace"] as? Double
-    let freeBytes = plist["ContainerTotalFreeSpace"] as? Double ?? plist["FreeSpace"] as? Double
+    // WAZNE: `diskutil info -plist` NIE ma klucza "VolumeUsedSpace" (ani
+    // "ContainerTotalFreeSpace") dla wolumenu APFS - potwierdzone na zywo:
+    // te odczyty ZAWSZE zwracaly `nil`, przez co StatusView (ktore wymaga
+    // OBU `totalGB` i `usedGB` naraz do pokazania cokolwiek) zawsze
+    // pokazywalo "Brak lokalnego woluminu", mimo ze wolumin istnial i
+    // dzialal. Faktyczne wykorzystanie TEJ konkretnej objetosci to
+    // "CapacityInUse", a realnie wolne miejsce w kontenerze to
+    // "APFSContainerFree" - `TotalSize`/`Size` to pojemnosc CALEGO
+    // kontenera (dzielona ze wszystkimi wolumenami), nie limit tego
+    // wolumenu, wiec dla "total" wolimy limit TM z `tmutil destinationinfo`
+    // (Quota), jesli jest dostepny - duzo bardziej znaczacy dla uzytkownika
+    // niz surowa pojemnosc calego dysku.
+    let usedBytes = plist["CapacityInUse"] as? Double
+    let freeBytes = plist["APFSContainerFree"] as? Double
+    let quotaGB = await TimeMachineStatus.destinationQuotaGB(forMountPointContaining: mountPoint)
+    let totalGB = quotaGB ?? (plist["TotalSize"] as? Double).map { $0 / 1_073_741_824 }
     let destinationID = await TimeMachineStatus.destinationID(
       forMountPointContaining: mountPoint)
     return VolumeStatus(
       exists: true,
       mountPoint: mountPoint,
-      totalGB: totalBytes.map { $0 / 1_073_741_824 },
+      totalGB: totalGB,
       usedGB: usedBytes.map { $0 / 1_073_741_824 },
       freeContainerGB: freeBytes.map { $0 / 1_073_741_824 },
       destinationID: destinationID
@@ -112,6 +125,7 @@ public enum LocalBackupService {
         isSudoAuthFailure: result?.isSudoAuthFailure ?? false
       )
     }
-    return CMActionResult(succeeded: true, message: "Zarejestrowano \(mountPoint) jako cel Time Machine.")
+    return CMActionResult(
+      succeeded: true, message: "Zarejestrowano \(mountPoint) jako cel Time Machine.")
   }
 }

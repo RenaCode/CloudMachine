@@ -162,9 +162,11 @@ public enum CloudArchiveService {
     -> CMActionResult
   {
     guard
-      let result = await withCMLock("archive-watchdog", {
-        await archivePendingLocked(config: config, machineKey: machineKey)
-      })
+      let result = await withCMLock(
+        "archive-watchdog",
+        {
+          await archivePendingLocked(config: config, machineKey: machineKey)
+        })
     else {
       return CMActionResult(
         succeeded: false,
@@ -214,7 +216,8 @@ public enum CloudArchiveService {
         return CMActionResult(
           succeeded: false,
           message:
-            "Nie udalo sie zamontowac snapshotu \(name) do archiwizacji (mogl zostac usuniety przez Time Machine w miedzyczasie) - przerywam, zeby nie zerwac kolejnosci historii."
+            "Nie udalo sie zamontowac snapshotu \(name) do archiwizacji (mogl zostac usuniety"
+            + " przez Time Machine w miedzyczasie) - przerywam, zeby nie zerwac kolejnosci historii."
         )
       }
 
@@ -231,7 +234,8 @@ public enum CloudArchiveService {
         return CMActionResult(
           succeeded: false,
           message:
-            "Archiwizacja \(name) nie powiodla sie - przerywam, zeby nie zerwac kolejnosci historii. \(detail)"
+            "Archiwizacja \(name) nie powiodla sie - przerywam, zeby nie zerwac kolejnosci historii."
+            + " \(detail)"
         )
       }
       archived.insert(name)
@@ -242,7 +246,8 @@ public enum CloudArchiveService {
     }
 
     guard copiedCount > 0 else {
-      return CMActionResult(succeeded: true, message: "Wszystko juz zarchiwizowane, nic do zrobienia.")
+      return CMActionResult(
+        succeeded: true, message: "Wszystko juz zarchiwizowane, nic do zrobienia.")
     }
     return CMActionResult(
       succeeded: true, message: "Zarchiwizowano \(copiedCount) backup(ow) do Google Drive.")

@@ -19,7 +19,8 @@ struct VerifyBackup: AsyncParsableCommand {
 struct ArchiveNow: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "archive-now",
-    abstract: "Recznie kopiuje wszystkie jeszcze nie zarchiwizowane lokalne backupy na Google Drive."
+    abstract:
+      "Recznie kopiuje wszystkie jeszcze nie zarchiwizowane lokalne backupy na Google Drive."
   )
 
   func run() async throws {

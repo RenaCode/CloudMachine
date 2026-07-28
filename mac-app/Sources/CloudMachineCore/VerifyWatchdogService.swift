@@ -43,7 +43,8 @@ public enum VerifyWatchdogService {
       return
     }
     EdgeTriggeredLog.log(
-      marker: CMPaths.logDir.appendingPathComponent(".verify-watchdog-no-volume"), active: false, "")
+      marker: CMPaths.logDir.appendingPathComponent(".verify-watchdog-no-volume"), active: false,
+      "")
 
     // Nie przeszkadzamy aktywnemu backupowi.
     if await TimeMachineStatus.isRunning() { return }

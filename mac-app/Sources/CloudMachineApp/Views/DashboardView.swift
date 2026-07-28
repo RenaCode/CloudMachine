@@ -132,8 +132,8 @@ struct SidebarStatusFooter: View {
     let short = info?["CFBundleShortVersionString"] as? String
     let build = info?["CFBundleVersion"] as? String
     switch (short, build) {
-    case let (.some(s), .some(b)) where !s.isEmpty && !b.isEmpty: return "\(s) (build \(b))"
-    case let (.some(s), _) where !s.isEmpty: return s
+    case (.some(let s), .some(let b)) where !s.isEmpty && !b.isEmpty: return "\(s) (build \(b))"
+    case (.some(let s), _) where !s.isEmpty: return s
     default: return "dev"
     }
   }

@@ -424,7 +424,9 @@ final class CloudMachineController: ObservableObject {
       && mv -f \(tmpPath) /etc/sudoers.d/cloudmachine || { rm -f \(tmpPath); exit 1; }
       """
     _ = try await Shell.runPrivileged(command)
-    appendLog("Skonfigurowano uprawnienia sudoers dla tmutil, zawezone do lokalnego wolumnu CloudMachine.")
+    appendLog(
+      "Skonfigurowano uprawnienia sudoers dla tmutil, zawezone do lokalnego wolumnu CloudMachine."
+    )
   }
 
   /// macOS nie ma publicznego API do wprost odpytania "czy ta appka ma Pelny
