@@ -19,12 +19,11 @@ public struct MachinesConfig: Codable, Equatable {
   public var remoteName: String
   public var remoteRootFolder: String
   /// Limit predkosci wysylania rclone (Mbps - megabity/s, jak u dostawcow
-  /// internetu), przekazywany dalej jako `--bwlimit` (ktory oczekuje
-  /// megabajtow/s - konwersja w `MountService`). `0` = bez limitu. WAZNE:
-  /// to ustawienie jest per-Mac (wlasciwosc lacza tej konkretnej maszyny),
-  /// NIE per-wpis w `machines` (te opisuja wspoldzielony budzet Google
-  /// Drive) - dlatego zyje na najwyzszym poziomie configu, obok
-  /// `driveTotalGB`.
+  /// internetu), przekazywany jako `--bwlimit` (ktory oczekuje megabajtow/s).
+  /// `0` = bez limitu. NIEUZYWANE w obecnej architekturze lokalnego woluminu
+  /// APFS (nie ma juz mountu rclone do ograniczania) - pole zostaje w
+  /// schemacie configu na przyszlosc, gdy powstanie zadanie archiwizujace do
+  /// Google Drive, ktore znow bedzie potrzebowac limitu predkosci wysylania.
   public var bwLimitMbps: Int
   public var machines: [MachineEntry]
 

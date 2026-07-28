@@ -87,6 +87,25 @@ public enum TimeMachineStatus {
     return nil
   }
 
+  /// Wszystkie zarejestrowane ID celow Time Machine - uzywane przez
+  /// `LocalBackupService.setAsDestination` do usuniecia poprzednich celow
+  /// przed zarejestrowaniem nowego (ta architektura utrzymuje dokladnie
+  /// jeden aktywny lokalny cel, w przeciwienstwie do legacy podejscia).
+  public static func allDestinationIDs() async -> [String] {
+    guard let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["destinationinfo"]) else {
+      return []
+    }
+    var ids: [String] = []
+    for rawLine in result.stdout.split(separator: "\n") {
+      let line = String(rawLine)
+      guard line.hasPrefix("ID") else { continue }
+      let parts = line.split(separator: ":", maxSplits: 1)
+      guard parts.count == 2 else { continue }
+      ids.append(parts[1].trimmingCharacters(in: .whitespaces))
+    }
+    return ids
+  }
+
   public static func destinationInfoContains(_ needle: String) async -> Bool {
     guard let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["destinationinfo"]) else {
       return false

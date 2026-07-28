@@ -6,12 +6,25 @@ struct VerifyBackup: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "verify-backup",
     abstract:
-      "Pelna weryfikacja spojnosci najnowszego backupu (destinationinfo, listbackups, verifychecksums, rclone check)."
+      "Pelna weryfikacja spojnosci najnowszego backupu (destinationinfo, listbackups, verifychecksums)."
+  )
+
+  func run() async throws {
+    let result = await BackupVerifier.runFullCheck()
+    print(result.message)
+    if !result.succeeded { throw ExitCode.failure }
+  }
+}
+
+struct ArchiveNow: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "archive-now",
+    abstract: "Recznie kopiuje wszystkie jeszcze nie zarchiwizowane lokalne backupy na Google Drive."
   )
 
   func run() async throws {
     let (config, key) = await CLIContext.load()
-    let result = await BackupVerifier.runFullCheck(config: config, machineKey: key)
+    let result = await CloudArchiveService.archivePending(config: config, machineKey: key)
     print(result.message)
     if !result.succeeded { throw ExitCode.failure }
   }
@@ -20,25 +33,11 @@ struct VerifyBackup: AsyncParsableCommand {
 struct InstallLaunchd: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "install-launchd",
-    abstract:
-      "Generuje i instaluje agentow launchd (mount-watchdog, backup-watchdog, quota-watchdog, verify-watchdog)."
+    abstract: "Generuje i instaluje agentow launchd (verify-watchdog, archive-watchdog)."
   )
 
   func run() async throws {
     let result = await LaunchdInstaller.install()
-    print(result.message)
-    if !result.succeeded { throw ExitCode.failure }
-  }
-}
-
-struct SetupTimeMachine: AsyncParsableCommand {
-  static let configuration = CommandConfiguration(
-    commandName: "setup-timemachine",
-    abstract: "Rejestruje zamontowany sparsebundle jako cel Time Machine.")
-
-  func run() async throws {
-    let (_, key) = await CLIContext.load()
-    let result = await TimeMachineSetup.registerUnattended(machineKey: key)
     print(result.message)
     if !result.succeeded { throw ExitCode.failure }
   }

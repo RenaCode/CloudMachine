@@ -51,10 +51,6 @@ public enum CMPaths {
 
   public static var configPath: URL { appSupportDir.appendingPathComponent("machines.json") }
 
-  public static var mountDesiredStatePath: URL {
-    appSupportDir.appendingPathComponent("mount-desired.state")
-  }
-
   public static var logDir: URL {
     let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
     let dir = base.appendingPathComponent("Logs/CloudMachine")
@@ -63,20 +59,6 @@ public enum CMPaths {
   }
 
   public static var combinedLogFile: URL { logDir.appendingPathComponent("cloudmachine.log") }
-  public static var rcloneMountLogFile: URL { logDir.appendingPathComponent("rclone-mount.log") }
-  public static var caffeinatePidFile: URL { logDir.appendingPathComponent(".caffeinate.pid") }
-
-  public static var mountPointRoot: URL {
-    FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("CloudMachine-Mount")
-  }
-
-  public static func localMachineMountDir(machineKey: String) -> URL {
-    mountPointRoot.appendingPathComponent(machineKey)
-  }
-
-  public static func sparsebundleMountDir(machineKey: String) -> URL {
-    URL(fileURLWithPath: "/Volumes/CloudMachine-Backup-\(machineKey)")
-  }
 
   /// Sciezka do skompilowanej binarki `cloudmachine-agent`, ktora launchd ma
   /// wolac zamiast dawnych `.sh`. Rozwiazywana w 3 krokach:

@@ -162,18 +162,6 @@ public final class CMLock {
   }
 }
 
-/// Nazwa wspolnej blokady per-urzadzenie (maszyna), trzymana przez KAZDA
-/// operacje faktycznie mutujaca mount/sparsebundle - mount, unmount, naprawe
-/// watchdoga montowania, wznowienie backupu, przycinanie quoty i weryfikacje
-/// checksumow. Wczesniej kazda z tych piec operacji blokowala sie TYLKO przed
-/// samym soba (osobna nazwa na watchdog), co pozwalalo np. mount-watchdogowi
-/// wymusic odmontowanie sparsebundle w trakcie godzinami trwajacej weryfikacji
-/// (verify-watchdog) albo przycinania (quota-watchdog) - dokladnie ten sam typ
-/// bledu, ktory TimeMachineStatus.isRunning() w MountWatchdogService juz
-/// wczesniej naprawil, ale tylko wzgledem samego Time Machine, nie wzgledem
-/// pozostalych trzech watchdogow.
-public func deviceLockName(machineKey: String) -> String { "device-\(machineKey)" }
-
 /// Wykonuje `body` pod blokada `name`, zwalniajac ja automatycznie na wyjsciu
 /// (rowniez przy rzuconym bledzie) - odpowiednik `cm_acquire_lock` + `trap EXIT`.
 /// Zwraca `nil` bez wywolania `body`, jesli inna zywa instancja juz trzyma blokade.

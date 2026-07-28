@@ -19,7 +19,6 @@ struct DashboardView: View {
   enum Tab: Hashable {
     case status
     case wizard
-    case config
     case logs
   }
 
@@ -32,9 +31,6 @@ struct DashboardView: View {
           }
           NavigationLink(value: Tab.wizard) {
             Label("Kreator".localized, systemImage: "wand.and.stars")
-          }
-          NavigationLink(value: Tab.config) {
-            Label("Maszyny i limity".localized, systemImage: "macbook.and.iphone")
           }
           NavigationLink(value: Tab.logs) {
             Label("Logi systemowe".localized, systemImage: "doc.text.magnifyingglass")
@@ -56,8 +52,6 @@ struct DashboardView: View {
           StatusView()
         case .wizard:
           SetupWizardView()
-        case .config:
-          MachinesConfigView()
         case .logs:
           LogsView()
         }
@@ -89,7 +83,6 @@ struct DashboardView: View {
     switch tab {
     case .status: return "Stan systemu".localized
     case .wizard: return "Kreator konfiguracji".localized
-    case .config: return "Zarządzanie maszynami i limitami".localized
     case .logs: return "Logi konsoli".localized
     }
   }
@@ -100,27 +93,48 @@ struct SidebarStatusFooter: View {
   @State private var isPulse = false
 
   var body: some View {
-    HStack(spacing: 8) {
-      Circle()
-        .fill(statusColor)
-        .frame(width: 8, height: 8)
-        .scaleEffect(isPulse ? 1.25 : 0.8)
-        .opacity(isPulse ? 1.0 : 0.5)
-        .onAppear {
-          withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
-            isPulse = true
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 8) {
+        Circle()
+          .fill(statusColor)
+          .frame(width: 8, height: 8)
+          .scaleEffect(isPulse ? 1.25 : 0.8)
+          .opacity(isPulse ? 1.0 : 0.5)
+          .onAppear {
+            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+              isPulse = true
+            }
           }
-        }
 
-      VStack(alignment: .leading, spacing: 2) {
-        Text(statusText)
-          .font(.caption2.bold())
-        Text(subText)
-          .font(.system(size: 9))
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(statusText)
+            .font(.caption2.bold())
+          Text(subText)
+            .font(.system(size: 9))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        Spacer()
       }
-      Spacer()
+
+      Text("CloudMachine \(appVersionText)")
+        .font(.system(size: 9))
+        .foregroundStyle(.secondary.opacity(0.7))
+    }
+  }
+
+  /// "1.0.0 (build 42)" - `CFBundleShortVersionString`/`CFBundleVersion` z
+  /// Info.plist (podstawiane przez `build-app` z pliku `VERSION` i licznika
+  /// commitow - patrz `BuildAppCommand.swift`). Puste w `swift run`/testach,
+  /// gdzie nie ma prawdziwego bundla `.app` z wypelnionym Info.plist.
+  private var appVersionText: String {
+    let info = Bundle.main.infoDictionary
+    let short = info?["CFBundleShortVersionString"] as? String
+    let build = info?["CFBundleVersion"] as? String
+    switch (short, build) {
+    case let (.some(s), .some(b)) where !s.isEmpty && !b.isEmpty: return "\(s) (build \(b))"
+    case let (.some(s), _) where !s.isEmpty: return s
+    default: return "dev"
     }
   }
 
@@ -128,47 +142,33 @@ struct SidebarStatusFooter: View {
     if controller.status.errorMessage != nil {
       return .red
     }
-    switch controller.status.mountState {
-    case .mounted:
-      return .green
-    case .mounting:
-      return .orange
-    case .failed:
-      return .red
-    default:
+    if !controller.status.localVolume.exists {
       return .secondary
     }
+    return controller.status.timeMachineState == .registered ? .green : .orange
   }
 
   private var statusText: String {
     if controller.status.errorMessage != nil {
       return "Problem z konfiguracją".localized
     }
-    switch controller.status.mountState {
-    case .mounted:
-      return "Połączono z chmurą".localized
-    case .mounting:
-      return "Montowanie...".localized
-    case .failed:
-      return "Błąd montowania".localized
-    default:
-      return "Brak połączenia".localized
+    if !controller.status.localVolume.exists {
+      return "Brak lokalnego woluminu".localized
     }
+    return controller.status.timeMachineState == .registered
+      ? "Backup lokalny gotowy".localized : "Wolumin nie zarejestrowany".localized
   }
 
   private var subText: String {
     if let err = controller.status.errorMessage {
       return err
     }
-    switch controller.status.mountState {
-    case .mounted:
-      return "NFS wolumin gotowy".localized
-    case .mounting:
-      return "Nawiązywanie połączenia...".localized
-    case .failed(let err):
-      return err
-    default:
-      return "Dysk nie jest zamontowany".localized
+    guard controller.status.localVolume.exists else {
+      return "Utwórz wolumin w Kreatorze".localized
     }
+    if let used = controller.status.localVolume.usedGB {
+      return String(format: "%.1f GB na dysku lokalnym", used)
+    }
+    return "Wolumin lokalny istnieje".localized
   }
 }

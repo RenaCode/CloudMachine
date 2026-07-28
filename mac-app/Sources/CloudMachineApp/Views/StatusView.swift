@@ -26,30 +26,29 @@ struct StatusView: View {
             VStack(spacing: 12) {
               StatusRow(title: "Zależności (rclone)", status: dependencyStatus)
               StatusRow(title: "Konto Google Drive", status: driveConfigStatus)
-              StatusRow(title: "Wolumin NFS", status: mountStatus)
+              StatusRow(title: "Lokalny wolumin backupu", status: localVolumeStatus)
               StatusRow(title: "Time Machine", status: tmStatus)
-              StatusRow(title: "Watchdog montowania (launchd)", status: mountWatchdogStatus)
-              StatusRow(title: "Watchdog limitu miejsca (launchd)", status: watchdogStatus)
+              StatusRow(title: "Archiwizacja w chmurze", status: archiveStatus)
             }
           }
 
-          // Karta 2: Zużycie limitu maszyny
-          StatusCard(title: "Wykorzystanie limitu", systemImage: "chart.bar.fill") {
+          // Karta 2: Zużycie lokalnego woluminu backupu
+          StatusCard(title: "Wykorzystanie dysku lokalnego", systemImage: "chart.bar.fill") {
             VStack(alignment: .leading, spacing: 14) {
-              if controller.status.quota.limitGB > 0 {
+              if let total = controller.status.localVolume.totalGB,
+                let used = controller.status.localVolume.usedGB
+              {
                 QuotaProgressGauge(
-                  usedGB: controller.status.quota.usedGB,
-                  limitGB: controller.status.quota.limitGB,
-                  fraction: controller.status.quota.fraction,
-                  isNearLimit: controller.status.quota.isNearLimit
+                  usedGB: used,
+                  limitGB: Int(total),
+                  fraction: controller.status.localVolume.usedFraction,
+                  isNearLimit: controller.status.localVolume.usedFraction >= 0.9
                 )
 
-                if let checked = controller.status.quota.lastChecked {
+                if let free = controller.status.localVolume.freeContainerGB {
                   HStack {
-                    Image(systemName: "clock")
-                    Text(
-                      "Ostatnia synchronizacja: \(checked.formatted(date: .abbreviated, time: .shortened))"
-                    )
+                    Image(systemName: "internaldrive")
+                    Text(String(format: "Realnie wolne miejsce na dysku: %.1f GB", free))
                   }
                   .font(.caption2)
                   .foregroundStyle(.secondary)
@@ -59,9 +58,9 @@ struct StatusView: View {
                   Image(systemName: "exclamationmark.circle")
                     .font(.title2)
                     .foregroundStyle(.secondary)
-                  Text("Brak przypisanego limitu")
+                  Text("Brak lokalnego woluminu")
                     .font(.headline)
-                  Text("Skonfiguruj nazwę i limit maszyny w zakładce Maszyny lub Kreator.")
+                  Text("Utwórz go w zakładce Kreator.")
                     .font(.caption)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
@@ -77,6 +76,38 @@ struct StatusView: View {
         // gdy Time Machine cos faktycznie kopiuje) - procent, dane, predkosc.
         if let progress = controller.status.backupProgress {
           BackupProgressCard(progress: progress)
+        }
+
+        // Karta 2c: Archiwizacja w chmurze - drugi poziom architektury
+        // (patrz README): kopiuje ukonczone lokalne backupy na Google Drive.
+        StatusCard(title: "Archiwizacja w chmurze", systemImage: "icloud.and.arrow.up") {
+          VStack(alignment: .leading, spacing: 10) {
+            if !controller.status.remoteConfigured {
+              Text("Połącz konto Google Drive w zakładce Kreator, żeby włączyć archiwizację.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else {
+              HStack {
+                Label(
+                  "\(controller.status.cloudArchive.archivedCount) zarchiwizowanych",
+                  systemImage: "checkmark.icloud")
+                Spacer()
+                Label(
+                  "\(controller.status.cloudArchive.pendingCount) oczekujących",
+                  systemImage: "arrow.up.circle")
+              }
+              .font(.caption)
+              .foregroundStyle(.secondary)
+
+              if let lastBackup = controller.status.cloudArchive.lastArchivedBackup {
+                Text("Ostatnio zarchiwizowany: \(lastBackup)")
+                  .font(.caption2)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(1)
+                  .truncationMode(.head)
+              }
+            }
+          }
         }
 
         // Karta 3: Ostatnie operacje (na całą szerokość)
@@ -96,37 +127,11 @@ struct StatusView: View {
               result: controller.status.lastVerify,
               placeholder: "Weryfikacja nie była jeszcze przeprowadzana."
             )
-          }
-        }
-
-        // Karta 4: aktywnosc watchdogow dzialajacych w tle przez launchd -
-        // odrebna od karty wyzej, bo ta pokazuje wylacznie akcje klikniete
-        // recznie W TEJ appce, a watchdogi dzialaja niezaleznie od tego,
-        // czy appka jest w ogole otwarta.
-        StatusCard(
-          title: "Automatyzacja w tle (watchdogi launchd)",
-          systemImage: "gearshape.arrow.triangle.2.circlepath"
-        ) {
-          VStack(spacing: 12) {
-            BackgroundActivityRow(
-              title: "Ostatnia naprawa montowania",
-              line: controller.status.backgroundActivity.lastMountRepair,
-              placeholder:
-                "Brak zarejestrowanej naprawy - montowanie jeszcze nigdy nie musiało być automatycznie odzyskiwane."
-            )
             Divider()
-            BackgroundActivityRow(
-              title: "Ostatnia automatyczna weryfikacja",
-              line: controller.status.backgroundActivity.lastVerify,
-              placeholder:
-                "Jeszcze nie wykonana - verify-watchdog uruchamia się raz na 7 dni (jeśli włączony w kroku 5 Kreatora)."
-            )
-            Divider()
-            BackgroundActivityRow(
-              title: "Ostatnie automatyczne wznowienie backupu",
-              line: controller.status.backgroundActivity.lastBackupResume,
-              placeholder:
-                "Backup nigdy nie musiał być automatycznie wznawiany przez backup-watchdog."
+            OperationResultRow(
+              title: "Archiwizacja na Google Drive",
+              result: controller.status.lastArchive,
+              placeholder: "Archiwizacja nie była jeszcze przeprowadzana."
             )
           }
         }
@@ -144,27 +149,6 @@ struct StatusView: View {
             .controlSize(.large)
 
             Button(action: {
-              Task {
-                if controller.status.mountState == .mounted {
-                  await controller.unmountNow()
-                } else {
-                  await controller.mountNow()
-                }
-              }
-            }) {
-              let label =
-                controller.status.mountState == .mounted ? "Odmontuj dysk" : "Zamontuj dysk"
-              let icon = controller.status.mountState == .mounted ? "eject.fill" : "play.fill"
-              Label(label, systemImage: icon)
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .tint(controller.status.mountState == .mounted ? .red : .accentColor)
-          }
-
-          HStack(spacing: 12) {
-            Button(action: {
               Task { await controller.verifyNow() }
             }) {
               Label("Weryfikuj sumy kontrolne", systemImage: "checkmark.shield")
@@ -172,8 +156,20 @@ struct StatusView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .disabled(controller.status.mountState != .mounted)
+            .disabled(!controller.status.localVolume.exists)
 
+            Button(action: {
+              Task { await controller.archiveNow() }
+            }) {
+              Label("Archiwizuj teraz", systemImage: "icloud.and.arrow.up")
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .disabled(!controller.status.remoteConfigured || !controller.status.localVolume.exists)
+          }
+
+          HStack(spacing: 12) {
             Button(action: {
               Task { await controller.startBackupNow() }
             }) {
@@ -182,7 +178,7 @@ struct StatusView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(controller.status.mountState != .mounted)
+            .disabled(controller.status.timeMachineState != .registered)
 
             Button(action: {
               Task { await controller.stopBackupNow() }
@@ -193,7 +189,7 @@ struct StatusView: View {
             .buttonStyle(.bordered)
             .controlSize(.large)
             .tint(.red)
-            .disabled(controller.status.mountState != .mounted)
+            .disabled(controller.status.timeMachineState != .registered)
           }
         }
         .disabled(controller.status.isBusy)
@@ -218,14 +214,8 @@ struct StatusView: View {
     controller.status.remoteConfigured ? .active("Połączone") : .inactive("Nieskonfigurowane")
   }
 
-  private var mountStatus: StatusType {
-    switch controller.status.mountState {
-    case .mounted: return .active("Zamontowany")
-    case .mounting: return .warning("Montowanie...")
-    case .notMounted: return .inactive("Odmontowany")
-    case .failed: return .error("Błąd")
-    case .unknown: return .inactive("Nieznany")
-    }
+  private var localVolumeStatus: StatusType {
+    controller.status.localVolume.exists ? .active("Utworzony") : .inactive("Nie istnieje")
   }
 
   private var tmStatus: StatusType {
@@ -236,12 +226,10 @@ struct StatusView: View {
     }
   }
 
-  private var watchdogStatus: StatusType {
-    controller.status.watchdogInstalled ? .active("Aktywny") : .inactive("Nieaktywny")
-  }
-
-  private var mountWatchdogStatus: StatusType {
-    controller.status.mountWatchdogInstalled ? .active("Aktywny") : .inactive("Nieaktywny")
+  private var archiveStatus: StatusType {
+    guard controller.status.remoteConfigured else { return .inactive("Nieskonfigurowane") }
+    let pending = controller.status.cloudArchive.pendingCount
+    return pending > 0 ? .warning("\(pending) oczekuje") : .active("Aktualne")
   }
 }
 
@@ -511,33 +499,6 @@ struct OperationResultRow: View {
           .foregroundStyle(.secondary)
           .italic()
           .padding(.vertical, 2)
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-}
-
-struct BackgroundActivityRow: View {
-  var title: String
-  var line: String?
-  var placeholder: String
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(title)
-        .font(.subheadline.bold())
-
-      if let line {
-        Text(line)
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(.secondary)
-          .textSelection(.enabled)
-          .fixedSize(horizontal: false, vertical: true)
-      } else {
-        Text(placeholder)
-          .font(.callout)
-          .foregroundStyle(.secondary)
-          .italic()
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)

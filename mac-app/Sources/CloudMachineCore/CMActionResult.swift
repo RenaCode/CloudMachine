@@ -6,9 +6,16 @@ import Foundation
 public struct CMActionResult {
   public var succeeded: Bool
   public var message: String
+  /// `true`, jesli `succeeded == false` konkretnie dlatego, ze brakowalo
+  /// reguly sudoers NOPASSWD (patrz `ProcessResult.isSudoAuthFailure`) - a
+  /// NIE dlatego, ze samo polecenie zawiodlo. Pozwala wywolujacemu (GUI)
+  /// odroznic "trzeba najpierw ustawic sudoers i sprobowac ponownie" od
+  /// prawdziwego bledu, zamiast zwracac uzytkownikowi martwy koniec.
+  public var isSudoAuthFailure: Bool
 
-  public init(succeeded: Bool, message: String) {
+  public init(succeeded: Bool, message: String, isSudoAuthFailure: Bool = false) {
     self.succeeded = succeeded
     self.message = message
+    self.isSudoAuthFailure = isSudoAuthFailure
   }
 }

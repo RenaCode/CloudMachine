@@ -53,21 +53,19 @@ struct MenuBarContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
       }
 
-      // Sekcja użycia limitu dyskowego
-      if controller.status.quota.limitGB > 0 {
+      // Sekcja wykorzystania lokalnego woluminu backupu
+      if let total = controller.status.localVolume.totalGB,
+        let used = controller.status.localVolume.usedGB
+      {
         VStack(alignment: .leading, spacing: 6) {
           HStack {
-            Text("Limit przestrzeni".localized)
+            Text("Lokalny wolumin".localized)
               .font(.caption)
               .foregroundStyle(.secondary)
             Spacer()
-            Text(
-              String(
-                format: "%.1f GB / %d GB", controller.status.quota.usedGB,
-                controller.status.quota.limitGB)
-            )
-            .font(.caption.bold())
-            .foregroundStyle(.primary)
+            Text(String(format: "%.1f GB / %.0f GB", used, total))
+              .font(.caption.bold())
+              .foregroundStyle(.primary)
           }
 
           GeometryReader { geo in
@@ -79,13 +77,15 @@ struct MenuBarContentView: View {
               Capsule()
                 .fill(
                   LinearGradient(
-                    colors: controller.status.quota.isNearLimit
+                    colors: controller.status.localVolume.usedFraction >= 0.9
                       ? [.orange, .red] : [.accentColor, .blue],
                     startPoint: .leading,
                     endPoint: .trailing
                   )
                 )
-                .frame(width: geo.size.width * CGFloat(controller.status.quota.fraction), height: 6)
+                .frame(
+                  width: geo.size.width * CGFloat(controller.status.localVolume.usedFraction),
+                  height: 6)
             }
           }
           .frame(height: 6)
@@ -149,21 +149,13 @@ struct MenuBarContentView: View {
   // MARK: - Pomocnicze zmienne statusu
 
   private var mountColor: Color {
-    switch controller.status.mountState {
-    case .mounted: return .green
-    case .mounting: return .orange
-    case .failed: return .red
-    default: return .secondary
-    }
+    guard controller.status.localVolume.exists else { return .secondary }
+    return controller.status.timeMachineState == .registered ? .green : .orange
   }
 
   private var mountLabel: String {
-    switch controller.status.mountState {
-    case .mounted: return "Połączono".localized
-    case .mounting: return "Łączenie...".localized
-    case .notMounted: return "Rozłączono".localized
-    case .failed: return "Błąd".localized
-    default: return "Nieznany".localized
-    }
+    guard controller.status.localVolume.exists else { return "Brak woluminu".localized }
+    return controller.status.timeMachineState == .registered
+      ? "Gotowy".localized : "Niezarejestrowany".localized
   }
 }

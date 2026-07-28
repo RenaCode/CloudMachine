@@ -1,9 +1,10 @@
 import Foundation
 
-/// Port `install-launchd.sh` - generuje pliki `.plist` z podstawiona sciezka
-/// do skompilowanej binarki `cloudmachine-agent` i instaluje je jako
-/// LaunchAgents (sesja zalogowanego uzytkownika - montowanie NFS musi dziac
-/// sie w kontekscie uzytkownika, nie systemowym).
+/// Generuje pliki `.plist` z podstawiona sciezka do skompilowanej binarki
+/// `cloudmachine-agent` i instaluje je jako LaunchAgents (sesja zalogowanego
+/// uzytkownika). W obecnej architekturze lokalnego woluminu APFS jedyny
+/// szablon to `verify-watchdog` - reszta (mount/backup/quota) byla
+/// specyficzna dla usunietej architektury sieciowego mountu NFS.
 public enum LaunchdInstaller {
   public static var launchAgentsDir: URL {
     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")

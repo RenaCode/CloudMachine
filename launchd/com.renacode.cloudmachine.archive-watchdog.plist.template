@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.renacode.cloudmachine.archive-watchdog</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__CM_AGENT_BIN__</string>
+    <string>archive-watchdog</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!--
+    Budzimy skrypt co godzine, zeby sprawdzil czy termin archiwizacji juz
+    minal - realna czestotliwosc (domyslnie raz na 6 godzin,
+    CM_ARCHIVE_INTERVAL_HOURS) pilnuje sam skrypt przez plik stanu, NIE ten
+    interwal - kopiowanie duzego backupu na Google Drive moze trwac dlugo,
+    wiec nie chcemy odpalac go czesciej niz trzeba.
+  -->
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>StandardOutPath</key>
+  <string>__CM_LOG_DIR__/launchd-archive-watchdog.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__CM_LOG_DIR__/launchd-archive-watchdog.err.log</string>
+</dict>
+</plist>

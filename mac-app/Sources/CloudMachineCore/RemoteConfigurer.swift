@@ -42,14 +42,16 @@ public enum RemoteConfigurer {
     ])
     guard mkdirResult?.succeeded == true else {
       // WAZNIE ZWRACAMY BLAD zamiast "sukces" tutaj - remote sam w sobie
-      // dziala (config create sie udalo), ale bez folderu tej maszyny
-      // pierwszy mount i tak musialby go sam utworzyc przez sciezke "brak
-      // sparsebundle w chmurze". Lepiej powiedziec uzytkownikowi wprost, ze
-      // cos nie do konca sie udalo, niz pokazac fikcyjny pelny sukces.
+      // dziala (config create sie udalo), ale bez folderu tej maszyny nie
+      // mamy jeszcze potwierdzenia, ze zapis na to konto Google Drive
+      // faktycznie dziala. Lepiej powiedziec uzytkownikowi wprost, ze cos
+      // nie do konca sie udalo, niz pokazac fikcyjny pelny sukces -
+      // `CloudArchiveService.archivePending` i tak sam utworzy ten folder
+      // przy pierwszym `rclone copy`, wiec archiwizacja nie jest zablokowana.
       return CMActionResult(
         succeeded: false,
         message:
-          "Polaczono z Google Drive, ale nie udalo sie utworzyc folderu maszyny '\(machineKey)' - sprobuj zamontowac recznie, mount sam go utworzy przy pierwszej probie."
+          "Polaczono z Google Drive, ale nie udalo sie utworzyc folderu maszyny '\(machineKey)' - sprobuj archiwizacji recznie (Archiwizuj teraz / cloudmachine-agent archive-now), ona sama utworzy folder przy pierwszej probie."
       )
     }
     return CMActionResult(

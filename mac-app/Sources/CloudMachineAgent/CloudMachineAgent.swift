@@ -7,17 +7,13 @@ struct CloudMachineAgent: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "cloudmachine-agent",
     abstract:
-      "CloudMachine - montowanie, watchdogi i instalacja. Wolane przez launchd na harmonogramie, albo recznie z Terminala.",
+      "CloudMachine - weryfikacja, konfiguracja Google Drive i instalacja. Wolane przez launchd na harmonogramie, albo recznie z Terminala.",
     subcommands: [
-      Mount.self,
-      Unmount.self,
-      MountWatchdog.self,
-      BackupWatchdog.self,
-      QuotaWatchdog.self,
       VerifyWatchdog.self,
       VerifyBackup.self,
+      ArchiveWatchdog.self,
+      ArchiveNow.self,
       InstallLaunchd.self,
-      SetupTimeMachine.self,
       ConfigureRemote.self,
       InstallDependencies.self,
       BuildApp.self,
