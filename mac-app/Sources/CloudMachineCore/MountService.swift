@@ -77,15 +77,34 @@ public enum MountService {
     // konfiguracyjnych bezposrednio przez NFS).
     let sparsebundlePath = "\(remotePath)/backup.sparsebundle"
     let listResult = try? await ProcessRunner.runRclone(["lsf", sparsebundlePath])
-    // WAZNE: `rclone lsf` zwraca exit 0 z PUSTYM stdout gdy folder istnieje,
-    // ale jest pusty (np. po `rclone delete` ktory zostawia katalog bez plikow).
+    // WAZNE: `try?`/`succeeded != true` NIE ROZROZNIA "sprawdzenie sie nie
+    // udalo" (blad sieci, przejsciowy 429 z Google Drive API, timeout) od
+    // "potwierdzone, ze pusto/nie istnieje". Traktowanie porazki sprawdzenia
+    // jako "nie istnieje" jest niebezpieczne - ponizej kod TWORZY nowy pusty
+    // sparsebundle i `rclone copy` go NA WIERZCH istniejacej sciezki, co przy
+    // prawdziwym, w pelni przeslanym backupie nadpisuje/kasuje jego dane.
+    // Dlatego przerywamy montowanie zamiast zgadywac, gdy samo sprawdzenie
+    // zawiodlo - "nie wiem" nie moze pociagac za soba destrukcyjnej akcji.
+    guard let listResult else {
+      CMLogger.log(
+        "BLAD: nie udalo sie sprawdzic czy sparsebundle istnieje w chmurze (blad polaczenia z rclone) - przerywam, zeby nie ryzykowac nadpisania istniejacego backupu."
+      )
+      return false
+    }
+    guard listResult.succeeded else {
+      CMLogger.log(
+        "BLAD: 'rclone lsf' zakonczylo sie bledem podczas sprawdzania sparsebundle w chmurze - przerywam, zeby nie ryzykowac nadpisania istniejacego backupu. Sprobuje ponownie przy nastepnym cyklu."
+      )
+      return false
+    }
+    // `rclone lsf` zwraca exit 0 z PUSTYM stdout gdy folder istnieje, ale
+    // jest pusty (np. po `rclone delete` ktory zostawia katalog bez plikow).
     // Pusty folder != istniejacy sparsebundle - trzeba sprawdzic czy lsf zwrocil
     // jakikolwiek content (poprawny sparsebundle ZAWSZE ma co najmniej Info.plist).
     // Bez tego warunku MountService pomijal tworzenie nowego sparsebundle i probowal
     // zamontowac pusty folder -> "hdiutil: image not recognized" w nieskonczonosc.
     let sparsebundleExists =
-      listResult?.succeeded == true
-      && !(listResult?.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+      !listResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
     if !sparsebundleExists {
       guard let limitGB = config.limitGB(forMachineKey: machineKey) else {
@@ -276,14 +295,20 @@ public enum MountService {
     }
   }
 
-  /// Konwertuje Mbps (megabity/s - jednostka, w ktorej dostawcy internetu
-  /// podaja predkosc lacza) na argument `--bwlimit` rclone, ktory oczekuje
-  /// megabajtow/s (dzielimy przez 8). `nil`, gdy limit wylaczony (<=0) - dla
-  /// symetrii z `Optional` zamiast magicznej wartosci w liscie argumentow.
+  /// Konwertuje Mbps (megabity/s dziesietnie - jednostka, w ktorej dostawcy
+  /// internetu podaja predkosc lacza, 1 Mbps = 1_000_000 b/s) na argument
+  /// `--bwlimit` rclone w BAJTACH/s (liczba bez sufiksu). WAZNE: rclone
+  /// interpretuje sufiksy "M"/"k"/"G" binarnie (1024^n), NIE dziesietnie -
+  /// gdyby przekazac np. "12.50M" dla 100 Mbps, rclone odczytalby to jako
+  /// 12.5 MiB/s (~13.1 MB/s), czyli limit ~4.9% wyzszy niz oczekiwany.
+  /// Podanie surowej liczby bajtow/s omija te niejednoznacznosc calkowicie
+  /// i jest przy tym dokladne (mbps * 125_000 to zawsze liczba calkowita).
+  /// `nil`, gdy limit wylaczony (<=0) - dla symetrii z `Optional` zamiast
+  /// magicznej wartosci w liscie argumentow.
   private static func bwLimitArg(mbps: Int) -> String? {
     guard mbps > 0 else { return nil }
-    let megabytesPerSecond = Double(mbps) / 8
-    return String(format: "%.2fM", megabytesPerSecond)
+    let bytesPerSecond = mbps * 125_000
+    return String(bytesPerSecond)
   }
 
   private static func startRcloneDaemon(remotePath: String, localDir: URL, bwLimitMbps: Int)

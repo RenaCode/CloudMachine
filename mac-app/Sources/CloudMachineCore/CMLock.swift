@@ -41,6 +41,23 @@ public final class CMLock {
       return false
     }
     writePid()
+    // WAZNE: `removeItem` + `createDirectory` powyzej NIE jest atomowe -
+    // dwa procesy przejmujace ta sama osierocona blokade w nakladajacym
+    // sie oknie moga obie odczytac "martwy PID", obie usunac i utworzyc
+    // katalog na nowo, obie zapisac swoj PID - i obie zwrocic `true`.
+    // Odczytujemy wlasnie zapisany plik z powrotem: jesli inny proces
+    // zdazyl go nadpisac swoim PID-em pomiedzy naszym `writePid()` a tym
+    // odczytem, wiemy, ze przegralismy wyscig, i wycofujemy sie zamiast
+    // dzialac w falszywym przekonaniu o wylacznosci. Nie eliminuje to
+    // calkowicie okna (obie strony moga jeszcze przejsciowo "wygrac" tuz
+    // przed ta weryfikacja), ale gwarantuje, ze co najmniej jedna z nich
+    // to wykryje i cofnie.
+    guard
+      let verifyPidString = try? String(contentsOf: pidFile, encoding: .utf8),
+      pid_t(verifyPidString.trimmingCharacters(in: .whitespacesAndNewlines)) == getpid()
+    else {
+      return false
+    }
     acquired = true
     return true
   }
@@ -57,27 +74,54 @@ public final class CMLock {
   /// (dogananie kolejki uploadow, weryfikacja checksumow mogace trwac godziny).
   private static let stuckLockThreshold: TimeInterval = 15 * 60  // 15 minut
 
+  /// Znacznik "od kiedy nieprzerwanie widzimy ten proces w stanie U/D" -
+  /// CELOWO osobny od mtime `lockDir` (czasu PRZEJECIA blokady). Legalna
+  /// dlugotrwala operacja (weryfikacja checksumow trwajaca godziny) moze
+  /// trzymac te sama blokade dlugo PRZED tym, jak w ogole wpadnie w U/D -
+  /// liczenie progu od czasu przejecia blokady (jak robil wczesniejszy kod)
+  /// zabija taki legalny, dlugo dzialajacy proces przy pierwszej probce w
+  /// U/D po uplywie progu, co jest dokladnie tym, przed czym ostrzega
+  /// komentarz w naglowku tego pliku (orphan detection PO PID, NIE po
+  /// wieku). Ten znacznik zapisujemy przy PIERWSZYM zaobserwowanym U/D i
+  /// kasujemy, gdy proces wroci do normalnego stanu - wiec mierzy faktyczny,
+  /// NIEPRZERWANY czas trwania zawieszenia.
+  private var stuckSinceFile: URL { lockDir.appendingPathComponent("stuck-since") }
+
   private func isProcessAlive(_ pid: pid_t) -> Bool {
     guard kill(pid, 0) == 0 else { return false }
 
     // Synchronicznie pobierz stan procesu z `ps`.
-    if let psState = processState(pid: pid) {
-      // Stan 'U' (macOS uninterruptible NFS wait) lub 'D' (Linux disk sleep)
-      // - oba oznaczaja zawieszenie w jadrze, z ktorego SIGKILL nie wybudza.
-      if psState.uppercased().hasPrefix("U") || psState.uppercased().hasPrefix("D") {
-        // Czy blokada czeka juz od ponad progu? mtime lock.d == czas przejecia.
-        if isLockDirOlderThan(seconds: Self.stuckLockThreshold) {
-          CMLogger.log(
-            "[CMLock] OSTRZEZENIE: PID \(pid) trzymajacy blokade '\(lockDir.lastPathComponent)'"
-              + " jest zawieszony w stanie U (NFS hang?) od ponad \(Int(Self.stuckLockThreshold/60)) min."
-              + " Przejmuje blokade. SIGKILL na zawieszony proces (ignorowany przez jadro, ale"
-              + " sprzatnie PID po odmontowaniu)."
-          )
-          kill(pid, SIGKILL)
-          return false
-        }
-      }
+    // Stan 'U' (macOS uninterruptible NFS wait) lub 'D' (Linux disk sleep)
+    // - oba oznaczaja zawieszenie w jadrze, z ktorego SIGKILL nie wybudza.
+    guard let psState = processState(pid: pid),
+      psState.uppercased().hasPrefix("U") || psState.uppercased().hasPrefix("D")
+    else {
+      // Proces dziala normalnie (albo `ps` chwilowo nie odpowiedzialo) -
+      // kasujemy znacznik, gdyby proces przejsciowo wpadl w U/D i wrocil.
+      try? FileManager.default.removeItem(at: stuckSinceFile)
+      return true
     }
+
+    if let stuckSinceString = try? String(contentsOf: stuckSinceFile, encoding: .utf8),
+      let stuckSinceEpoch = TimeInterval(
+        stuckSinceString.trimmingCharacters(in: .whitespacesAndNewlines))
+    {
+      let stuckDuration = Date().timeIntervalSince1970 - stuckSinceEpoch
+      guard stuckDuration > Self.stuckLockThreshold else { return true }
+      CMLogger.log(
+        "[CMLock] OSTRZEZENIE: PID \(pid) trzymajacy blokade '\(lockDir.lastPathComponent)'"
+          + " jest NIEPRZERWANIE zawieszony w stanie U/D (NFS hang?) od ponad"
+          + " \(Int(Self.stuckLockThreshold/60)) min. Przejmuje blokade. SIGKILL na zawieszony"
+          + " proces (ignorowany przez jadro, ale sprzatnie PID po odmontowaniu)."
+      )
+      kill(pid, SIGKILL)
+      try? FileManager.default.removeItem(at: stuckSinceFile)
+      return false
+    }
+    // Pierwsza probka w stanie U/D - zapisujemy poczatek okna i czekamy na
+    // kolejne probki, zanim uznamy proces za utkniety.
+    try? "\(Date().timeIntervalSince1970)".write(
+      to: stuckSinceFile, atomically: true, encoding: .utf8)
     return true
   }
 
@@ -98,17 +142,6 @@ public final class CMLock {
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     proc.waitUntilExit()
     return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  /// Zwraca `true` jesli katalog blokady (lock.d) ma mtime starszy niz `seconds`.
-  /// mtime katalogu == czas przejecia blokady przez mkdir() - nie jest pozniej
-  /// modyfikowany, dobrze sluzy jako znacznik czasu przejecia.
-  private func isLockDirOlderThan(seconds: TimeInterval) -> Bool {
-    guard
-      let attrs = try? FileManager.default.attributesOfItem(atPath: lockDir.path),
-      let mtime = attrs[.modificationDate] as? Date
-    else { return false }
-    return Date().timeIntervalSince(mtime) > seconds
   }
 
   private func writePid() {

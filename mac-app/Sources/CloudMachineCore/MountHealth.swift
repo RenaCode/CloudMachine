@@ -170,24 +170,36 @@ public enum MountHealth {
   /// sposob ~49GB juz przeslanego backupu w trakcie stall-retry). KAZDY
   /// wywolujacy kod, ktory moze zabic/wymusic odmontowanie rclone dla tego
   /// remote, powinien wywolac to NAJPIERW. `tmutil stopbackup` NIE wymaga sudo.
-  public static func stopTimeMachineIfRunning() async {
+  /// `logPrefix` pozwala wywolujacemu zachowac wlasna konwencje logow (np.
+  /// mount-watchdog prefiksuje kazda linie "[mount-watchdog] ") - bez tego
+  /// te linie wypadaly z atrybucji przy grepowaniu logu per-watchdog.
+  public static func stopTimeMachineIfRunning(logPrefix: String = "") async {
     guard await TimeMachineStatus.isRunning() else { return }
+    // WAZNE: celowo "przed wymuszonym odmontowaniem/zabiciem rclone", NIE
+    // "przed montowaniem" - ta funkcja jest wywolywana zarowno przed mount-
+    // owaniem (MountService), jak i przed czystym odmontowaniem
+    // (UnmountService) - wczesniejsza tresc mowila zawsze o "montowaniu",
+    // co bylo faktycznie mylace podczas odmontowania.
     CMLogger.log(
-      "Time Machine aktywnie kopiuje - zatrzymuje backup przed wymuszona operacja na montowaniu, zeby nie uszkodzic sparsebundle."
+      "\(logPrefix)Time Machine aktywnie kopiuje - zatrzymuje backup przed wymuszonym odmontowaniem/zabiciem rclone, zeby nie uszkodzic sparsebundle."
     )
     _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 20)
     var waited = 0
+    var stopped = false
     while waited < 30 {
-      if !(await TimeMachineStatus.isRunning()) { break }
+      if !(await TimeMachineStatus.isRunning()) {
+        stopped = true
+        break
+      }
       try? await Task.sleep(nanoseconds: 2_000_000_000)
       waited += 2
     }
-    if await TimeMachineStatus.isRunning() {
-      CMLogger.log(
-        "OSTRZEZENIE: Time Machine nie zatrzymalo sie po \(waited)s - kontynuuje mimo to, ryzyko uszkodzenia sparsebundle."
-      )
+    if stopped {
+      CMLogger.log("\(logPrefix)Backup zatrzymany po \(waited)s.")
     } else {
-      CMLogger.log("Backup zatrzymany po \(waited)s.")
+      CMLogger.log(
+        "\(logPrefix)OSTRZEZENIE: Time Machine nie zatrzymalo sie po \(waited)s - kontynuuje mimo to, ryzyko uszkodzenia sparsebundle."
+      )
     }
   }
 

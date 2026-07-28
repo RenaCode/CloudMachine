@@ -212,6 +212,18 @@ public enum MountWatchdogService {
     // jest zamontowane, NIE wolno tu z wyprzedzeniem zabijac rclone -
     // moglibysmy trafic w sam srodek juz trwajacego, zdrowego montowania.
     if nfsListed {
+      // WAZNE: wolamy to BEZWARUNKOWO, przed jakimkolwiek demontazem/killem
+      // ponizej - nie tylko przed `hdiutil detach` na sparsebundle. rclone
+      // moze trzymac brudny `--vfs-write-back` cache z wczesniejszego
+      // okresu, gdy sparsebundle BYL zamontowany i Time Machine aktywnie
+      // pisal, nawet jesli TERAZ (w tym przebiegu) `spMount` juz nie jest
+      // zamontowany - `killRcloneForRemote` ponizej i tak przerwie upload
+      // tych zaleglych danych. Wczesniej to wywolanie bylo zagniezdzone
+      // tylko w gałęzi `isMounted(spMount.path)`, wiec `forceUnmount`/
+      // `killRcloneForRemote` dla samego NFS mogly wykonac sie bez ochrony -
+      // dokladnie ten sam typ bledu, ktory ta funkcja ma zapobiegac (patrz
+      // incydent z utrata ~49GB backupu).
+      await MountHealth.stopTimeMachineIfRunning(logPrefix: "[mount-watchdog] ")
       if await MountHealth.isMounted(spMount.path) {
         // WAZNE: jesli Time Machine akurat aktywnie pisze na ten wolumin,
         // `hdiutil detach -force` w trakcie zapisu potrafi uszkodzic
@@ -219,7 +231,6 @@ public enum MountWatchdogService {
         // jak "zniknal z chmury" i cala historia backupu zaczyna sie od
         // zera. Dajemy Time Machine szanse grzecznie sie zatrzymac, tak
         // jak robi to rowniez `UnmountService` przy recznym odmontowaniu.
-        await MountHealth.stopTimeMachineIfRunning()
         _ = try? await ProcessRunner.run("/usr/bin/hdiutil", ["detach", "-force", spMount.path])
         await MountHealth.forceUnmount(spMount.path, timeoutS: 10)
       }

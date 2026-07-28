@@ -122,6 +122,25 @@ struct MachinesConfigView: View {
               )
               .font(.caption2)
               .foregroundStyle(.secondary)
+
+              // WAZNE: `--bwlimit` jest wpisywany w argumenty demona rclone
+              // TYLKO przy starcie (`startRcloneDaemon`) - nie ma interfejsu
+              // rc/reload, wiec zmiana suwaka NIE dziala na juz dzialajacy
+              // proces. Automatyczny remount przy kazdym tyknieciu suwaka
+              // podczas przeciagania bylby gorszy (wielokrotne, niepotrzebne
+              // przerywanie aktywnego backupu) - zamiast tego jawnie mowimy
+              // uzytkownikowi, kiedy zmiana faktycznie zacznie obowiazywac.
+              if controller.status.mountState == .mounted {
+                HStack(spacing: 4) {
+                  Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                  Text(
+                    "Zmiana zacznie obowiązywać po następnym odmontowaniu i zamontowaniu (ręcznym lub automatycznej naprawie)."
+                  )
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+              }
             }
 
             Divider()
