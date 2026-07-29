@@ -15,6 +15,12 @@ public enum CMLogger {
     let line = "[\(formatter.string(from: Date()))] \(message)\n"
     print(line, terminator: "")
     append(line, to: CMPaths.combinedLogFile)
+    // WAZNE: `rotateIfLarge` istnialo wczesniej w kodzie, ale nigdzie nie
+    // bylo wywolywane - `cloudmachine.log` rosl bez ograniczen (dokladnie
+    // ten scenariusz, ktory ta funkcja miala zapobiegac, patrz komentarz
+    // przy niej). Sprawdzenie rozmiaru pliku to tani `stat`, wiec robimy to
+    // przy kazdym wpisie zamiast polegac na pamieci, zeby to gdzies wywolac.
+    rotateIfLarge(CMPaths.combinedLogFile)
   }
 
   private static func append(_ text: String, to url: URL) {

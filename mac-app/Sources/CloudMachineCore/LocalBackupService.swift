@@ -35,7 +35,12 @@ public enum LocalBackupService {
 
   /// Sprawdza, czy wolumin o danej nazwie juz istnieje w podanym kontenerze.
   public static func currentStatus(volumeName: String = defaultVolumeName) async -> VolumeStatus {
-    let mountPoint = "/Volumes/\(volumeName)"
+    // Najpierw pytamy Time Machine o RZECZYWISTY zarejestrowany mount point -
+    // dziala niezaleznie od tego, jak nazwany jest wolumin. Zgadywanie po
+    // `volumeName` to tylko fallback na czas konfiguracji, zanim jakikolwiek
+    // cel zostanie zarejestrowany (patrz komentarz w TimeMachineStatus).
+    let mountPoint =
+      await TimeMachineStatus.currentDestinationMountPoint() ?? "/Volumes/\(volumeName)"
     guard
       let result = try? await ProcessRunner.run(
         "/usr/sbin/diskutil", ["info", "-plist", mountPoint], timeout: 15),

@@ -75,6 +75,19 @@ public enum CloudArchiveService {
     CMPaths.appSupportDir.appendingPathComponent("archive-snapshot-mount")
   }
 
+  /// Sprawdza, czy sciezka backupu zwrocona przez `tmutil listbackups` jest
+  /// JUZ bezposrednio czytelna bez wlasnego mountowania - na niektorych
+  /// wersjach/stanach macOS system SAM montuje niedawne lokalne snapshoty TM
+  /// pod ta sama sciezka (potwierdzone na zywo: `com.apple.TimeMachine.
+  /// <name>` bylo juz zamontowane przez system, wiec nasz wlasny
+  /// `mount_apfs -s` dostawal "Resource busy" - podwojne mountowanie tego
+  /// samego snapshotu, NIE dowod ze zostal usuniety - a kod mylnie
+  /// interpretowal kazde niepowodzenie mountowania jako "TM go juz skasowal"
+  /// i trwale blokowal archiwizacje).
+  private static func isDirectlyAccessible(path: String) -> Bool {
+    (try? FileManager.default.contentsOfDirectory(atPath: path))?.isEmpty == false
+  }
+
   /// Montuje snapshot APFS danego backupu (`com.apple.TimeMachine.<name>`)
   /// pod `snapshotMountDir`, zeby jego zawartosc byla widoczna dla zwyklych
   /// operacji na plikach (patrz uzasadnienie w komentarzu na gorze pliku).
@@ -211,8 +224,18 @@ public enum CloudArchiveService {
       let name = URL(fileURLWithPath: backupPath).lastPathComponent
       guard !archived.contains(name) else { continue }
 
-      guard let sourcePath = await mountSnapshot(backupName: name, volumeMountPoint: mountPoint)
-      else {
+      // Niektore wersje/stany macOS montuja niedawne lokalne snapshoty TM
+      // pod ta sama sciezka SAME - wtedy wlasny mount jest niepotrzebny i
+      // koliduje ("Resource busy"), patrz komentarz przy `isDirectlyAccessible`.
+      let usedCustomMount: Bool
+      let sourcePath: String
+      if isDirectlyAccessible(path: backupPath) {
+        usedCustomMount = false
+        sourcePath = backupPath
+      } else if let mounted = await mountSnapshot(backupName: name, volumeMountPoint: mountPoint) {
+        usedCustomMount = true
+        sourcePath = mounted
+      } else {
         return CMActionResult(
           succeeded: false,
           message:
@@ -226,8 +249,15 @@ public enum CloudArchiveService {
         copyArgs += ["--copy-dest", "\(remotePath)/\(previousArchivedName)"]
       }
       CMLogger.log("[cloud-archive] Kopiuje \(name) do \(remotePath)...")
-      let result = try? await ProcessRunner.runRclone(copyArgs, timeout: 6 * 3600)
-      await unmountSnapshot()
+      // Bez sztywnego limitu czasu - rozmiar backupu jest nieprzewidywalny,
+      // a przerwanie kopiowania w polowie (SIGKILL) zostawia niespojny stan
+      // (osierocony czesciowy folder na Drive, a przy pechowym timingu -
+      // niedomontowany lokalny wolumin, patrz incydent z 2026-07-29).
+      // ProcessRunner i tak czeka na realne zakonczenie procesu.
+      let result = try? await ProcessRunner.runRclone(copyArgs)
+      if usedCustomMount {
+        await unmountSnapshot()
+      }
 
       guard result?.succeeded == true else {
         let detail = result?.stderr.isEmpty == false ? result!.stderr : (result?.stdout ?? "")

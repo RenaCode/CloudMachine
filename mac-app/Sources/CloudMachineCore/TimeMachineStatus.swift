@@ -22,7 +22,16 @@ public enum TimeMachineStatus {
     guard let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["status"]) else {
       return false
     }
-    for line in result.stdout.split(separator: "\n") {
+    return isRunning(statusOutput: result.stdout)
+  }
+
+  /// Czysta funkcja parsujaca - wydzielona z `isRunning()`, zeby dalo sie ja
+  /// przetestowac bez `tmutil` na prawdziwym Maku (patrz `CooldownGate` dla
+  /// tego samego wzorca w tym projekcie). Cala logika parsujaca w tym pliku
+  /// wczesniej nie miala ani jednego testu, mimo ze to wlasnie tutaj (blednie
+  /// zgadywana nazwa wolumenu, kolizje mountowania) siedzialy realne bugi.
+  static func isRunning(statusOutput: String) -> Bool {
+    for line in statusOutput.split(separator: "\n") {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
       if trimmed.hasPrefix("Running") {
         return trimmed.contains("= 1")
@@ -39,10 +48,14 @@ public enum TimeMachineStatus {
     guard let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["status"]) else {
       return nil
     }
+    return currentProgress(statusOutput: result.stdout)
+  }
+
+  static func currentProgress(statusOutput: String) -> TimeMachineProgress? {
     var running = false
     var progress = TimeMachineProgress()
 
-    for rawLine in result.stdout.split(separator: "\n") {
+    for rawLine in statusOutput.split(separator: "\n") {
       let line = rawLine.trimmingCharacters(in: .whitespaces)
       guard let eqIndex = line.firstIndex(of: "=") else { continue }
       let key = line[line.startIndex..<eqIndex].trimmingCharacters(in: .whitespaces)
@@ -71,8 +84,14 @@ public enum TimeMachineStatus {
     guard let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["destinationinfo"]) else {
       return nil
     }
+    return destinationID(forMountPointContaining: mountPoint, destinationInfoOutput: result.stdout)
+  }
+
+  static func destinationID(forMountPointContaining mountPoint: String, destinationInfoOutput: String)
+    -> String?
+  {
     var found = false
-    for rawLine in result.stdout.split(separator: "\n") {
+    for rawLine in destinationInfoOutput.split(separator: "\n") {
       let line = String(rawLine)
       if line.hasPrefix("Mount Point") {
         found = line.contains(mountPoint)
@@ -97,8 +116,15 @@ public enum TimeMachineStatus {
     else {
       return nil
     }
+    return destinationQuotaGB(
+      forMountPointContaining: mountPoint, destinationInfoOutput: result.stdout)
+  }
+
+  static func destinationQuotaGB(
+    forMountPointContaining mountPoint: String, destinationInfoOutput: String
+  ) -> Double? {
     var found = false
-    for rawLine in result.stdout.split(separator: "\n") {
+    for rawLine in destinationInfoOutput.split(separator: "\n") {
       let line = String(rawLine)
       if line.hasPrefix("Mount Point") {
         found = line.contains(mountPoint)
@@ -115,6 +141,34 @@ public enum TimeMachineStatus {
     return nil
   }
 
+  /// Punkt montowania AKTUALNIE zarejestrowanego celu Time Machine
+  /// (architektura gwarantuje dokladnie jeden aktywny cel lokalny - patrz
+  /// LocalBackupService). Zwraca prawdziwa, zarejestrowana sciezke zamiast
+  /// zgadywac ja z domyslnej nazwy wolumenu - uzytkownik moze nazwac lokalny
+  /// wolumin dowolnie (np. recznie utworzona partycja "TimeMachine" zamiast
+  /// domyslnej "CloudMachine-Local"), a zgadywanie po nazwie bylo realnym
+  /// bugiem: po recznej zmianie nazwy wolumenu caly status GUI/watchdogow
+  /// pokazywal "brak lokalnego woluminu" / "TimeMachine niezarejestrowany",
+  /// mimo poprawnie dzialajacego, zarejestrowanego celu.
+  public static func currentDestinationMountPoint() async -> String? {
+    guard let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["destinationinfo"])
+    else {
+      return nil
+    }
+    return currentDestinationMountPoint(destinationInfoOutput: result.stdout)
+  }
+
+  static func currentDestinationMountPoint(destinationInfoOutput: String) -> String? {
+    for rawLine in destinationInfoOutput.split(separator: "\n") {
+      let line = String(rawLine)
+      guard line.hasPrefix("Mount Point") else { continue }
+      let parts = line.split(separator: ":", maxSplits: 1)
+      guard parts.count == 2 else { continue }
+      return parts[1].trimmingCharacters(in: .whitespaces)
+    }
+    return nil
+  }
+
   /// Wszystkie zarejestrowane ID celow Time Machine - uzywane przez
   /// `LocalBackupService.setAsDestination` do usuniecia poprzednich celow
   /// przed zarejestrowaniem nowego (ta architektura utrzymuje dokladnie
@@ -123,8 +177,12 @@ public enum TimeMachineStatus {
     guard let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["destinationinfo"]) else {
       return []
     }
+    return allDestinationIDs(destinationInfoOutput: result.stdout)
+  }
+
+  static func allDestinationIDs(destinationInfoOutput: String) -> [String] {
     var ids: [String] = []
-    for rawLine in result.stdout.split(separator: "\n") {
+    for rawLine in destinationInfoOutput.split(separator: "\n") {
       let line = String(rawLine)
       guard line.hasPrefix("ID") else { continue }
       let parts = line.split(separator: ":", maxSplits: 1)

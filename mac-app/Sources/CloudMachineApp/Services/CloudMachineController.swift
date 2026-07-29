@@ -408,9 +408,23 @@ final class CloudMachineController: ObservableObject {
   /// (Wykluczenia folderow z backupu sa celowo POZA CloudMachine - uzytkownik
   /// zarzadza nimi wprost w Ustawieniach systemowych -> Time Machine, wiec
   /// nie ma tu reguly dla `addexclusion`/`removeexclusion`.)
+  ///
+  /// WAZNE: sciezka glob musi odzwierciedlac RZECZYWISTY wolumin, nie
+  /// zakladana z gory nazwe - `LocalBackupService.currentStatus()` juz
+  /// prawidlowo wykrywa rzeczywisty zarejestrowany cel Time Machine (albo,
+  /// jesli jeszcze nic nie zarejestrowano, zgaduje po domyslnej nazwie na
+  /// czas pierwszej konfiguracji). Wczesniej ta funkcja uzywala WYLACZNIE
+  /// twardo zakodowanej `LocalBackupService.defaultVolumeName` - dzialalo to
+  /// tylko dopoki uzytkownik nie nazwal/nie zmienil nazwy woluminu inaczej
+  /// (zaobserwowane na zywo: po recznej zmianie nazwy na "TimeMachine" ta
+  /// reguła nie pasowalaby juz do prawdziwej sciezki, cicho psujac
+  /// bezobslugowe wywolania tmutil).
   private func ensureTmutilSudoersRule() async throws {
     let user = NSUserName()
-    let cmGlob = "/Volumes/\(LocalBackupService.defaultVolumeName)*"
+    let volumeMountPoint =
+      await LocalBackupService.currentStatus().mountPoint
+      ?? "/Volumes/\(LocalBackupService.defaultVolumeName)"
+    let cmGlob = "\(volumeMountPoint)*"
     let rules = [
       "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil setdestination -a \(cmGlob)",
       "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil startbackup *",

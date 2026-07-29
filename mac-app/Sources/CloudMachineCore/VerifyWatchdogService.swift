@@ -46,8 +46,21 @@ public enum VerifyWatchdogService {
       marker: CMPaths.logDir.appendingPathComponent(".verify-watchdog-no-volume"), active: false,
       "")
 
-    // Nie przeszkadzamy aktywnemu backupowi.
-    if await TimeMachineStatus.isRunning() { return }
+    // Nie przeszkadzamy aktywnemu backupowi. EdgeTriggeredLog (jak przy
+    // braku woluminu wyzej) - bez tego watchdog na Maku z bardzo czestymi
+    // backupami mogl(by) milczec bezterminowo, trafiajac za kazdym razem w
+    // trakcie aktywnego zapisu, bez zadnego sladu w logu.
+    if await TimeMachineStatus.isRunning() {
+      EdgeTriggeredLog.log(
+        marker: CMPaths.logDir.appendingPathComponent(".verify-watchdog-tm-running"),
+        active: true,
+        "[verify-watchdog] Time Machine aktywnie zapisuje, pomijam ten przebieg."
+      )
+      return
+    }
+    EdgeTriggeredLog.log(
+      marker: CMPaths.logDir.appendingPathComponent(".verify-watchdog-tm-running"), active: false,
+      "")
 
     let lastEpoch = CooldownGate.parseStateFile(stateFile)
     guard
@@ -71,8 +84,11 @@ public enum VerifyWatchdogService {
     CMLogger.log(
       "[verify-watchdog] Weryfikuje sumy kontrolne najnowszego backupu: \(latestBackup) (moze potrwac dlugo)."
     )
+    // Bez sztywnego limitu czasu - jak w komentarzu wyzej, weryfikacja moze
+    // legalnie trwac godziny przy duzym backupie; timeout tutaj tylko
+    // zabijalby prawidlowo dzialajacy proces w polowie.
     let result = try? await ProcessRunner.runTmutilUnattended(
-      ["verifychecksums", String(latestBackup)], timeout: 1800)
+      ["verifychecksums", String(latestBackup)])
     if result?.succeeded == true {
       CMLogger.log("[verify-watchdog] OK: sumy kontrolne sie zgadzaja.")
     } else if result?.isSudoAuthFailure == true {
@@ -84,10 +100,11 @@ public enum VerifyWatchdogService {
       )
     } else if result == nil {
       // WAZNE: `result == nil` oznacza, ze proces w ogole nie zwrocil
-      // wyniku (timeout powyzej, blad uruchomienia) - to problem
+      // wyniku (blad uruchomienia - brak timeoutu od kiedy usunieto sztywny
+      // limit, patrz komentarz przy wywolaniu wyzej) - to problem
       // OPERACYJNY, NIE dowod na uszkodzone sumy kontrolne.
       CMLogger.log(
-        "[verify-watchdog] BLAD: verifychecksums nie zakonczylo sie poprawnie (timeout lub blad uruchomienia) - to problem operacyjny, nie potwierdzenie uszkodzonych danych. Sprobuje ponownie przy nastepnym cyklu."
+        "[verify-watchdog] BLAD: verifychecksums nie zakonczylo sie poprawnie (blad uruchomienia) - to problem operacyjny, nie potwierdzenie uszkodzonych danych. Sprobuje ponownie przy nastepnym cyklu."
       )
     } else {
       CMLogger.log(

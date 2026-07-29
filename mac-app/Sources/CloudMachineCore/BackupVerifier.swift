@@ -22,11 +22,13 @@ public enum BackupVerifier {
   /// listbackups, verifychecksums (przez `sudo -n`, wymaga skonfigurowanej
   /// reguly sudoers).
   ///
-  /// WAZNE: nie ma tu (jeszcze) kroku porownania z Google Drive - w tej
-  /// architekturze lokalny wolumin APFS JEST zrodlem prawdy, a osobne
-  /// zadanie archiwizujace do chmury nie jest jeszcze zaimplementowane
-  /// (patrz README, sekcja o architekturze). Gdy powstanie, dostanie
-  /// wlasny krok weryfikacji tutaj.
+  /// WAZNE: nie ma tu kroku porownania z Google Drive - w tej architekturze
+  /// lokalny wolumin APFS JEST zrodlem prawdy, a archiwizacja do chmury
+  /// (`CloudArchiveService`, dzialajaca produkcyjnie) ma wlasny, osobny stan
+  /// (`archived-backups.json`) i wlasny watchdog (`archive-watchdog`) -
+  /// swiadomie POZA tym sprawdzeniem integralnosci lokalnego backupu, zeby
+  /// nie mieszac "czy lokalny backup jest spojny" z "czy zdazyl juz trafic
+  /// do chmury".
   public static func runFullCheck() async -> CMActionResult {
     let volume = await LocalBackupService.currentStatus()
     guard let mountPoint = volume.mountPoint, volume.exists else {
@@ -56,12 +58,14 @@ public enum BackupVerifier {
     CMLogger.log(
       "=== 3/3: weryfikacja sum kontrolnych najnowszego backupu: \(latestBackup) (moze potrwac dlugo) ==="
     )
+    // Bez sztywnego limitu czasu - weryfikacja duzego backupu moze legalnie
+    // trwac dlugo, timeout tutaj zabijalby prawidlowo dzialajacy proces.
     let verifyResult = try? await ProcessRunner.runTmutilUnattended(
-      ["verifychecksums", latestBackup], timeout: 1800)
+      ["verifychecksums", latestBackup])
     guard let verifyResult else {
       return CMActionResult(
         succeeded: false,
-        message: "verifychecksums nie odpowiedzialo (timeout lub blad uruchomienia procesu).")
+        message: "verifychecksums nie odpowiedzialo (blad uruchomienia procesu).")
     }
     // WAZNE: brak reguly sudoers NOPASSWD dla 'tmutil verifychecksums' NIE
     // jest tym samym co uszkodzony backup - to zwykly blad konfiguracji.

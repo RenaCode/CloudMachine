@@ -25,9 +25,9 @@ public final class CMLock {
     }
     // Katalog juz istnieje - sprawdzamy, czy wlasciciel wciaz zyje.
     let pidFile = lockDir.appendingPathComponent("pid")
-    if let pidString = try? String(contentsOf: pidFile, encoding: .utf8),
-      let pid = pid_t(pidString.trimmingCharacters(in: .whitespacesAndNewlines)),
-      isProcessAlive(pid)
+    if let content = try? String(contentsOf: pidFile, encoding: .utf8),
+      let pid = Self.parsePid(from: content),
+      isProcessAlive(pid, recordedStartTime: Self.parseStartTime(from: content))
     {
       return false
     }
@@ -53,8 +53,8 @@ public final class CMLock {
     // przed ta weryfikacja), ale gwarantuje, ze co najmniej jedna z nich
     // to wykryje i cofnie.
     guard
-      let verifyPidString = try? String(contentsOf: pidFile, encoding: .utf8),
-      pid_t(verifyPidString.trimmingCharacters(in: .whitespacesAndNewlines)) == getpid()
+      let verifyContent = try? String(contentsOf: pidFile, encoding: .utf8),
+      Self.parsePid(from: verifyContent) == getpid()
     else {
       return false
     }
@@ -87,8 +87,25 @@ public final class CMLock {
   /// NIEPRZERWANY czas trwania zawieszenia.
   private var stuckSinceFile: URL { lockDir.appendingPathComponent("stuck-since") }
 
-  private func isProcessAlive(_ pid: pid_t) -> Bool {
+  /// `recordedStartTime` to czas startu procesu-wlasciciela ZAPISANY w pliku
+  /// blokady w momencie jej przejecia (`writePid()`) - pozwala odroznic
+  /// "ten sam proces wciaz zyje" od "PID zostal juz ponownie uzyty przez
+  /// zupelnie inny, nowszy proces" (`kill(pid, 0) == 0` samo w sobie tego
+  /// nie odroznia - widzi TYLKO, ze COS zyje pod tym numerem PID). Ryzyko
+  /// jest bardzo niskie w praktyce (przestrzen PID jest duza, watchdogi
+  /// odpalaja sie rzadko), ale kosztuje niewiele do sprawdzenia. `nil` (plik
+  /// blokady zapisany przed wprowadzeniem tego pola, albo `ps` chwilowo nie
+  /// odpowiedzialo przy zapisie) pomija te dodatkowa weryfikacje zamiast
+  /// falszywie zaklada osierocenie.
+  private func isProcessAlive(_ pid: pid_t, recordedStartTime: String?) -> Bool {
     guard kill(pid, 0) == 0 else { return false }
+
+    if let recordedStartTime, !recordedStartTime.isEmpty,
+      let currentStartTime = Self.processStartTime(pid: pid),
+      currentStartTime != recordedStartTime
+    {
+      return false
+    }
 
     // Synchronicznie pobierz stan procesu z `ps`.
     // Stan 'U' (macOS uninterruptible NFS wait) lub 'D' (Linux disk sleep)
@@ -125,15 +142,17 @@ public final class CMLock {
     return true
   }
 
-  /// Synchroniczne uruchomienie `ps -p <pid> -o stat=` przez Process/Pipe.
-  /// Bezpieczne blokujace uzycie `readDataToEndOfFile()` bo `ps` ZAWSZE szybko
-  /// konczy i zamyka swoje FD - brak ryzyka wiecznego oczekiwania na EOF
-  /// (ten problem dotyczy wylacznie demonow takich jak rclone --daemon,
-  /// ktore forkuja dziecko dziedziczace FD i nigdy ich nie zamykaja).
-  private func processState(pid: pid_t) -> String? {
+  /// Synchroniczne uruchomienie `ps -p <pid> -o <format>` przez Process/Pipe -
+  /// wspoldzielone przez `processState` (`stat=`) i `processStartTime`
+  /// (`lstart=`). Bezpieczne blokujace uzycie `readDataToEndOfFile()` bo `ps`
+  /// ZAWSZE szybko konczy i zamyka swoje FD - brak ryzyka wiecznego
+  /// oczekiwania na EOF (ten problem dotyczy wylacznie demonow takich jak
+  /// rclone --daemon, ktore forkuja dziecko dziedziczace FD i nigdy ich nie
+  /// zamykaja).
+  private static func runPS(pid: pid_t, format: String) -> String? {
     let proc = Process()
     proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-    proc.arguments = ["-p", "\(pid)", "-o", "stat="]
+    proc.arguments = ["-p", "\(pid)", "-o", format]
     let pipe = Pipe()
     proc.standardOutput = pipe
     proc.standardError = FileHandle.nullDevice
@@ -141,12 +160,41 @@ public final class CMLock {
     guard (try? proc.run()) != nil else { return nil }
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     proc.waitUntilExit()
-    return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return (text?.isEmpty == false) ? text : nil
+  }
+
+  private func processState(pid: pid_t) -> String? {
+    Self.runPS(pid: pid, format: "stat=")
+  }
+
+  /// Czas startu procesu (np. "Wed Jul 29 09:07:59 2026") - unikalny "odcisk
+  /// palca" konkretnej instancji procesu pod danym PID-em, uzywany do
+  /// wykrywania ponownego uzycia PID-u (patrz `isProcessAlive`).
+  private static func processStartTime(pid: pid_t) -> String? {
+    runPS(pid: pid, format: "lstart=")
   }
 
   private func writePid() {
     let pidFile = lockDir.appendingPathComponent("pid")
-    try? "\(getpid())".write(to: pidFile, atomically: true, encoding: .utf8)
+    let pid = getpid()
+    let startTime = Self.processStartTime(pid: pid) ?? ""
+    try? "\(pid)\n\(startTime)".write(to: pidFile, atomically: true, encoding: .utf8)
+  }
+
+  private static func parsePid(from content: String) -> pid_t? {
+    guard let firstLine = content.split(separator: "\n", maxSplits: 1).first else { return nil }
+    return pid_t(firstLine.trimmingCharacters(in: .whitespacesAndNewlines))
+  }
+
+  /// `nil` dla plikow blokady zapisanych przed wprowadzeniem tego pola
+  /// (tylko jedna linia z PID-em) - `isProcessAlive` traktuje to jako brak
+  /// dodatkowej informacji, nie jako dowod ponownego uzycia PID-u.
+  private static func parseStartTime(from content: String) -> String? {
+    let lines = content.split(separator: "\n", maxSplits: 1)
+    guard lines.count == 2 else { return nil }
+    let trimmed = lines[1].trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
   }
 
   public func release() {
