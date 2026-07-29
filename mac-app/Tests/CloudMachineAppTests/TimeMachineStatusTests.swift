@@ -59,10 +59,10 @@ final class TimeMachineStatusTests: XCTestCase {
   func testCurrentProgress_copying_parsesFields() {
     let progress = TimeMachineStatus.currentProgress(statusOutput: copyingStatus)
     XCTAssertEqual(progress?.phase, "Copying")
-    XCTAssertEqual(progress?.bytes, 46755840)
-    XCTAssertEqual(progress?.totalBytes, 1596906082304)
+    XCTAssertEqual(progress?.bytes, 46_755_840)
+    XCTAssertEqual(progress?.totalBytes, 1_596_906_082_304)
     XCTAssertEqual(progress?.files, 83)
-    XCTAssertEqual(progress?.totalFiles, 3022847)
+    XCTAssertEqual(progress?.totalFiles, 3_022_847)
   }
 
   // Regresja dla bledu z 2026-07-29: kod wczesniej zgadywal mount point z

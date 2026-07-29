@@ -87,7 +87,9 @@ public enum TimeMachineStatus {
     return destinationID(forMountPointContaining: mountPoint, destinationInfoOutput: result.stdout)
   }
 
-  static func destinationID(forMountPointContaining mountPoint: String, destinationInfoOutput: String)
+  static func destinationID(
+    forMountPointContaining mountPoint: String, destinationInfoOutput: String
+  )
     -> String?
   {
     var found = false
