@@ -153,6 +153,17 @@ public final class CMLock {
     let proc = Process()
     proc.executableURL = URL(fileURLWithPath: "/bin/ps")
     proc.arguments = ["-p", "\(pid)", "-o", format]
+    // WAZNE: `ps` formatuje daty (np. `lstart=`) wedlug LC_TIME/LANG procesu,
+    // ktory go wywoluje - NIE tego, ktorego PID sprawdzamy. Bez wymuszenia
+    // stalego locale ten sam, zywy proces dostawal RUZNY tekst czasu startu
+    // w zaleznosci od tego, kto go sprawdzal (np. "sr. 29 lip 10:01:01 2026"
+    // z powloki uzytkownika z LANG=pl_PL.UTF-8, ale "Wed Jul 29 10:01:01
+    // 2026" z watchdoga odpalonego przez launchd z innym/domyslnym locale) -
+    // co `isProcessAlive` mylnie odczytywalo jako "PID zostal ponownie
+    // uzyty przez inny proces" i pozwalalo ukrasc blokade dalej zywemu
+    // procesowi. Zaobserwowane na zywo: dwa rownolegle `rclone copy` na ten
+    // sam cel. `LC_ALL=C` gwarantuje ten sam tekst niezaleznie od tego, kto pyta.
+    proc.environment = ["LC_ALL": "C"]
     let pipe = Pipe()
     proc.standardOutput = pipe
     proc.standardError = FileHandle.nullDevice
