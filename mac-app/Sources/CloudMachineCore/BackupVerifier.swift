@@ -79,6 +79,18 @@ public enum BackupVerifier {
       )
     }
     guard verifyResult.succeeded else {
+      // Niezerowy kod wyjscia NIE zawsze oznacza uszkodzone sumy kontrolne -
+      // moze to byc tez czysto operacyjny problem (dysk zniknal w trakcie
+      // weryfikacji: odlaczony dysk zewnetrzny, wybudzenie ze snu). Sprawdzamy
+      // wiec, czy wolumin nadal istnieje, zeby nie strasze uzytkownika
+      // falszywym "uszkodzony backup" za zwykly zanik polaczenia z dyskiem.
+      guard await LocalBackupService.currentStatus().exists else {
+        return CMActionResult(
+          succeeded: false,
+          message:
+            "verifychecksums nie powiodlo sie, ale wolumin lokalny zniknal w trakcie weryfikacji (dysk odlaczony/uspiony?) - to problem operacyjny, nie potwierdzenie uszkodzonych danych."
+        )
+      }
       return CMActionResult(
         succeeded: false, message: "verifychecksums zglosilo problem z backupem.")
     }

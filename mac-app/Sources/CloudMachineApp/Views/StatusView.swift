@@ -60,7 +60,7 @@ struct StatusView: View {
                     .foregroundStyle(.secondary)
                   Text("Brak lokalnego woluminu")
                     .font(.headline)
-                  Text("Utwórz go w zakładce Kreator.")
+                  Text("Zarejestruj dysk jako cel Time Machine w Ustawieniach systemowych.")
                     .font(.caption)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
@@ -117,12 +117,6 @@ struct StatusView: View {
         ) {
           VStack(spacing: 12) {
             OperationResultRow(
-              title: "Backup Time Machine",
-              result: controller.status.lastBackup,
-              placeholder: "Brak uruchomionych backupów w tej sesji aplikacji."
-            )
-            Divider()
-            OperationResultRow(
               title: "Weryfikacja spójności (checksums)",
               result: controller.status.lastVerify,
               placeholder: "Weryfikacja nie była jeszcze przeprowadzana."
@@ -132,6 +126,12 @@ struct StatusView: View {
               title: "Archiwizacja na Google Drive",
               result: controller.status.lastArchive,
               placeholder: "Archiwizacja nie była jeszcze przeprowadzana."
+            )
+            Divider()
+            OperationResultRow(
+              title: "Udostępnienie dysku w sieci",
+              result: controller.status.lastNetworkShare,
+              placeholder: "Udostępnianie sieciowe nie było jeszcze przeprowadzane."
             )
           }
         }
@@ -167,29 +167,6 @@ struct StatusView: View {
             .buttonStyle(.bordered)
             .controlSize(.large)
             .disabled(!controller.status.remoteConfigured || !controller.status.localVolume.exists)
-          }
-
-          HStack(spacing: 12) {
-            Button(action: {
-              Task { await controller.startBackupNow() }
-            }) {
-              Label("Backupuj teraz", systemImage: "icloud.and.arrow.up.fill")
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(controller.status.timeMachineState != .registered)
-
-            Button(action: {
-              Task { await controller.stopBackupNow() }
-            }) {
-              Label("Zatrzymaj backup", systemImage: "stop.circle")
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .tint(.red)
-            .disabled(controller.status.timeMachineState != .registered)
           }
         }
         .disabled(controller.status.isBusy)

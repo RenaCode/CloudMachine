@@ -1,13 +1,22 @@
+import CloudMachineCore
 import SwiftUI
 
 struct SetupWizardView: View {
   @EnvironmentObject private var controller: CloudMachineController
 
-  @State private var quotaGBText: String = "300"
+  @State private var selectedDiskID: String?
+  @State private var shareName: String = ""
 
-  private var isQuotaValid: Bool {
-    if let quota = Int(quotaGBText), quota >= 20 { return true }
-    return false
+  private var selectedDisk: DiskCandidate? {
+    controller.status.networkShare.candidateDisks.first { $0.id == selectedDiskID }
+  }
+
+  private func diskLabel(_ disk: DiskCandidate) -> String {
+    let kind = disk.isInternal ? "wewnętrzny" : "zewnętrzny"
+    if let totalGB = disk.totalGB {
+      return String(format: "%@ (%.0f GB, %@)", disk.name, totalGB, kind)
+    }
+    return "\(disk.name) (\(kind))"
   }
 
   var body: some View {
@@ -77,45 +86,74 @@ struct SetupWizardView: View {
           .disabled(!step2Allowed)
         }
 
-        // KROK 3: Utworzenie lokalnego woluminu i rejestracja w Time Machine
-        let step3Done =
-          controller.status.localVolume.exists && controller.status.timeMachineState == .registered
+        // KROK 3: Udostepnienie lokalnego dysku w sieci (SMB)
+        let step3Done = controller.status.lastNetworkShare?.succeeded == true
         WizardStepCard(
           number: 3,
-          title: "Utwórz lokalny dysk backupu i zarejestruj w Time Machine",
+          title: "Wybierz dysk i udostępnij go w sieci",
           status: step3Done ? .completed : .active,
           description:
-            "Tworzy prawdziwy lokalny wolumin APFS (nie sieciowy) jako cel Time Machine - to jest w 100% natywny, w pełni trwały backup. Rozmiar to sufit, nie gwarancja: faktyczna dostępna przestrzeń zależy od realnie wolnego miejsca na dysku. Chcesz wykluczyć foldery z backupu? Zrób to w Ustawieniach systemowych -> Time Machine -> Opcje."
+            "Wybierz lokalny dysk (np. podłączony dysk zewnętrzny) i udostępnij go przez SMB (File Sharing), żeby inny Mac w sieci lokalnej mógł go użyć jako własny cel Time Machine. Ten krok TYLKO włącza File Sharing i tworzy zwykły udział sieciowy - rejestrację jako cel Time Machine (dla tego i innych Maców) rób ręcznie w Ustawieniach systemowych -> Time Machine / Udostępnianie."
         ) {
           VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-              VStack(alignment: .leading, spacing: 4) {
-                Text("Rozmiar (GB):")
-                  .font(.caption.bold())
-                  .foregroundStyle(.secondary)
-                TextField("300", text: $quotaGBText)
-                  .textFieldStyle(.roundedBorder)
-                  .frame(width: 100)
-                  .disabled(controller.status.localVolume.exists)
-              }
-
-              Button(action: {
-                let quota = Int(quotaGBText) ?? 300
-                Task { await controller.createLocalVolumeAndRegister(quotaGB: quota) }
-              }) {
-                Label(
-                  step3Done ? "Gotowe" : "Utwórz i zarejestruj",
-                  systemImage: step3Done ? "checkmark.circle.fill" : "externaldrive.badge.plus"
+            if controller.status.networkShare.candidateDisks.isEmpty {
+              HStack(spacing: 12) {
+                Text(
+                  "Nie znaleziono żadnego dysku pod /Volumes poza dyskiem systemowym. Podłącz dysk zewnętrzny i odśwież."
                 )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: {
+                  Task { await controller.refreshNetworkShare() }
+                }) {
+                  Label("Odśwież", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
               }
-              .buttonStyle(.borderedProminent)
-              .disabled(!isQuotaValid || step3Done)
-            }
+            } else {
+              Picker("Dysk:", selection: $selectedDiskID) {
+                Text("Wybierz dysk...").tag(String?.none)
+                ForEach(controller.status.networkShare.candidateDisks) { disk in
+                  Text(diskLabel(disk)).tag(String?.some(disk.id))
+                }
+              }
+              .pickerStyle(.menu)
+              .frame(maxWidth: 380)
 
-            if !quotaGBText.isEmpty && !isQuotaValid {
-              Text("Wprowadź liczbę co najmniej 20 GB")
-                .font(.caption2)
-                .foregroundStyle(.red)
+              HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text("Nazwa udziału sieciowego:")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                  TextField("np. Network-MacBook", text: $shareName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
+                }
+
+                Button(action: {
+                  guard let disk = selectedDisk else { return }
+                  Task { await controller.shareDiskOverNetwork(disk: disk, shareName: shareName) }
+                }) {
+                  Label("Udostępnij w sieci", systemImage: "wifi")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                  selectedDisk == nil || shareName.trimmingCharacters(in: .whitespaces).isEmpty)
+              }
+
+              if !controller.status.networkShare.fileSharingEnabled {
+                Text("File Sharing jest obecnie wyłączony - zostanie włączony automatycznie.")
+                  .font(.caption2)
+                  .foregroundStyle(.secondary)
+              }
+
+              if let result = controller.status.lastNetworkShare {
+                Text(result.message)
+                  .font(.caption2)
+                  .foregroundStyle(result.succeeded ? .green : .red)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
             }
           }
         }

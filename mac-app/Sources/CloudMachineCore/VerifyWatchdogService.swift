@@ -106,6 +106,17 @@ public enum VerifyWatchdogService {
       CMLogger.log(
         "[verify-watchdog] BLAD: verifychecksums nie zakonczylo sie poprawnie (blad uruchomienia) - to problem operacyjny, nie potwierdzenie uszkodzonych danych. Sprobuje ponownie przy nastepnym cyklu."
       )
+    } else if !(await LocalBackupService.currentStatus().exists) {
+      // Wolumin zniknal w trakcie/po weryfikacji (odlaczony dysk zewnetrzny,
+      // wybudzenie ze snu, chwilowy problem polaczenia) - `verifychecksums`
+      // zwraca wtedy tez niezerowy kod wyjscia, nieodrozniajacy sie od
+      // prawdziwego uszkodzenia sum kontrolnych po samym exit code. Bez tego
+      // sprawdzenia kazdy taki, czysto operacyjny zanik dysku (bardziej
+      // prawdopodobny na dysku zewnetrznym niz na wewnetrznej partycji)
+      // wysylalby uzytkownikowi falszywa notyfikacje o uszkodzonym backupie.
+      CMLogger.log(
+        "[verify-watchdog] BLAD: wolumin lokalny zniknal podczas weryfikacji (dysk odlaczony/uspiony?) - to problem operacyjny, nie potwierdzenie uszkodzonych danych. Sprobuje ponownie przy nastepnym cyklu."
+      )
     } else {
       CMLogger.log(
         "[verify-watchdog] UWAGA: verifychecksums wykryto realny problem z sumami kontrolnymi backupu."

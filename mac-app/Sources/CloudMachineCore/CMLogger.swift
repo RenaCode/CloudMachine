@@ -26,6 +26,13 @@ public enum CMLogger {
   private static func append(_ text: String, to url: URL) {
     lock.lock()
     defer { lock.unlock() }
+    appendLocked(text, to: url)
+  }
+
+  /// Zaklada, ze `lock` jest juz przejety przez wywolujacego - wydzielone z
+  /// `append(_:to:)`, zeby `rotateIfLargeLocked` mogl dopisac swoj wlasny
+  /// komunikat bez ponownego (rekurencyjnego) `lock.lock()`.
+  private static func appendLocked(_ text: String, to url: URL) {
     guard let data = text.data(using: .utf8) else { return }
     if FileManager.default.fileExists(atPath: url.path) {
       if let handle = try? FileHandle(forWritingTo: url) {
@@ -44,10 +51,17 @@ public enum CMLogger {
   /// otwarty do dopisywania (O_APPEND) - po obcieciu jadro samo przesuwa
   /// nastepny zapis na nowy, mniejszy koniec pliku, wiec NIE trzeba
   /// restartowac tego procesu, zeby rotacja zadziala.
+  ///
+  /// WAZNE: chroniona tym samym `lock` co `append()` (wczesniej NIE byla) -
+  /// bez tego dwa watki w tym samym procesie logujace dokladnie w momencie
+  /// przekroczenia `maxBytes` moglyby rownolegle odczytac-przyciac-zapisac
+  /// ten sam plik bez koordynacji, gubiac swiezo dopisane linie.
   @discardableResult
   public static func rotateIfLarge(
     _ url: URL, maxBytes: Int = 200 * 1024 * 1024, keepLines: Int = 5000
   ) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
     guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
       let size = attrs[.size] as? Int, size > maxBytes
     else {
@@ -58,9 +72,13 @@ public enum CMLogger {
     let tail = lines.suffix(keepLines).joined(separator: "\n")
     do {
       try tail.write(to: url, atomically: false, encoding: .utf8)
-      log(
-        "Przycieto \(url.lastPathComponent) (bylo \(size) bajtow, zachowano ostatnie \(keepLines) linii)."
-      )
+      let formatter = DateFormatter()
+      formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+      let notice =
+        "[\(formatter.string(from: Date()))] Przycieto \(url.lastPathComponent)"
+        + " (bylo \(size) bajtow, zachowano ostatnie \(keepLines) linii).\n"
+      print(notice, terminator: "")
+      appendLocked(notice, to: url)
       return true
     } catch {
       return false

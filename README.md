@@ -6,7 +6,9 @@
 
 Native Time Machine backup for a Mac, with automatic offsite archiving to Google Drive.
 
-CloudMachine runs on a **two-tier architecture**: Time Machine backs up to a real local disk (fully durable, native macOS backup with full version history and Migration Assistant support), and a background job archives completed backups to Google Drive for offsite retention.
+CloudMachine runs on a **two-tier architecture**: Time Machine backs up to a real local disk (fully durable, native macOS backup with full version history and Migration Assistant support), and a background job archives completed backups to Google Drive for offsite retention. That same local disk can optionally be shared over the network (SMB), so a second Mac can use it as its own, independent Time Machine target.
+
+CloudMachine does not create or register the local Time Machine volume, or start/stop backups, itself — that's a deliberate choice, kept fully in your hands via the normal macOS tools (Disk Utility, *System Settings -> Time Machine*), so you're free to point it at any disk, internal or external. CloudMachine's job is what's hard to do by hand: cloud archiving, checksum verification, and (optionally) turning that disk into a network share for a second Mac.
 
 ---
 
@@ -20,31 +22,49 @@ CloudMachine runs on a **two-tier architecture**: Time Machine backs up to a rea
 
 ## 🚀 Setup
 
-The GUI Setup Wizard drives the whole setup in three steps: install dependencies, connect Google Drive, then create the local backup volume and register it as the Time Machine destination. Full Disk Access (see below) is required before the last step will succeed. Cloud archiving to Google Drive starts working automatically once it's connected.
+### 1. Create and register the local backup volume (manual, once)
 
-Want to exclude folders from the backup (VM disk images, container/Docker data, anything already synced elsewhere like iCloud Drive)? Use *System Settings -> Time Machine -> Options* directly — CloudMachine doesn't duplicate that.
+Do this first, with the normal macOS tools — CloudMachine only reads whatever is currently registered as the Time Machine destination, it doesn't create or register it:
 
-Equivalent manual steps, if you prefer the terminal:
-
-1.  **Create the local backup volume**, sized with a quota (a ceiling, not a guarantee — actual usable space is still capped by real free space in the container):
+*   **Disk Utility (GUI)**: format the disk — an internal partition, or a whole external drive (e.g. an SSD) — as APFS, then *System Settings -> Time Machine -> Add Backup Disk* and pick it.
+*   **Terminal**, for an internal partition sized with a quota (a ceiling, not a guarantee — actual usable space is still capped by real free space in the container):
     ```bash
     diskutil apfs list   # find your boot container's disk identifier, e.g. disk3
     diskutil apfs addVolume disk3 APFS "CloudMachine-Local" -quota 300G
-    ```
-2.  **Point Time Machine at it**:
-    ```bash
     sudo tmutil setdestination -a /Volumes/CloudMachine-Local
     ```
-3.  **Start a backup**: `tmutil startbackup --auto`. If it fails with `BACKUP_FAILED_TARGETVOL_DISK_FULL`, that's expected on a tightly-sized volume — Time Machine cleans up and retries automatically on its own schedule.
-4.  **Connect Google Drive**: `cloudmachine-agent configure-remote` (opens a browser for OAuth login).
-5.  **Enable cloud archiving**: `cloudmachine-agent install-launchd` installs the background agent that periodically copies completed backups to Google Drive. Trigger it manually any time with `cloudmachine-agent archive-now`.
+    For a whole external disk instead, erase it directly (⚠️ **destroys any existing data on that disk**):
+    ```bash
+    diskutil list external physical   # find the external disk's identifier, e.g. disk4
+    diskutil eraseDisk APFS "CloudMachine-Local" disk4
+    sudo tmutil setdestination -a /Volumes/CloudMachine-Local
+    ```
+
+Want to exclude folders from the backup (VM disk images, container/Docker data, anything already synced elsewhere like iCloud Drive)? Use *System Settings -> Time Machine -> Options*.
+
+Start a backup with `sudo tmutil startbackup --auto` (or just wait for Time Machine's own hourly schedule). If it fails with `BACKUP_FAILED_TARGETVOL_DISK_FULL`, that's expected on a tightly-sized volume — Time Machine cleans up and retries automatically.
+
+### 2. Let the GUI Setup Wizard handle the rest
+
+Full Disk Access (see below) is required for step 3 below (checksum verification).
+
+1.  **Install dependencies**: installs `rclone` via Homebrew.
+2.  **Connect Google Drive**: `cloudmachine-agent configure-remote` (opens a browser for OAuth login). Cloud archiving to Google Drive starts working automatically once connected.
+3.  **Pick a disk and share it over the network** (optional): lists local disks under `/Volumes` (excluding the boot disk), turns on File Sharing if it's off, and creates a plain SMB share via the public `sharing` tool. This is meant for a *second* Mac (e.g. a MacBook) to use the same physical disk as its own, independent network Time Machine target. CloudMachine deliberately stops at creating the SMB share — check "Share as a Time Machine backup destination" for it yourself in *System Settings -> General -> Sharing* (that specific mechanism isn't public API, so automating it would be a fragile dependency on the exact macOS version).
+
+    Equivalent manual commands for this step, if you prefer the terminal:
+    ```bash
+    sudo launchctl enable system/com.apple.smbd
+    sudo launchctl kickstart -k system/com.apple.smbd
+    sudo sharing -a /Volumes/YourDisk -S "ShareName" -s 001 -g 000
+    ```
 
 ---
 
 ## 🔒 Full Disk Access Requirements
 
 > [!IMPORTANT]
-> For security reasons, macOS requires **Full Disk Access (FDA)** permissions for processes managing backups and disk creation. Without this permission, the OS blocks the internal mechanisms of `tmutil` (registration/backup) and `diskutil`, resulting in errors like `Resource busy` or `setdestination requires Full Disk Access privileges`.
+> For security reasons, macOS requires **Full Disk Access (FDA)** permissions for processes reading/verifying Time Machine backups. Without this permission, the OS blocks the internal mechanisms of `tmutil`, resulting in errors like `Resource busy` or similar Full Disk Access errors.
 >
 > Add the **CloudMachine.app** (and **Terminal**, if you use the CLI) in *System Settings -> Privacy & Security -> Full Disk Access*.
 >
@@ -112,9 +132,9 @@ If `cloudmachine-agent verify-backup` reports a checksum error at any point, **s
 
 ---
 
-## 🔒 Passwordless `tmutil` Operations (sudoers)
+## 🔒 Passwordless `tmutil verifychecksums` (sudoers)
 
-The GUI configures this automatically the first time it needs a privileged `tmutil` call (registering the local volume, starting a backup, etc.) — one administrator password prompt, then it writes a `sudoers` rule with `NOPASSWD` for the specific `tmutil` subcommands it needs.
+`verifychecksums` is the only privileged `tmutil` subcommand CloudMachine itself still calls (registering the destination and starting/stopping backups are now manual steps — see Setup above). The GUI configures this automatically the first time verification is needed (GUI "Verify checksums" button, or the verify-watchdog) — one administrator password prompt, then it writes a `sudoers` rule with `NOPASSWD`, scoped to your local backup volume's actual path.
 
 Without the GUI (command-line installation), add this rule manually:
 
@@ -122,13 +142,10 @@ Without the GUI (command-line installation), add this rule manually:
 sudo visudo -f /etc/sudoers.d/cloudmachine
 ```
 
-Paste the following (replace `YOUR_USERNAME` with the output of `whoami`):
+Paste the following (replace `YOUR_USERNAME` with the output of `whoami`, and `/Volumes/CloudMachine-Local` with your actual local backup volume's path):
 
 ```
-YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/tmutil setdestination -a /Volumes/CloudMachine-Local*
-YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/tmutil startbackup *
 YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/tmutil verifychecksums /Volumes/CloudMachine-Local**
-YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/tmutil removedestination *
 ```
 
 ---

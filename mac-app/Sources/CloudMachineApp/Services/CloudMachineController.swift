@@ -168,6 +168,10 @@ final class CloudMachineController: ObservableObject {
 
   // MARK: - Lokalny wolumin backupu
 
+  /// CZYTA tylko aktualny stan lokalnego celu Time Machine - tworzenie
+  /// woluminu i rejestrowanie go jako cel TM to teraz krok wykonywany przez
+  /// uzytkownika samodzielnie (System Settings -> Time Machine), nie logika
+  /// tej apki (patrz `LocalBackupService`).
   func refreshLocalVolume() async {
     let volumeStatus = await LocalBackupService.currentStatus()
     status.localVolume = LocalVolumeStatus(
@@ -178,48 +182,6 @@ final class CloudMachineController: ObservableObject {
       freeContainerGB: volumeStatus.freeContainerGB
     )
     status.timeMachineState = volumeStatus.destinationID != nil ? .registered : .notRegistered
-  }
-
-  /// Tworzy lokalny wolumin (jesli jeszcze nie istnieje) i rejestruje go jako
-  /// cel Time Machine, w jednym kroku - odpowiednik dawnego "Zamontuj".
-  func createLocalVolumeAndRegister(quotaGB: Int) async {
-    guard !status.isBusy else { return }
-    clearError()
-    status.isBusy = true
-    defer { status.isBusy = false }
-
-    if !status.localVolume.exists {
-      status.busyLabel = "Tworze lokalny wolumin backupu (\(quotaGB)GB)..."
-      let createResult = await LocalBackupService.createVolume(quotaGB: quotaGB)
-      appendLog(createResult.message)
-      if !createResult.succeeded {
-        fail(createResult.message)
-        return
-      }
-    }
-
-    status.busyLabel = "Rejestruje wolumin jako cel Time Machine..."
-    var destResult = await LocalBackupService.setAsDestination()
-    if destResult.isSudoAuthFailure {
-      // Pierwsza uprzywilejowana operacja na swiezej instalacji - reguly
-      // sudoers jeszcze nie istnieja (patrz `ensureTmutilSudoersRule`,
-      // wczesniej wywolywana tylko z `runTmutilPrivileged`, ktorego ta
-      // sciezka wcale nie uzywala - `setAsDestination()` bez tego zawsze
-      // konczylo sie martwym koncem na czystym Maku). Ustawiamy reguly
-      // (jeden dialog autoryzacji administratora) i probujemy ponownie.
-      do {
-        try await ensureTmutilSudoersRule()
-        destResult = await LocalBackupService.setAsDestination()
-      } catch {
-        fail("Nie udalo sie skonfigurowac uprawnien sudo: \(error.localizedDescription)")
-        return
-      }
-    }
-    appendLog(destResult.message)
-    if !destResult.succeeded {
-      fail(destResult.message)
-    }
-    await refreshLocalVolume()
   }
 
   // MARK: - Time Machine
@@ -259,52 +221,54 @@ final class CloudMachineController: ObservableObject {
     )
   }
 
-  func startBackupNow() async {
-    guard !status.isBusy else { return }
-    clearError()
-    status.isBusy = true
-    status.busyLabel = "Uruchamiam backup Time Machine..."
-    defer { status.isBusy = false }
-    do {
-      let result = try await runTmutilPrivileged(["startbackup", "--auto"])
-      if result.succeeded {
-        status.lastBackup = LastRunResult(
-          succeeded: true,
-          message:
-            "Backup uruchomiony w tle, sledz postep w Ustawieniach systemowych -> Time Machine.",
-          date: Date())
-      } else {
-        let message = result.stderr.isEmpty ? result.stdout : result.stderr
-        status.lastBackup = LastRunResult(succeeded: false, message: message, date: Date())
-        fail("Blad uruchamiania backupu: \(message)")
-      }
-    } catch {
-      status.lastBackup = LastRunResult(
-        succeeded: false, message: error.localizedDescription, date: Date())
-      fail("Blad uruchamiania backupu: \(error.localizedDescription)")
-    }
+  // MARK: - Udostepnienie sieciowe (SMB)
+
+  func refreshNetworkShare() async {
+    status.networkShare = NetworkShareStatus(
+      candidateDisks: await NetworkShareService.candidateDisks(),
+      fileSharingEnabled: await NetworkShareService.isFileSharingEnabled()
+    )
   }
 
-  /// `tmutil stopbackup` NIE wymaga sudo (w przeciwienstwie do startbackup).
-  /// Bezpieczne wywolac nawet gdy akurat nic nie kopiuje.
-  func stopBackupNow() async {
+  /// Wlacza File Sharing (jesli jeszcze wylaczony) i dodaje `disk.mountPoint`
+  /// jako zwykly udzial SMB o nazwie `shareName`, bez dostepu goscia (host
+  /// backupu wymaga zalogowania sie kontem uzytkownika tego Maca). Oznaczenie
+  /// TEGO udzialu jako cel "Time Machine backup destination" jest swiadomie
+  /// POZOSTAWIONE uzytkownikowi jako ostatni, reczny krok w System Settings
+  /// -> General -> Sharing - patrz doc-comment `NetworkShareService`.
+  func shareDiskOverNetwork(disk: DiskCandidate, shareName: String) async {
     guard !status.isBusy else { return }
+    guard !shareName.trimmingCharacters(in: .whitespaces).isEmpty else {
+      fail("Podaj nazwe udzialu sieciowego.")
+      return
+    }
     clearError()
     status.isBusy = true
-    status.busyLabel = "Zatrzymuje backup Time Machine..."
+    status.busyLabel = "Udostepniam \(disk.name) w sieci..."
     defer { status.isBusy = false }
+
+    let path = shellSingleQuoteEscaped(disk.mountPoint)
+    let name = shellSingleQuoteEscaped(shareName)
+    let enablePrefix =
+      status.networkShare.fileSharingEnabled
+      ? ""
+      : "launchctl enable system/com.apple.smbd && launchctl kickstart -k system/com.apple.smbd && "
+    let command = "\(enablePrefix)/usr/sbin/sharing -a '\(path)' -S '\(name)' -s 001 -g 000"
+
     do {
-      let result = try await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 30)
-      if result.succeeded {
-        appendLog("Zatrzymano backup Time Machine.")
-      } else {
-        fail(
-          "Zatrzymanie backupu nie powiodlo sie: \(result.stderr.isEmpty ? result.stdout : result.stderr)"
-        )
-      }
+      let output = try await Shell.runPrivileged(command)
+      let message =
+        output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? "Udostepniono \"\(disk.name)\" w sieci jako \"\(shareName)\"."
+        : output
+      status.lastNetworkShare = LastRunResult(succeeded: true, message: message, date: Date())
+      appendLog("Udostepniono \(disk.mountPoint) w sieci jako \"\(shareName)\".")
     } catch {
-      fail("Blad zatrzymania backupu: \(error.localizedDescription)")
+      status.lastNetworkShare = LastRunResult(
+        succeeded: false, message: error.localizedDescription, date: Date())
+      fail("Nie udalo sie udostepnic dysku w sieci: \(error.localizedDescription)")
     }
+    await refreshNetworkShare()
   }
 
   // MARK: - Weryfikacja
@@ -397,17 +361,33 @@ final class CloudMachineController: ObservableObject {
       "/usr/bin/sudo", ["-n", "/usr/bin/tmutil"] + args, timeout: 300)
   }
 
-  /// Dopisuje wpisy sudoers (NOPASSWD) dla podkomend `tmutil` potrzebnych bez
-  /// interaktywnego hasla. `setdestination`/`verifychecksums` sa zawezone do
-  /// lokalnego wolumnu CloudMachine (glob na sciezce). `startbackup` i
-  /// `removedestination` NIE dadza sie tak zawezic wprost z ksztaltu ich
-  /// argumentow: `startbackup` nie przyjmuje celu, a `removedestination`
-  /// operuje na UUID celu (nie na sciezce - potrzebne w petli czyszczacej
-  /// stare cele w `LocalBackupService.setAsDestination()`) - zostaja
-  /// szerokim `*`, realny kompromis wynikajacy z API tmutil, nie przeoczenie.
-  /// (Wykluczenia folderow z backupu sa celowo POZA CloudMachine - uzytkownik
-  /// zarzadza nimi wprost w Ustawieniach systemowych -> Time Machine, wiec
-  /// nie ma tu reguly dla `addexclusion`/`removeexclusion`.)
+  /// Bezpiecznie osadza `value` wewnatrz pojedynczego `echo '...'` w
+  /// `command` w `ensureTmutilSudoersRule()` ponizej: zamyka biezacy
+  /// cudzyslow, wstawia znak `'` jako osobny, zescape'owany literal (`\'`),
+  /// po czym otwiera cudzyslow na nowo. Konieczne, bo `volumeMountPoint`/
+  /// `user` pochodza w koncu z nazwy dysku/konta, ktora uzytkownik moze
+  /// dowolnie zmienic (np. na "Mac Studio's Backup") - bez tego escape'owania
+  /// apostrof w tej nazwie wyrywalby sie z cudzyslowu w komendzie wykonywanej
+  /// przez `do shell script ... with administrator privileges` (patrz
+  /// `Shell.runPrivileged`, ktory escape'uje TYLKO `\` i `"` na potrzeby
+  /// samego AppleScriptu, nie pojedynczy cudzyslow uzywany tutaj przez
+  /// powloke) - realne ryzyko wykonania dowolnej komendy jako root z tresci
+  /// nazwy dysku.
+  private func shellSingleQuoteEscaped(_ value: String) -> String {
+    value.replacingOccurrences(of: "'", with: "'\\''")
+  }
+
+  /// Dopisuje wpis sudoers (NOPASSWD) dla `tmutil verifychecksums`, zawezony
+  /// do lokalnego wolumnu CloudMachine (glob na sciezce) - jedyna
+  /// uprzywilejowana podkomenda `tmutil`, ktorej ta apka jeszcze sama uzywa
+  /// (`verifyNow()`/`VerifyWatchdogService`). Rejestrowanie celu TM
+  /// (`setdestination`) i uruchamianie/zatrzymywanie backupu
+  /// (`startbackup`/`stopbackup`/`removedestination`) to teraz krok
+  /// wykonywany przez uzytkownika samodzielnie w Ustawieniach systemowych,
+  /// wiec te reguly zostaly usuniete - mniej uprawnien nadanych bez hasla,
+  /// tym lepiej. (Wykluczenia folderow z backupu sa tak samo celowo POZA
+  /// CloudMachine - uzytkownik zarzadza nimi wprost w Ustawieniach
+  /// systemowych -> Time Machine.)
   ///
   /// WAZNE: sciezka glob musi odzwierciedlac RZECZYWISTY wolumin, nie
   /// zakladana z gory nazwe - `LocalBackupService.currentStatus()` juz
@@ -420,16 +400,13 @@ final class CloudMachineController: ObservableObject {
   /// reguła nie pasowalaby juz do prawdziwej sciezki, cicho psujac
   /// bezobslugowe wywolania tmutil).
   private func ensureTmutilSudoersRule() async throws {
-    let user = NSUserName()
-    let volumeMountPoint =
+    let user = shellSingleQuoteEscaped(NSUserName())
+    let volumeMountPoint = shellSingleQuoteEscaped(
       await LocalBackupService.currentStatus().mountPoint
-      ?? "/Volumes/\(LocalBackupService.defaultVolumeName)"
+        ?? "/Volumes/\(LocalBackupService.defaultVolumeName)")
     let cmGlob = "\(volumeMountPoint)*"
     let rules = [
-      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil setdestination -a \(cmGlob)",
-      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil startbackup *",
-      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil verifychecksums \(cmGlob)*",
-      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil removedestination *",
+      "\(user) ALL=(root) NOPASSWD: /usr/bin/tmutil verifychecksums \(cmGlob)*"
     ]
     let tmpPath = "/etc/sudoers.d/.cloudmachine.tmp.$$"
     let writeBody = rules.map { "echo '\($0)'" }.joined(separator: "; ")
@@ -492,6 +469,7 @@ final class CloudMachineController: ObservableObject {
     await refreshLocalVolume()
     await refreshBackupProgress()
     await refreshCloudArchive()
+    await refreshNetworkShare()
     checkFullDiskAccess()
     refreshLogTail()
   }

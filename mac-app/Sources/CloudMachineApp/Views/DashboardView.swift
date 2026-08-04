@@ -164,7 +164,7 @@ struct SidebarStatusFooter: View {
       return err
     }
     guard controller.status.localVolume.exists else {
-      return "Utwórz wolumin w Kreatorze".localized
+      return "Zarejestruj dysk w Ustawieniach systemowych".localized
     }
     if let used = controller.status.localVolume.usedGB {
       return String(format: "%.1f GB na dysku lokalnym", used)

@@ -1,3 +1,4 @@
+import CloudMachineCore
 import Foundation
 
 enum DependencyState: Equatable {
@@ -35,6 +36,16 @@ struct LastRunResult: Equatable {
   var date: Date
 }
 
+/// Stan kroku "Udostepnij dysk w sieci" w Kreatorze - `candidateDisks` to
+/// dyski pod `/Volumes` do wyboru (patrz `NetworkShareService`),
+/// `fileSharingEnabled` odzwierciedla glowny przelacznik File Sharing w
+/// System Settings, niezaleznie od tego, czy jakikolwiek konkretny udzial
+/// juz istnieje.
+struct NetworkShareStatus: Equatable {
+  var candidateDisks: [DiskCandidate] = []
+  var fileSharingEnabled: Bool = false
+}
+
 /// Stan warstwy archiwizacji w chmurze (patrz `CloudArchiveService` -
 /// kopiuje ukonczone lokalne backupy na Google Drive w tle).
 struct CloudArchiveStatusInfo: Equatable {
@@ -65,10 +76,11 @@ final class AppStatus: ObservableObject {
   @Published var remoteConfigured: Bool = false
   @Published var localVolume = LocalVolumeStatus()
   @Published var timeMachineState: TimeMachineState = .unknown
-  @Published var lastBackup: LastRunResult?
   @Published var lastVerify: LastRunResult?
   @Published var lastArchive: LastRunResult?
+  @Published var lastNetworkShare: LastRunResult?
   @Published var cloudArchive = CloudArchiveStatusInfo()
+  @Published var networkShare = NetworkShareStatus()
   @Published var backupProgress: BackupProgressInfo?
   @Published var hasFullDiskAccess: Bool = false
   @Published var currentMachineKey: String = ""

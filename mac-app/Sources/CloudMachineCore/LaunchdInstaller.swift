@@ -2,9 +2,10 @@ import Foundation
 
 /// Generuje pliki `.plist` z podstawiona sciezka do skompilowanej binarki
 /// `cloudmachine-agent` i instaluje je jako LaunchAgents (sesja zalogowanego
-/// uzytkownika). W obecnej architekturze lokalnego woluminu APFS jedyny
-/// szablon to `verify-watchdog` - reszta (mount/backup/quota) byla
-/// specyficzna dla usunietej architektury sieciowego mountu NFS.
+/// uzytkownika) - instaluje generycznie KAZDY szablon `*.plist.template`
+/// znaleziony w `launchd/` (obecnie `verify-watchdog` i `archive-watchdog`).
+/// W usunietej wczesniejszej architekturze sieciowego mountu NFS istnialy tu
+/// dodatkowo szablony dla mount/backup/quota, ktore odpadly wraz z nia.
 public enum LaunchdInstaller {
   public static var launchAgentsDir: URL {
     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
