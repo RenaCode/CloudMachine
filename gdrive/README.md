@@ -134,6 +134,15 @@ pierwszego pelnego transferu:
 caffeinate -dims &
 ```
 
+## Zabezpieczenia przed zapetleniem
+
+Agent bufora ma `KeepAlive`, wiec kazdy blad startowy powtarzalby sie co 30 s
+w nieskonczonosc. `mount-drive.sh` sprawdza dlatego przed uruchomieniem, czy
+FUSE w ogole jest - bez tego rclone konczylby natychmiast bledem `cgofuse:
+cannot find FUSE`, a log rosl bez konca. Ten projekt ma juz za soba incydent
+logu na 3,3 GiB, wiec log rclone jest dodatkowo przycinany przy starcie po
+przekroczeniu 100 MB.
+
 ## Podglad
 
 ```sh
@@ -155,6 +164,11 @@ faktycznej zmiany. `BAND_MB` wybiera rozmiar pasma, `WORKLOAD` scenariusz
 
 `poc-pullplug.sh` - wyrywa warstwe chmurowa spod obrazu w trakcie zapisu
 i sprawdza, czy backup da sie odzyskac.
+
+`poc-launchd.sh` - laduje agenty z zaslepka w miejsce rclone i sprawdza, czy
+bufor wstaje, czy agent podpinajacy czeka na niego zamiast wyscigowac sie z nim
+i czy KeepAlive podnosi bufor po padnieciu. Uzywa wlasnych etykiet `poc-*`,
+wiec nie koliduje z produkcyjnymi agentami, i sprzata po sobie.
 
 `verify-image.sh` - sprawdza spojnosc obrazu przez `fsck_apfs`.
 

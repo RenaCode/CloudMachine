@@ -20,6 +20,22 @@ if [ ! -x "$CM_RCLONE" ]; then
   exit 1
 fi
 
+# Bez FUSE rclone konczy sie natychmiast bledem "cgofuse: cannot find FUSE".
+# Agent launchd ma KeepAlive, wiec probowalby w kolko co 30 s i zalewal log.
+# Ten projekt ma juz za soba incydent logu na 3,3 GiB - lepiej stanac od razu.
+if ! ls /usr/local/lib/libfuse-t.dylib /usr/local/lib/libfuse.2.dylib \
+        /Library/Filesystems/fuse-t.fs /usr/local/lib/libfuse.dylib >/dev/null 2>&1; then
+  echo "Nie znalazlem FUSE. Zainstaluj:" >&2
+  echo "  brew install macos-fuse-t/homebrew-cask/fuse-t" >&2
+  exit 1
+fi
+
+# rclone nie rotuje wlasnego logu. Przy dzialaniu ciaglym trzeba go przyciac
+# samemu, bo inaczej rosnie bez konca.
+if [ -f "$CM_LOG" ] && [ "$(stat -f%z "$CM_LOG")" -gt 104857600 ]; then
+  mv -f "$CM_LOG" "$CM_LOG.1"
+fi
+
 # Bufor trzyma kopie danych backupu. Gdyby Time Machine go objal, backupowalby
 # wlasny backup i rosl bez konca.
 tmutil addexclusion "$CM_ROOT" 2>/dev/null || true
