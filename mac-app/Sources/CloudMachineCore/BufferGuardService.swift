@@ -32,10 +32,17 @@ public actor BufferGuardService {
   }
 
   public enum State: String, Sendable {
+    /// Nadzorujemy trwajacy backup.
     case running
     case pausedForBuffer
     case pausedForQuota
-    case finished
+    /// Backup nie trwa - czuwamy do nastepnego.
+    ///
+    /// Dozorca NIE konczy pracy po skonczonym backupie. Dziala pod launchd
+    /// z KeepAlive, wiec wyjscie oznaczaloby natychmiastowy restart, a przy
+    /// niedzialajacym Time Machine - ciasna petle restartow ograniczana tylko
+    /// przez ThrottleInterval.
+    case idle
   }
 
   public struct Snapshot: Sendable {
@@ -47,7 +54,10 @@ public actor BufferGuardService {
   }
 
   private let thresholds: Thresholds
-  private var state: State = .running
+  private var state: State = .idle
+  /// Czy od ostatniego przejscia w czuwanie widzielismy dzialajacy backup -
+  /// zeby zameldowac zakonczenie raz, a nie przy kazdym tyknieciu.
+  private var sawBackupRunning = false
 
   public init(thresholds: Thresholds = Thresholds()) {
     self.thresholds = thresholds
@@ -97,26 +107,34 @@ public actor BufferGuardService {
     }
 
     switch state {
+    case .idle:
+      if running {
+        CMLogger.log("Backup ruszyl - nadzoruje bufor")
+        sawBackupRunning = true
+        state = .running
+      }
+
     case .running:
       if buffer >= thresholds.highGB || free <= thresholds.minFreeGB {
-        CMLogger.log(
-          "PAUZA: bufor \(buffer) GB, wolne \(free) GB - czekam na wysylke")
+        CMLogger.log("PAUZA: bufor \(buffer) GB, wolne \(free) GB - czekam na wysylke")
         await stopBackup()
         state = .pausedForBuffer
       } else if !running {
-        CMLogger.log("Time Machine zakonczyl. Bufor \(buffer) GB")
-        state = .finished
+        if sawBackupRunning {
+          CMLogger.log("Time Machine zakonczyl. Bufor \(buffer) GB")
+          sawBackupRunning = false
+        }
+        state = .idle
       }
 
     case .pausedForBuffer, .pausedForQuota:
+      // Wznawiamy dopiero, gdy wysylka faktycznie nadgonila - inaczej
+      // wpadlibysmy w oscylacje start/stop przy progu.
       if buffer <= thresholds.lowGB {
         CMLogger.log("WZNOWIENIE: bufor \(buffer) GB, wolne \(free) GB")
         await startBackup()
         state = .running
       }
-
-    case .finished:
-      break
     }
 
     return Snapshot(

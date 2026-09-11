@@ -13,7 +13,7 @@
 # przerwany, wznowi sie" a "backup stracony, zaczynamy od zera".
 
 set -euo pipefail
-source "$(dirname "$0")/cm-env.sh"
+source "$(dirname "$0")/poc-common.sh"
 
 POC_ROOT="${POC_ROOT:-/tmp/cm-plug}"
 BAND_MB="${BAND_MB:-64}"

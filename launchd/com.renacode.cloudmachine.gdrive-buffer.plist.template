@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.renacode.cloudmachine.gdrive-buffer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__CM_AGENT_BIN__</string>
+    <string>mount-drive</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!--
+    Bufor musi stac zawsze - to on trzyma cel Time Machine przy zyciu.
+    KeepAlive podnosi go po padnieciu i po wybudzeniu Maca.
+
+    Agent nie probuje w nieskonczonosc na oslep: `mount-drive` sprawdza
+    najpierw, czy jest rclone z obsluga montowania i czy jest FUSE, i konczy
+    od razu z komunikatem, jesli ktoregos brakuje. Bez tego kazdy brakujacy
+    element oznaczalby restart co 30 s i log rosnacy bez konca.
+  -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>__CM_LOG_DIR__/launchd-gdrive-buffer.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__CM_LOG_DIR__/launchd-gdrive-buffer.err.log</string>
+</dict>
+</plist>

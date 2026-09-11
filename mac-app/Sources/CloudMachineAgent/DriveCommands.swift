@@ -121,16 +121,9 @@ struct BufferGuard: AsyncParsableCommand {
     CMLogger.log(
       "Dozorca bufora: prog \(highGB) GB / wznowienie \(lowGB) GB / min. wolnego \(minFreeGB) GB")
 
+    // Bez konca: dozorca ma przezyc kazdy backup, nie tylko pierwszy.
     while true {
-      let snapshot = await guardService.step()
-      if snapshot.state == .finished {
-        CMLogger.log("Czekam na oproznienie bufora...")
-        while !(await DriveBufferService.queueStats()?.isQuiet ?? false) {
-          try? await Task.sleep(nanoseconds: 30_000_000_000)
-        }
-        CMLogger.log("Bufor oprozniony - wszystko na Google Drive.")
-        return
-      }
+      await guardService.step()
       try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
     }
   }

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.renacode.cloudmachine.buffer-guard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__CM_AGENT_BIN__</string>
+    <string>buffer-guard</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!--
+    Dozorca dziala bez konca i sam przechodzi w czuwanie miedzy backupami -
+    dlatego KeepAlive jest tu bezpieczne. Gdyby konczyl prace po kazdym
+    zakonczonym backupie, KeepAlive zamienilby to w petle restartow.
+  -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>StandardOutPath</key>
+  <string>__CM_LOG_DIR__/launchd-buffer-guard.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__CM_LOG_DIR__/launchd-buffer-guard.err.log</string>
+</dict>
+</plist>
