@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Podpina obraz jako cel Time Machine, gdy bufor juz stoi. Osobny agent, bo
+  kolejnosc jest istotna: obraz nie moze pojawic sie przed montowaniem Drive'a.
+  Skrypt sam czeka do 120 s na bufor, wiec wyscig przy starcie jest nieszkodliwy.
+
+  Instalacja: jak przy agencie gdrive, tylko z ta nazwa pliku.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.renacode.cloudmachine.gdrive-attach</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/gdrive/attach-image.sh</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Nie KeepAlive: podpiecie jest jednorazowe. Przy 15-minutowym
+         interwale agent sam naprawia sytuacje, gdy obraz zostal odpiety. -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/.cloudmachine/launchd-attach.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.cloudmachine/launchd-attach.err.log</string>
+</dict>
+</plist>
