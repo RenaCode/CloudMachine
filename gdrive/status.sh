@@ -20,7 +20,7 @@ fi
 
 echo
 echo "--- kolejka wysylki (rclone vfs/stats) ---"
-rclone rc --url 127.0.0.1:5572 --no-auth vfs/stats 2>/dev/null \
+"$CM_RCLONE" rc --url 127.0.0.1:5572 --no-auth vfs/stats 2>/dev/null \
   | grep -E '"(uploadsInProgress|uploadsQueued|files|erroredFiles|bytesUsed)"' \
   || echo "(rclone rc nieosiagalne - bufor nie dziala?)"
 

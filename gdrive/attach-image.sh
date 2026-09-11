@@ -27,6 +27,28 @@ if [ ! -d "$CM_IMAGE" ]; then
   exit 1
 fi
 
+# Zombie po poprzednim, nieczystym odpieciu blokuje ponowne podpiecie
+# komunikatem "no mountable file systems". Zaobserwowane w poc-pullplug.sh.
+if [ -n "$(cm_devices_for_image "$CM_IMAGE")" ]; then
+  echo "Usuwam zawieszone urzadzenia po poprzednim podpieciu"
+  cm_purge_stale_devices "$CM_IMAGE"
+  sleep 2
+fi
+
+# Osierocony punkt montowania po nieczystym odpieciu blokuje podpiecie.
+# Jesli lezy w /Volumes, usuniecie wymaga roota - dlatego mowimy dokladnie, co
+# uruchomic, zamiast ponawiac w nieskonczonosc.
+if [ -d "$CM_TARGET" ] && ! cm_is_attached; then
+  if rmdir "$CM_TARGET" 2>/dev/null; then
+    echo "Usunieto osierocony punkt montowania $CM_TARGET"
+  else
+    echo "Osierocony punkt montowania blokuje podpiecie: $CM_TARGET" >&2
+    echo "Usun go i uruchom ponownie:" >&2
+    echo "  sudo rmdir '$CM_TARGET'" >&2
+    exit 1
+  fi
+fi
+
 hdiutil attach "$CM_IMAGE" \
   -nobrowse \
   -mountpoint "$CM_TARGET"

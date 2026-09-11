@@ -15,11 +15,16 @@ if cm_is_mounted; then
   exit 0
 fi
 
+if [ ! -x "$CM_RCLONE" ]; then
+  echo "Brak rclone z obsluga mount w $CM_RCLONE - uruchom install-rclone.sh" >&2
+  exit 1
+fi
+
 # Bufor trzyma kopie danych backupu. Gdyby Time Machine go objal, backupowalby
 # wlasny backup i rosl bez konca.
 tmutil addexclusion "$CM_ROOT" 2>/dev/null || true
 
-exec rclone mount "${CM_REMOTE}:${CM_REMOTE_PATH}" "$CM_MOUNT" \
+exec "$CM_RCLONE" mount "${CM_REMOTE}:${CM_REMOTE_PATH}" "$CM_MOUNT" \
   --vfs-cache-mode full \
   --vfs-cache-max-size "$CM_CACHE_SIZE" \
   --vfs-cache-max-age 9999h \
