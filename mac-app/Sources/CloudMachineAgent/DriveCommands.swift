@@ -154,6 +154,39 @@ struct BufferGuard: AsyncParsableCommand {
   }
 }
 
+// MARK: - Bezpieczne wygaszenie
+
+struct PrepareShutdown: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "prepare-shutdown",
+    abstract: "Przygotowuje do restartu: wstrzymuje backup, odpina obraz i czeka na wysylke.")
+
+  func run() async throws {
+    // Kolejnosc nie jest dowolna. Najpierw Time Machine przestaje dokladac
+    // nowych zapisow, dopiero potem odpinamy obraz - inaczej odpiecie
+    // walczyloby z trwajacym backupem.
+    if await TimeMachineStatus.isRunning() {
+      print("Wstrzymuje backup...")
+      _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 120)
+      try? await Task.sleep(nanoseconds: 3_000_000_000)
+    }
+
+    print("Odpinam obraz i czekam na wysylke...")
+    let result = await BackupImageService.detach()
+    print(result.message)
+
+    guard result.succeeded else {
+      print("")
+      print("NIE RESTARTUJ jeszcze - w buforze sa dane, ktore nie doleciely na Dysk.")
+      print("Sprawdz stan:  cloudmachine-agent drive-status")
+      throw ExitCode(1)
+    }
+
+    print("")
+    print("Mozna restartowac. Po starcie agenty podniosa bufor i podepna obraz same.")
+  }
+}
+
 // MARK: - Stan
 
 struct DriveStatus: AsyncParsableCommand {

@@ -24,6 +24,7 @@ struct CloudMachineAgent: AsyncParsableCommand {
       DetachImage.self,
       VerifyImage.self,
       BufferGuard.self,
+      PrepareShutdown.self,
       DriveStatus.self,
     ]
   )
