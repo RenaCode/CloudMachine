@@ -16,7 +16,6 @@ struct DashboardView: View {
         bufferCard
         if let progress = controller.status.backupProgress { progressCard(progress) }
         actions
-        logCard
       }
       .padding(24)
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -166,20 +165,6 @@ struct DashboardView: View {
         .disabled(controller.status.buffer.imageAttached || controller.status.isBusy)
       Button("Odswiez") { Task { await controller.refreshAll() } }
       Spacer()
-    }
-  }
-
-  // MARK: - Log
-
-  private var logCard: some View {
-    card("Ostatnie zdarzenia") {
-      ScrollView {
-        Text(controller.status.logTail.isEmpty ? "(pusto)" : controller.status.logTail)
-          .font(.system(.caption, design: .monospaced))
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .textSelection(.enabled)
-      }
-      .frame(height: 140)
     }
   }
 

@@ -35,7 +35,10 @@ final class CloudMachineController: ObservableObject {
     await refreshBuffer()
     await refreshTimeMachine()
     await refreshProgress()
-    refreshLogTail()
+    // Logu NIE czytamy w cyklu odswiezania - jest od tego osobna zakladka,
+    // ktora wola refreshLogTail() sama, gdy jest widoczna. Czytanie pliku co
+    // kilka sekund w tle tylko po to, zeby nikt na to nie patrzyl, jest
+    // marnotrawstwem.
   }
 
   // MARK: - Poszczegolne odczyty
