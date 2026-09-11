@@ -18,6 +18,10 @@ struct MountDrive: AsyncParsableCommand {
       return
     }
 
+    // Deinstalator FUSE-T kasuje cala zawartosc /usr/local/lib pod swoja
+    // sciezka, w tym nasze dowiazanie - odtwarzamy je, zanim cokolwiek sprawdzimy.
+    FuseInstaller.ensureSystemLink()
+
     // Bez FUSE rclone konczy natychmiast bledem "cgofuse: cannot find FUSE".
     // Agent ma KeepAlive, wiec probowalby w kolko co 30 s i zalewal log -
     // lepiej stanac od razu i powiedziec, czego brakuje.
@@ -31,6 +35,12 @@ struct MountDrive: AsyncParsableCommand {
 
     await DriveBufferService.excludeBufferFromTimeMachine()
     let args = try DriveBufferService.prepare()
+
+    // Nasza kopia serwera NFS, jesli jest - wtedy osobna instalacja FUSE-T
+    // w systemie nie jest potrzebna.
+    if FileManager.default.isExecutableFile(atPath: CMTooling.bundledNfsServer.path) {
+      setenv("FUSE_NFSSRV_PATH", CMTooling.bundledNfsServer.path, 1)
+    }
 
     // Podmieniamy sie na rclone zamiast go nadzorowac: launchd ma pilnowac
     // procesu, ktory faktycznie trzyma montowanie, a nie posrednika.
@@ -165,6 +175,20 @@ struct DriveStatus: AsyncParsableCommand {
     } else {
       print("Backup:           nie trwa")
     }
+  }
+}
+
+// MARK: - Instalacja FUSE
+
+struct InstallFuse: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "install-fuse",
+    abstract: "Wciaga FUSE-T do CloudMachine, zeby nie bylo osobnej aplikacji w systemie.")
+
+  func run() async throws {
+    let result = await FuseInstaller.install()
+    print(result.message)
+    if !result.succeeded { throw ExitCode(1) }
   }
 }
 

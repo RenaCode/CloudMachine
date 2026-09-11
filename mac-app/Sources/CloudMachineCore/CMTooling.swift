@@ -43,6 +43,21 @@ public enum CMTooling {
 
   // MARK: - FUSE
 
+  /// Nasza kopia FUSE-T - zeby nie trzymac w systemie osobnej aplikacji.
+  /// Patrz `FuseInstaller`.
+  public static var bundledFuseDir: URL {
+    let dir = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent(".cloudmachine/fuse")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+  }
+
+  public static var bundledFuseLib: URL { bundledFuseDir.appendingPathComponent("libfuse-t.dylib") }
+
+  /// Serwer NFS, ktory faktycznie trzyma montowanie. Jego sciezke da sie
+  /// wskazac zmienna `FUSE_NFSSRV_PATH`, wiec moze lezec u nas.
+  public static var bundledNfsServer: URL { bundledFuseDir.appendingPathComponent("go-nfsv4") }
+
   /// Sciezki, pod ktorymi moze siedziec FUSE. Wystarczy jedna.
   private static let fuseCandidates = [
     "/usr/local/lib/libfuse-t.dylib",
@@ -81,7 +96,7 @@ public enum CMTooling {
     }
     if !hasFuse {
       missing.append("FUSE")
-      remedies.append("brew install macos-fuse-t/homebrew-cask/fuse-t")
+      remedies.append("cloudmachine-agent install-fuse")
     }
     return Readiness(missing: missing, remedies: remedies)
   }
