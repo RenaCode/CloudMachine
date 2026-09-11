@@ -127,6 +127,19 @@ done
 
 ## Pierwszy backup
 
+`buffer-guard.sh` pilnuje, zeby bufor nie zjadl dysku. Time Machine pisze do
+obrazu z predkoscia SSD, rclone wysyla z predkoscia lacza - roznica zostaje
+w buforze. Limit `--vfs-cache-max-size` jest **miekki**: rclone usuwa z bufora
+tylko dane juz wyslane, wiec gdy wszystko czeka w kolejce, bufor rosnie dalej.
+Dozorca wstrzymuje Time Machine powyzej progu i wznawia, gdy wysylka nadgoni.
+Pilnuje tez dobowego limitu Google Drive - po jego przekroczeniu rclone konczy
+prace i nie ma sensu go podnosic, dopoki limit sie nie odnowi.
+
+```sh
+./gdrive/buffer-guard.sh          # progi: CM_BUFFER_HIGH, CM_BUFFER_LOW, CM_FREE_MIN
+```
+
+
 Ten Mac ma wlaczone usypianie, a spiacy Mac nie wysyla nic do Drive'a. Na czas
 pierwszego pelnego transferu:
 
