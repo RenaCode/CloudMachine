@@ -73,7 +73,13 @@ public enum CMTooling {
   /// brakuje KTOREJKOLWIEK ze sciezek, a nie gdy brakuje wszystkich - wiec
   /// odmawiala startu przy poprawnie zainstalowanym FUSE-T. Sprawdzamy po kolei.
   public static var hasFuse: Bool {
-    fuseCandidates.contains { FileManager.default.fileExists(atPath: $0) }
+    // Wlasna kopia liczy sie tak samo jak instalacja systemowa: dowiazanie
+    // w /usr/local/lib potrafimy odtworzyc sami (FuseInstaller.ensureSystemLink),
+    // wiec jego chwilowy brak nie znaczy, ze FUSE nie ma. Deinstalator FUSE-T
+    // kasuje to dowiazanie przy usuwaniu osobnej aplikacji - bez tego warunku
+    // status melduje wtedy brak FUSE, mimo ze montowanie dziala.
+    if FileManager.default.fileExists(atPath: bundledFuseLib.path) { return true }
+    return fuseCandidates.contains { FileManager.default.fileExists(atPath: $0) }
   }
 
   // MARK: - Diagnostyka gotowosci
@@ -87,6 +93,10 @@ public enum CMTooling {
   }
 
   public static func checkReadiness() -> Readiness {
+    // Sprawdzenie jest tez okazja do naprawy - dowiazanie bywa kasowane przez
+    // deinstalator FUSE-T i nie ma powodu czekac z tym do nastepnego startu.
+    FuseInstaller.ensureSystemLink()
+
     var missing: [String] = []
     var remedies: [String] = []
 

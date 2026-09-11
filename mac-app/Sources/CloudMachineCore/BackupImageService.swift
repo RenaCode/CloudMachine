@@ -219,13 +219,42 @@ public enum BackupImageService {
     return CMActionResult(succeeded: true, message: "Podpiete: \(targetPath.path)")
   }
 
-  public static func detach(force: Bool = false) async -> CMActionResult {
+  /// Odpina obraz i CZEKA, az wszystko doleci na Google Drive.
+  ///
+  /// Czekanie nie jest ostroznoscia na zapas. Samo odpiecie zapisuje metadane
+  /// APFS do pasm, a `--vfs-write-back` odklada ich wyslanie o kilkadziesiat
+  /// sekund. Utrata bufora w tym oknie nie kosztuje "ostatnich zmian" - zabiera
+  /// katalog glowny wolumenu. Zaobserwowane na zywo: 367 MiB pasm lezalo juz na
+  /// Dysku, a obraz po ponownym podpieciu byl pusty, bo trzy pasma z metadanymi
+  /// zostaly zabite w kolejce.
+  ///
+  /// Dlatego kazda sciezka wygaszania - odpiecie, zatrzymanie bufora,
+  /// wylaczenie Maca - musi przepuscic drenaz do konca.
+  public static func detach(force: Bool = false, waitForUpload: Bool = true) async -> CMActionResult
+  {
     var args = ["detach", targetPath.path, "-quiet"]
     if force { args.append("-force") }
     let result = try? await ProcessRunner.run("/usr/bin/hdiutil", args, timeout: 120)
+    guard result?.succeeded == true else {
+      return CMActionResult(succeeded: false, message: "Nie udalo sie odpiac.")
+    }
+
+    guard waitForUpload else {
+      return CMActionResult(
+        succeeded: true, message: "Odpiete (bez czekania na wysylke - dane moga byc tylko lokalnie).")
+    }
+
+    // Zapisy z odpiecia trafiaja do kolejki dopiero po `--vfs-write-back`,
+    // wiec najpierw dajemy im szanse tam trafic, a dopiero potem czekamy
+    // na cisze. Bez tej przerwy kolejka wygladalaby na pusta, bo jeszcze
+    // by sie nie zdazyla zapelnic.
+    try? await Task.sleep(nanoseconds: 35_000_000_000)
+    let drained = await DriveBufferService.waitUntilQuiet(timeout: 600)
     return CMActionResult(
-      succeeded: result?.succeeded == true,
-      message: result?.succeeded == true ? "Odpiete." : "Nie udalo sie odpiac.")
+      succeeded: drained,
+      message: drained
+        ? "Odpiete, wszystko wyslane na Google Drive."
+        : "Odpiete, ale wysylka NIE zakonczyla sie w czasie - nie kasuj bufora.")
   }
 
   // MARK: - Weryfikacja

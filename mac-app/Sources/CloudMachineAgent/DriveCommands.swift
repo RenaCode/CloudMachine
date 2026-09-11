@@ -94,6 +94,21 @@ struct AttachImage: AsyncParsableCommand {
   }
 }
 
+struct DetachImage: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "detach-image",
+    abstract: "Odpina obraz i czeka, az wszystko doleci na Google Drive.")
+
+  @Flag(name: .long, help: "Nie czekaj na wysylke - RYZYKOWNE, patrz BackupImageService.detach.")
+  var noWait = false
+
+  func run() async throws {
+    let result = await BackupImageService.detach(waitForUpload: !noWait)
+    print(result.message)
+    if !result.succeeded { throw ExitCode(1) }
+  }
+}
+
 struct VerifyImage: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "verify-image",
