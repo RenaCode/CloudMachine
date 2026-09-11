@@ -134,6 +134,29 @@ pierwszego pelnego transferu:
 caffeinate -dims &
 ```
 
+## Kaprysy montowania FUSE-T
+
+FUSE-T montuje przez NFS (`fuse-t:/gdrive ... (nfs)`), a `hdiutil` na takim
+wolumenie bywa odrzucany bledem **`RPC version wrong`**. Zmierzone zachowanie:
+
+- Blad nie zalezy od rozmiaru obrazu ani od danych. Przy jednym przebiegu padly
+  proby dla 100 GB i 400 GB, a przeszly dla 600 GB, 1000 GB i 1500 GB.
+- Zalezy od **chwili**: przy pustej kolejce wysylki 5 prob na 5 udanych, przy
+  rclone zajetym wysylka lub kasowaniem - losowo.
+
+Dlatego `create-image.sh` i `attach-image.sh` czekaja na cisze (`cm_wait_quiet`,
+czyta `vfs/stats` przez interfejs rc) i ponawiaja do pieciu razy. Przy tworzeniu
+produkcyjnego obrazu pierwsza proba padla, druga przeszla - mechanizm nie jest
+teoretyczny.
+
+**Obraz trzeba tworzyc na miejscu, na zamontowanym Drive.** Utworzenie go
+lokalnie i przeniesienie przez `mv` daje obraz, ktorego `hdiutil` pozniej nie
+otwiera (`CBSDBackingStore::newProbe stat() failed`), mimo ze wszystkie pliki
+i pasma sa na swoim miejscu i daja sie czytac.
+
+Dwa inne backendy FUSE-T nie pomagaja: `backend=fskit` w ogole sie nie montuje,
+`backend=smb` montuje sie, ale `hdiutil create` konczy sie `Is a directory`.
+
 ## Zabezpieczenia przed zapetleniem
 
 Agent bufora ma `KeepAlive`, wiec kazdy blad startowy powtarzalby sie co 30 s
@@ -174,10 +197,10 @@ wiec nie koliduje z produkcyjnymi agentami, i sprzata po sobie.
 
 ## Czego jeszcze nie sprawdzono
 
-- Czy `hdiutil attach` na obrazie lezacym na wolumenie FUSE-T dziala stabilnie
-  pod obciazeniem. FUSE-T montuje przez NFS albo FSKit, wiec obraz lezy
-  technicznie na wolumenie sieciowym.
 - Czy `tmutil setdestination` na macOS 26.6 przyjmie tak podpiety obraz.
+- Jak zachowa sie montowanie pod obciazeniem prawdziwego backupu. Pojedyncze
+  operacje dzialaja (zapis 50 MB przy 267 MB/s), ale kilkugodzinny pierwszy
+  transfer to inna skala.
 - Czy rclone nigdy nie usuwa z bufora danych jeszcze niewyslanych. Na tym stoi
   cala obietnica nieprzerywalnosci. Test: odciac siec w trakcie backupu,
   przywrocic, odczekac na pelny drenaz, `verify-image.sh`. Powtorzyc kilka razy.

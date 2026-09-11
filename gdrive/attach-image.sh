@@ -49,8 +49,15 @@ if [ -d "$CM_TARGET" ] && ! cm_is_attached; then
   fi
 fi
 
-hdiutil attach "$CM_IMAGE" \
-  -nobrowse \
-  -mountpoint "$CM_TARGET"
+cm_wait_quiet 120 || true
+
+cm_attach() {
+  hdiutil attach "$CM_IMAGE" -nobrowse -mountpoint "$CM_TARGET"
+}
+
+if ! cm_retry 5 cm_attach; then
+  echo "Nie udalo sie podpiac obrazu po 5 probach." >&2
+  exit 1
+fi
 
 echo "Podpiete: $CM_TARGET"

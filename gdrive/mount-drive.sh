@@ -23,8 +23,15 @@ fi
 # Bez FUSE rclone konczy sie natychmiast bledem "cgofuse: cannot find FUSE".
 # Agent launchd ma KeepAlive, wiec probowalby w kolko co 30 s i zalewal log.
 # Ten projekt ma juz za soba incydent logu na 3,3 GiB - lepiej stanac od razu.
-if ! ls /usr/local/lib/libfuse-t.dylib /usr/local/lib/libfuse.2.dylib \
-        /Library/Filesystems/fuse-t.fs /usr/local/lib/libfuse.dylib >/dev/null 2>&1; then
+# Uwaga na pulapke: `ls a b c` zwraca blad, gdy BRAKUJE KTOREJKOLWIEK sciezki,
+# a nie gdy brakuje wszystkich. Pierwsza wersja tej kontroli odmawiala startu
+# przy poprawnie zainstalowanym FUSE-T. Sprawdzamy wiec po kolei.
+cm_have_fuse=0
+for lib in /usr/local/lib/libfuse-t.dylib /usr/local/lib/libfuse.2.dylib \
+           /usr/local/lib/libfuse.dylib /Library/Filesystems/fuse-t.fs; do
+  [ -e "$lib" ] && { cm_have_fuse=1; break; }
+done
+if [ "$cm_have_fuse" -eq 0 ]; then
   echo "Nie znalazlem FUSE. Zainstaluj:" >&2
   echo "  brew install macos-fuse-t/homebrew-cask/fuse-t" >&2
   exit 1

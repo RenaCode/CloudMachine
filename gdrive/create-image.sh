@@ -23,13 +23,23 @@ echo "Tworze $CM_IMAGE"
 echo "  rozmiar deklarowany: $CM_IMAGE_SIZE (rzadki - zajmuje tyle, ile zapisane)"
 echo "  pasmo: $((CM_BAND_SECTORS * 512 / 1024 / 1024)) MB"
 
-hdiutil create \
-  -type SPARSEBUNDLE \
-  -size "$CM_IMAGE_SIZE" \
-  -fs "Case-sensitive APFS" \
-  -volname "$CM_VOLNAME" \
-  -imagekey "sparse-band-size=$CM_BAND_SECTORS" \
-  "$CM_IMAGE"
+echo "Czekam, az wysylka ucichnie..."
+cm_wait_quiet 180 || echo "  (kolejka nadal zajeta, probuje mimo to)"
+
+cm_create() {
+  hdiutil create \
+    -type SPARSEBUNDLE \
+    -size "$CM_IMAGE_SIZE" \
+    -fs "Case-sensitive APFS" \
+    -volname "$CM_VOLNAME" \
+    -imagekey "sparse-band-size=$CM_BAND_SECTORS" \
+    "$CM_IMAGE"
+}
+
+if ! cm_retry 5 cm_create; then
+  echo "Nie udalo sie utworzyc obrazu po 5 probach." >&2
+  exit 1
+fi
 
 echo
 echo "Gotowe. Nastepny krok: attach-image.sh, potem"

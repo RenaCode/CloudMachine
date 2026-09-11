@@ -77,3 +77,41 @@ cm_purge_stale_devices() {
     hdiutil detach "$d" -force -quiet 2>/dev/null || true
   done
 }
+
+CM_RC_URL="${CM_RC_URL:-127.0.0.1:5572}"
+
+# Czy rclone skonczyl wysylke. Pusta kolejka to warunek, pod ktorym operacje
+# hdiutil na tym montowaniu sa stabilne - patrz nizej.
+cm_vfs_quiet() {
+  local out
+  out="$("$CM_RCLONE" rc --url "$CM_RC_URL" vfs/stats 2>/dev/null)" || return 1
+  local busy
+  busy="$(printf '%s' "$out" | awk -F: '/uploadsInProgress|uploadsQueued/ {gsub(/[^0-9]/,"",$2); s+=$2} END {print s+0}')"
+  [ "$busy" = "0" ]
+}
+
+# Czeka, az wysylka ucichnie. Bez tego hdiutil bywa odrzucany.
+cm_wait_quiet() {
+  local limit="${1:-120}" i=0
+  while [ "$i" -lt "$limit" ]; do
+    cm_vfs_quiet && return 0
+    i=$((i + 1)); sleep 1
+  done
+  return 1
+}
+
+# Ponawia polecenie. Operacje hdiutil na montowaniu FUSE-T zawodza przejsciowo
+# bledem "RPC version wrong", gdy rclone akurat wysyla albo kasuje dane.
+# Zmierzone: przy pustej kolejce 5 prob na 5 udanych, przy zajetej - losowo.
+# To nie jest blad zalezny od rozmiaru ani od danych, tylko od chwili.
+cm_retry() {
+  local tries="$1"; shift
+  local i=1
+  while :; do
+    if "$@"; then return 0; fi
+    [ "$i" -ge "$tries" ] && return 1
+    echo "  proba $i nieudana, ponawiam za 5 s..." >&2
+    i=$((i + 1)); sleep 5
+    cm_wait_quiet 60 || true
+  done
+}
