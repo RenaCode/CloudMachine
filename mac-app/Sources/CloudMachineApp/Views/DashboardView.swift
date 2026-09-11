@@ -1,174 +1,206 @@
 import CloudMachineCore
 import SwiftUI
 
+/// Glowne okno. Ma odpowiadac na jedno pytanie od razu po otwarciu: czy moje
+/// dane sa bezpieczne. Szczegoly sa nizej, dla tych chwil, gdy odpowiedz brzmi
+/// "nie".
 struct DashboardView: View {
   @EnvironmentObject private var controller: CloudMachineController
-  @State private var selectedTab: Tab = .status
-
-  /// W przeciwienstwie do `MenuBarContentView` (ktorego `.task` odpala sie
-  /// na nowo za KAZDYM razem, gdy uzytkownik otwiera popup paska menu - patrz
-  /// komentarz przy `refreshAllMinInterval` w `CloudMachineController`), to
-  /// okno raz otwarte zyje dlugo i NIGDY samo z siebie nie odswiezaloby
-  /// statusu ponownie - `.task` ponizej odpala sie tylko RAZ, przy pierwszym
-  /// pojawieniu sie okna. Bez tego timera stan (np. "Montowanie...") moze
-  /// pozostac zamrozony na godziny w oknie otwartym akurat w trakcie
-  /// przejsciowego problemu, mimo ze system pod spodem dawno juz wrocil do
-  /// zdrowia - zaobserwowane realnie na zywo.
-  private let refreshTimer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
-
-  enum Tab: Hashable {
-    case status
-    case wizard
-    case logs
-  }
 
   var body: some View {
-    NavigationSplitView {
-      List(selection: $selectedTab) {
-        Section("Narzędzia".localized) {
-          NavigationLink(value: Tab.status) {
-            Label("Status".localized, systemImage: "gauge.with.needle")
-          }
-          NavigationLink(value: Tab.wizard) {
-            Label("Kreator".localized, systemImage: "wand.and.stars")
-          }
-          NavigationLink(value: Tab.logs) {
-            Label("Logi systemowe".localized, systemImage: "doc.text.magnifyingglass")
-          }
-        }
+    ScrollView {
+      VStack(alignment: .leading, spacing: 20) {
+        header
+        if let error = controller.status.errorMessage { errorBanner(error) }
+        if !setupSteps.isEmpty { setupCard }
+        bufferCard
+        if let progress = controller.status.backupProgress { progressCard(progress) }
+        actions
+        logCard
       }
-      .listStyle(.sidebar)
-      .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 250)
-      .safeAreaInset(edge: .bottom) {
-        SidebarStatusFooter()
-          .padding(.horizontal, 16)
-          .padding(.vertical, 12)
-          .background(.thinMaterial)
-      }
-    } detail: {
-      Group {
-        switch selectedTab {
-        case .status:
-          StatusView()
-        case .wizard:
-          SetupWizardView()
-        case .logs:
-          LogsView()
-        }
-      }
-      .navigationTitle(navigationTitle(for: selectedTab))
-      .toolbar {
-        ToolbarItem(placement: .navigation) {
-          if controller.status.isBusy {
-            HStack(spacing: 8) {
-              ProgressView()
-                .controlSize(.small)
-              Text(controller.status.busyLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-          }
-        }
-      }
+      .padding(24)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
     .task {
-      await controller.refreshAll()
+      controller.startAutoRefresh()
     }
-    .onReceive(refreshTimer) { _ in
-      Task { await controller.refreshAll() }
-    }
+    .onDisappear { controller.stopAutoRefresh() }
   }
 
-  private func navigationTitle(for tab: Tab) -> String {
-    switch tab {
-    case .status: return "Stan systemu".localized
-    case .wizard: return "Kreator konfiguracji".localized
-    case .logs: return "Logi konsoli".localized
-    }
-  }
-}
+  // MARK: - Naglowek
 
-struct SidebarStatusFooter: View {
-  @EnvironmentObject private var controller: CloudMachineController
-  @State private var isPulse = false
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      HStack(spacing: 8) {
-        Circle()
-          .fill(statusColor)
-          .frame(width: 8, height: 8)
-          .scaleEffect(isPulse ? 1.25 : 0.8)
-          .opacity(isPulse ? 1.0 : 0.5)
-          .onAppear {
-            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
-              isPulse = true
-            }
-          }
-
-        VStack(alignment: .leading, spacing: 2) {
-          Text(statusText)
-            .font(.caption2.bold())
-          Text(subText)
-            .font(.system(size: 9))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
-        Spacer()
+  private var header: some View {
+    HStack(spacing: 12) {
+      Image(systemName: controller.status.healthy ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+        .font(.system(size: 32))
+        .foregroundStyle(controller.status.healthy ? .green : .orange)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(controller.status.headline).font(.title2).bold()
+        Text("Time Machine na Google Drive").font(.subheadline).foregroundStyle(.secondary)
       }
-
-      Text("CloudMachine \(appVersionText)")
-        .font(.system(size: 9))
-        .foregroundStyle(.secondary.opacity(0.7))
+      Spacer()
+      if controller.status.isBusy {
+        HStack(spacing: 8) {
+          ProgressView().controlSize(.small)
+          Text(controller.status.busyLabel).font(.caption).foregroundStyle(.secondary)
+        }
+      }
     }
   }
 
-  /// "1.0.0 (build 42)" - `CFBundleShortVersionString`/`CFBundleVersion` z
-  /// Info.plist (podstawiane przez `build-app` z pliku `VERSION` i licznika
-  /// commitow - patrz `BuildAppCommand.swift`). Puste w `swift run`/testach,
-  /// gdzie nie ma prawdziwego bundla `.app` z wypelnionym Info.plist.
-  private var appVersionText: String {
-    let info = Bundle.main.infoDictionary
-    let short = info?["CFBundleShortVersionString"] as? String
-    let build = info?["CFBundleVersion"] as? String
-    switch (short, build) {
-    case (.some(let s), .some(let b)) where !s.isEmpty && !b.isEmpty: return "\(s) (build \(b))"
-    case (.some(let s), _) where !s.isEmpty: return s
-    default: return "dev"
+  private func errorBanner(_ message: String) -> some View {
+    Text(message)
+      .font(.callout)
+      .padding(12)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+      .textSelection(.enabled)
+  }
+
+  // MARK: - Konfiguracja
+
+  /// Kroki, ktorych brakuje. Pusta lista znaczy, ze wszystko jest na miejscu -
+  /// wtedy karta w ogole sie nie pokazuje.
+  private var setupSteps: [(String, String?)] {
+    var steps: [(String, String?)] = []
+    if case .missing(let what, let how) = controller.status.dependencyState {
+      for (miss, remedy) in zip(what, how) { steps.append(("Brakuje: \(miss)", remedy)) }
+    }
+    if !controller.status.remoteConfigured {
+      steps.append(("Google Drive niepolaczony", controller.connectDriveCommand))
+    }
+    if case .notRegistered = controller.status.timeMachineState,
+      controller.status.buffer.imageAttached
+    {
+      steps.append(("Time Machine nie wskazuje na CloudMachine", controller.setDestinationCommand))
+    }
+    return steps
+  }
+
+  private var setupCard: some View {
+    card("Do zrobienia") {
+      ForEach(Array(setupSteps.enumerated()), id: \.offset) { _, step in
+        VStack(alignment: .leading, spacing: 4) {
+          Text(step.0).font(.callout)
+          if let command = step.1 {
+            HStack {
+              Text(command)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+              Spacer()
+              Button("Kopiuj") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(command, forType: .string)
+              }
+              .controlSize(.small)
+            }
+            .padding(8)
+            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+          }
+        }
+      }
     }
   }
 
-  private var statusColor: Color {
-    if controller.status.errorMessage != nil {
-      return .red
+  // MARK: - Bufor
+
+  private var bufferCard: some View {
+    card("Bufor i wysylka") {
+      row("Montowanie Drive", controller.status.buffer.mounted ? "dziala" : "brak",
+        ok: controller.status.buffer.mounted)
+      row("Obraz backupu", controller.status.buffer.imageAttached ? "podpiety" : "niepodpiety",
+        ok: controller.status.buffer.imageAttached)
+      row("Bufor na dysku", "\(controller.status.buffer.sizeGB) GB", ok: true)
+      row("Wolne na dysku", "\(controller.status.buffer.freeDiskGB) GB",
+        ok: controller.status.buffer.freeDiskGB > 80)
+
+      // Ta liczba jest wazniejsza od rozmiaru bufora: jesli rosnie i nie wraca
+      // do zera miedzy backupami, wysylka nie nadaza za zapisem.
+      row(
+        "Czeka na wyslanie",
+        controller.status.buffer.draining
+          ? "\(controller.status.buffer.uploadsInProgress) w toku, \(controller.status.buffer.uploadsQueued) w kolejce"
+          : "nic",
+        ok: controller.status.buffer.erroredFiles == 0)
+
+      if controller.status.buffer.erroredFiles > 0 {
+        row("Bledy wysylki", "\(controller.status.buffer.erroredFiles)", ok: false)
+      }
+      if controller.status.buffer.dailyQuotaHit {
+        row("Limit Google Drive", "dobowy limit wyczerpany", ok: false)
+      }
     }
-    if !controller.status.localVolume.exists {
-      return .secondary
-    }
-    return controller.status.timeMachineState == .registered ? .green : .orange
   }
 
-  private var statusText: String {
-    if controller.status.errorMessage != nil {
-      return "Problem z konfiguracją".localized
+  // MARK: - Postep
+
+  private func progressCard(_ progress: BackupProgressInfo) -> some View {
+    card("Backup w toku") {
+      if let percent = progress.percent {
+        ProgressView(value: min(max(percent, 0), 1))
+        Text(String(format: "%.1f%%", percent * 100)).font(.caption).foregroundStyle(.secondary)
+      }
+      if let done = progress.filesDone, let total = progress.filesTotal, total > 0 {
+        row("Pliki", "\(done) z \(total)", ok: true)
+      }
+      if let rate = progress.transferRateMBs {
+        row("Tempo", String(format: "%.1f MB/s", rate), ok: true)
+      }
+      if let phase = progress.phase {
+        row("Faza", phase, ok: true)
+      }
     }
-    if !controller.status.localVolume.exists {
-      return "Brak lokalnego woluminu".localized
-    }
-    return controller.status.timeMachineState == .registered
-      ? "Backup lokalny gotowy".localized : "Wolumin nie zarejestrowany".localized
   }
 
-  private var subText: String {
-    if let err = controller.status.errorMessage {
-      return err
+  // MARK: - Akcje
+
+  private var actions: some View {
+    HStack(spacing: 10) {
+      if controller.status.backupProgress == nil {
+        Button("Zrob backup teraz") { Task { await controller.startBackup() } }
+          .disabled(!controller.status.healthy || controller.status.isBusy)
+      } else {
+        Button("Wstrzymaj backup") { Task { await controller.stopBackup() } }
+      }
+      Button("Sprawdz spojnosc obrazu") { Task { await controller.verifyImage() } }
+        .disabled(controller.status.buffer.imageAttached || controller.status.isBusy)
+      Button("Odswiez") { Task { await controller.refreshAll() } }
+      Spacer()
     }
-    guard controller.status.localVolume.exists else {
-      return "Zarejestruj dysk w Ustawieniach systemowych".localized
+  }
+
+  // MARK: - Log
+
+  private var logCard: some View {
+    card("Ostatnie zdarzenia") {
+      ScrollView {
+        Text(controller.status.logTail.isEmpty ? "(pusto)" : controller.status.logTail)
+          .font(.system(.caption, design: .monospaced))
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .textSelection(.enabled)
+      }
+      .frame(height: 140)
     }
-    if let used = controller.status.localVolume.usedGB {
-      return String(format: "%.1f GB na dysku lokalnym", used)
+  }
+
+  // MARK: - Elementy wspolne
+
+  private func card<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(title).font(.headline)
+      content()
     }
-    return "Wolumin lokalny istnieje".localized
+    .padding(16)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+  }
+
+  private func row(_ label: String, _ value: String, ok: Bool) -> some View {
+    HStack {
+      Text(label).foregroundStyle(.secondary)
+      Spacer()
+      Text(value).foregroundStyle(ok ? Color.primary : Color.red)
+    }
+    .font(.callout)
   }
 }
