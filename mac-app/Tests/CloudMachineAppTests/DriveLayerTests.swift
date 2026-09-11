@@ -123,3 +123,49 @@ final class DriveLayerTests: XCTestCase {
     XCTAssertEqual(BufferGuardService.freeGB(), expected)
   }
 }
+
+/// Wykrywanie dobowego limitu Google Drive. Osobna klasa, bo to pojedyncza
+/// pomylka, ktora zatrzymala prawdziwy backup - zasluguje na wlasne miejsce.
+final class DailyQuotaDetectionTests: XCTestCase {
+  private let formatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "yyyy/MM/dd HH:mm:ss"
+    return f
+  }()
+
+  private func line(_ minutesAgo: Int, _ message: String, now: Date) -> String {
+    let stamp = formatter.string(from: now.addingTimeInterval(-Double(minutesAgo) * 60))
+    return "\(stamp) ERROR : \(message)"
+  }
+
+  /// TO jest ten blad. rclone opisuje chwilowa przepustnice komunikatem
+  /// "Received upload limit error", nie do odroznienia po tekscie od limitu
+  /// dobowego - i sam ja ponawia. Zlapanie tego wstrzymalo backup po wyslaniu
+  /// 109 GiB z 750 GB dozwolonych na dobe.
+  func testTransientRateLimitIsNotTheDailyQuota() {
+    let now = Date()
+    let log = [
+      line(2, "Received upload limit error: googleapi: Error 403: User rate limit exceeded., userRateLimitExceeded", now: now),
+      line(2, "bands/cf9: vfs cache: failed to upload try #1, will retry in 1m0s", now: now),
+    ].joined(separator: "\n")
+    XCTAssertFalse(DriveBufferService.logMentionsUploadLimit(log, now: now, within: 30))
+  }
+
+  func testRealQuotaErrorIsDetected() {
+    let now = Date()
+    let log = line(1, "googleapi: Error 403: The user has exceeded their Drive storage quota, storageQuotaExceeded", now: now)
+    XCTAssertTrue(DriveBufferService.logMentionsUploadLimit(log, now: now, within: 30))
+  }
+
+  /// Bez okna czasowego raz zapalony alarm nigdy by nie zgasl - wpis zostaje
+  /// w logu, wiec backup wpadlby w cykl pauza-wznowienie-pauza.
+  func testOldQuotaErrorIsIgnored() {
+    let now = Date()
+    let log = line(120, "googleapi: Error 403: storageQuotaExceeded", now: now)
+    XCTAssertFalse(DriveBufferService.logMentionsUploadLimit(log, now: now, within: 30))
+  }
+
+  func testEmptyLogIsNotAQuotaError() {
+    XCTAssertFalse(DriveBufferService.logMentionsUploadLimit("", now: Date(), within: 30))
+  }
+}

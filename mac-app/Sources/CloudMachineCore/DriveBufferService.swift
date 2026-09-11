@@ -188,19 +188,59 @@ public enum DriveBufferService {
     return total
   }
 
-  /// Czy rclone zatrzymal sie na dobowym limicie Google Drive. Po jego
-  /// przekroczeniu rclone konczy prace z zalozenia, a agent launchd probuje go
-  /// podnosic - bez sensu, dopoki limit sie nie odnowi.
+  /// Czy rclone stanal na dobowym limicie Google Drive (750 GB/dobe).
+  ///
+  /// Rozpoznajemy to po ZACHOWANIU rclone, nie po tresci bledu. Powod jest
+  /// konkretny: `403 userRateLimitExceeded` to chwilowe dlawienie tempa, ktore
+  /// rclone ponawia sam ("will retry in 1m0s"), ale opisuje je komunikatem
+  /// "Received upload limit error" - nie do odroznienia po samym tekscie od
+  /// limitu dobowego. Pierwsza wersja tej funkcji lapala wlasnie to i
+  /// wstrzymala backup po 109 GiB wyslanych, czyli przy siodmej czesci limitu.
+  ///
+  /// Prawdziwy limit dobowy jest dla rclone fatalny (`--drive-stop-on-upload-limit`),
+  /// wiec proces konczy prace i montowanie znika. Dopoki montowanie stoi,
+  /// rclone sobie radzi i nie ma czego wstrzymywac.
   public static func hitDailyQuota() -> Bool {
+    if isMounted { return false }
+    return recentLogMentionsUploadLimit()
+  }
+
+  private static func recentLogMentionsUploadLimit(within minutes: Int = 30) -> Bool {
     guard let handle = try? FileHandle(forReadingFrom: logFile) else { return false }
     defer { try? handle.close() }
     let size = (try? handle.seekToEnd()) ?? 0
-    let window: UInt64 = 64 * 1024
+    let window: UInt64 = 256 * 1024
     try? handle.seek(toOffset: size > window ? size - window : 0)
     guard let data = try? handle.readToEnd(),
-      let text = String(data: data, encoding: .utf8)?.lowercased()
+      let text = String(data: data, encoding: .utf8)
     else { return false }
-    return text.contains("storagequotaexceeded") || text.contains("upload limit")
-      || text.contains("userratelimitexceeded")
+    return logMentionsUploadLimit(text, now: Date(), within: minutes)
+  }
+
+  /// Szuka sladu limitu tylko w swiezych wpisach. Bez ograniczenia czasowego
+  /// raz zapalony alarm nigdy by nie zgasl, bo wpis zostaje w logu na zawsze -
+  /// backup wpadlby w cykl pauza-wznowienie-pauza.
+  ///
+  /// Czysta wersja, zeby dalo sie ja sprawdzic testem bez pliku i bez zegara.
+  public static func logMentionsUploadLimit(_ text: String, now: Date, within minutes: Int) -> Bool
+  {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
+    formatter.timeZone = TimeZone.current
+    let cutoff = now.addingTimeInterval(-Double(minutes) * 60)
+
+    for line in text.components(separatedBy: .newlines).reversed() {
+      guard line.count > 19, let stamp = formatter.date(from: String(line.prefix(19))) else {
+        continue
+      }
+      if stamp < cutoff { return false }
+      let lower = line.lowercased()
+      // userRateLimitExceeded celowo POMINIETE - to zwykla przepustnica, ktora
+      // rclone ponawia sam. Lapanie jej wstrzymalo backup przy 109 GiB z 750 GB.
+      if lower.contains("storagequotaexceeded") || lower.contains("teamdrivefilelimitexceeded") {
+        return true
+      }
+    }
+    return false
   }
 }
