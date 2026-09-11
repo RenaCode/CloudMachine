@@ -169,3 +169,44 @@ final class DailyQuotaDetectionTests: XCTestCase {
     XCTAssertFalse(DriveBufferService.logMentionsUploadLimit("", now: Date(), within: 30))
   }
 }
+
+/// Decyzje dozorcy bufora. Komentarz przy `step()` obiecywal, ze wydzielenie
+/// go z petli sluzy testowaniu - a testu nie bylo. Tu jest.
+final class BufferGuardThresholdTests: XCTestCase {
+
+  /// Prog pauzy MUSI lezec powyzej rozmiaru bufora. `--vfs-cache-max-size` to
+  /// granica miekka i bufor normalnie stoi przy limicie (zmierzone: rowno
+  /// 100 GiB przez cala pierwsza wysylke). Prog rowny albo nizszy oznaczalby
+  /// wstrzymywanie backupu bez przerwy.
+  func testPauseThresholdSitsAboveTheCacheSize() {
+    let t = BufferGuardService.Thresholds()
+    XCTAssertGreaterThan(
+      t.highGB, DriveBufferService.cacheSizeGB,
+      "Prog pauzy ponizej rozmiaru bufora zatrzymywalby backup non stop.")
+  }
+
+  /// Prog wznowienia musi byc wyraznie nizszy od progu pauzy, inaczej dozorca
+  /// oscylowalby miedzy start i stop przy kazdym tyknieciu.
+  func testResumeThresholdLeavesHysteresis() {
+    let t = BufferGuardService.Thresholds()
+    XCTAssertLessThan(t.lowGB, t.highGB)
+    XCTAssertLessThanOrEqual(
+      t.lowGB, t.highGB / 2,
+      "Zbyt waski odstep progow daje cykl pauza-wznowienie-pauza.")
+  }
+
+  /// Progi wyliczaja sie z rozmiaru bufora. Wpisane z palca dzialaly tylko
+  /// przypadkiem, dla jednej konkretnej wartosci.
+  func testThresholdsFollowTheCacheSize() {
+    let t = BufferGuardService.Thresholds()
+    XCTAssertEqual(t.highGB, DriveBufferService.cacheSizeGB * 3 / 2)
+    XCTAssertEqual(t.lowGB, DriveBufferService.cacheSizeGB * 2 / 5)
+  }
+
+  func testExplicitThresholdsAreRespected() {
+    let t = BufferGuardService.Thresholds(highGB: 10, lowGB: 2, minFreeGB: 5)
+    XCTAssertEqual(t.highGB, 10)
+    XCTAssertEqual(t.lowGB, 2)
+    XCTAssertEqual(t.minFreeGB, 5)
+  }
+}

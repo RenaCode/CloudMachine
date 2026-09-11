@@ -24,7 +24,21 @@ public actor BufferGuardService {
     /// Ponizej tylu GB wolnych na dysku wstrzymujemy niezaleznie od bufora.
     public var minFreeGB: Int
 
-    public init(highGB: Int = 150, lowGB: Int = 40, minFreeGB: Int = 80) {
+    /// Progi wyliczane z rozmiaru bufora, nie wpisane z palca.
+    ///
+    /// `--vfs-cache-max-size` jest granica MIEKKA: rclone usuwa tylko to, co
+    /// juz wyslal, wiec przy pelnej kolejce bufor rosnie ponad limit. Prog
+    /// pauzy musi wiec lezec POWYZEJ rozmiaru bufora - inaczej dozorca
+    /// wstrzymywalby backup bez przerwy, bo bufor normalnie stoi przy limicie
+    /// (zmierzone: rowno 100 GiB przez cala pierwsza wysylke).
+    ///
+    /// Wpisanie 150 na sztywno dzialalo tylko przypadkiem, dla bufora 100 GB -
+    /// po zmianie rozmiaru bufora prog bylby albo absurdalny, albo martwy.
+    public init(
+      highGB: Int = DriveBufferService.cacheSizeGB * 3 / 2,
+      lowGB: Int = DriveBufferService.cacheSizeGB * 2 / 5,
+      minFreeGB: Int = 80
+    ) {
       self.highGB = highGB
       self.lowGB = lowGB
       self.minFreeGB = minFreeGB
@@ -65,8 +79,11 @@ public actor BufferGuardService {
 
   // MARK: - Pomiary
 
-  public static func bufferGB() -> Int {
-    Int(DriveBufferService.cacheSizeBytes() / 1_073_741_824)
+  /// Rozmiar bufora wg rclone, z obchodem katalogu tylko jako awaryjnym
+  /// zapasem - patrz `DriveBufferService.cacheSizeBytesByWalk`.
+  public static func bufferGB(stats: DriveBufferService.QueueStats? = nil) -> Int {
+    if let bytes = stats?.bytesUsed, bytes > 0 { return Int(bytes / 1_073_741_824) }
+    return Int(DriveBufferService.cacheSizeBytesByWalk() / 1_073_741_824)
   }
 
   /// Wolne miejsce liczone tak, jak liczy je `df` - czyli PESYMISTYCZNIE.
@@ -89,7 +106,8 @@ public actor BufferGuardService {
   /// sie sprawdzic decyzje testem bez czekania w czasie rzeczywistym.
   @discardableResult
   public func step() async -> Snapshot {
-    let buffer = Self.bufferGB()
+    let stats = await DriveBufferService.queueStats()
+    let buffer = Self.bufferGB(stats: stats)
     let free = Self.freeGB()
     let running = await TimeMachineStatus.isRunning()
     let percent = (await TimeMachineStatus.currentProgress())?.percent ?? 0
@@ -115,8 +133,11 @@ public actor BufferGuardService {
       }
 
     case .running:
-      if buffer >= thresholds.highGB || free <= thresholds.minFreeGB {
-        CMLogger.log("PAUZA: bufor \(buffer) GB, wolne \(free) GB - czekam na wysylke")
+      // outOfSpace pochodzi od rclone i znaczy "nie mam juz gdzie odlozyc
+      // danych" - to twardszy fakt niz jakikolwiek nasz prog.
+      if stats?.outOfSpace == true || buffer >= thresholds.highGB || free <= thresholds.minFreeGB {
+        let why = stats?.outOfSpace == true ? "rclone zglasza brak miejsca w buforze" : "prog"
+        CMLogger.log("PAUZA (\(why)): bufor \(buffer) GB, wolne \(free) GB - czekam na wysylke")
         await stopBackup()
         state = .pausedForBuffer
       } else if !running {

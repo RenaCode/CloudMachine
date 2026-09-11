@@ -25,7 +25,11 @@ public enum DriveBufferService {
 
   public static let remoteName = "gdrive"
   public static let remotePath = "CloudMachine/mac-studio"
-  public static let cacheSize = "100G"
+  /// Rozmiar bufora. Trzymany jako liczba, bo progi dozorcy sa z niego
+  /// wyliczane - inaczej zmiana jednego bez drugiego daje progi, ktore nigdy
+  /// nie zadzialaja albo dzialaja natychmiast.
+  public static let cacheSizeGB = 100
+  public static var cacheSize: String { "\(cacheSizeGB)G" }
 
   /// Adres interfejsu sterujacego rclone. Slucha tylko na petli zwrotnej, ale
   /// kazdy lokalny proces moze przez niego sterowac montowaniem - jesli kiedys
@@ -128,6 +132,14 @@ public enum DriveBufferService {
     public var uploadsQueued: Int
     public var files: Int
     public var erroredFiles: Int
+    /// Rozmiar bufora wg samego rclone. Liczenie go wlasnym obchodem katalogu
+    /// oznaczalo 6504 wywolania stat przy kazdym odswiezeniu interfejsu, co
+    /// 10 sekund, na tym samym dysku, na ktory leci backup.
+    public var bytesUsed: UInt64
+    /// rclone nie ma juz gdzie odlozyc danych - nie zdazyl wyslac tego, co
+    /// trzyma, wiec nie ma czego usunac. Mocniejszy sygnal niz jakikolwiek
+    /// prog, bo pochodzi od tego, kto naprawde wie.
+    public var outOfSpace: Bool
     public var isQuiet: Bool { uploadsInProgress == 0 && uploadsQueued == 0 }
   }
 
@@ -157,7 +169,9 @@ public enum DriveBufferService {
       uploadsInProgress: number("uploadsInProgress", in: disk),
       uploadsQueued: number("uploadsQueued", in: disk),
       files: number("files", in: disk),
-      erroredFiles: number("erroredFiles", in: disk)
+      erroredFiles: number("erroredFiles", in: disk),
+      bytesUsed: UInt64(max(0, number("bytesUsed", in: disk))),
+      outOfSpace: (disk["outOfSpace"] as? Bool) ?? false
     )
   }
 
@@ -173,8 +187,13 @@ public enum DriveBufferService {
     return false
   }
 
-  /// Rozmiar bufora na dysku w bajtach.
-  public static func cacheSizeBytes() -> UInt64 {
+  /// Rozmiar bufora w bajtach - z obchodu katalogu.
+  ///
+  /// Uzywane TYLKO awaryjnie, gdy interfejs sterujacy rclone nie odpowiada.
+  /// Normalnie liczbe podaje samo rclone (`QueueStats.bytesUsed`): obchod
+  /// katalogu to 6504 wywolania stat, a przy odswiezaniu co 10 sekund
+  /// niepotrzebne obciazenie dysku, na ktory akurat leci backup.
+  public static func cacheSizeBytesByWalk() -> UInt64 {
     guard
       let enumerator = FileManager.default.enumerator(
         at: cacheDir, includingPropertiesForKeys: [.totalFileAllocatedSizeKey],

@@ -232,6 +232,8 @@ public enum BackupImageService {
   /// wylaczenie Maca - musi przepuscic drenaz do konca.
   public static func detach(force: Bool = false, waitForUpload: Bool = true) async -> CMActionResult
   {
+    await unmountBrowsedSnapshots()
+
     var args = ["detach", targetPath.path, "-quiet"]
     if force { args.append("-force") }
     let result = try? await ProcessRunner.run("/usr/bin/hdiutil", args, timeout: 120)
@@ -255,6 +257,25 @@ public enum BackupImageService {
       message: drained
         ? "Odpiete, wszystko wyslane na Google Drive."
         : "Odpiete, ale wysylka NIE zakonczyla sie w czasie - nie kasuj bufora.")
+  }
+
+  /// Odmontowuje migawki backupu podpiete pod `/Volumes/.timemachine/`.
+  ///
+  /// Przegladanie backupu - w Finderze albo zwyklym `ls` po sciezce z
+  /// `tmutil listbackups` - montuje jego migawke tylko do odczytu. Takie
+  /// montowanie trzyma urzadzenie obrazu zajete i `hdiutil detach` odmawia,
+  /// a komunikat nie mowi ani slowa o tym, co go blokuje.
+  public static func unmountBrowsedSnapshots() async {
+    guard let table = try? mountTable() else { return }
+    for line in table.components(separatedBy: .newlines) {
+      guard line.contains("/Volumes/.timemachine/"),
+        let range = line.range(of: " on "),
+        let end = line.range(of: " (", range: range.upperBound..<line.endIndex)
+      else { continue }
+      let path = String(line[range.upperBound..<end.lowerBound])
+      _ = try? await ProcessRunner.run("/sbin/umount", [path], timeout: 60)
+      CMLogger.log("Odmontowano przegladana migawke backupu: \(path)")
+    }
   }
 
   // MARK: - Weryfikacja
@@ -286,14 +307,15 @@ public enum BackupImageService {
       return CMActionResult(succeeded: false, message: "Nie znalazlem urzadzenia APFS w obrazie.")
     }
 
-    defer {
-      Task {
-        _ = try? await ProcessRunner.run(
-          "/usr/bin/hdiutil", ["detach", String(device), "-force", "-quiet"], timeout: 60)
-      }
-    }
-
     let fsck = try? await ProcessRunner.run(fsckPath, ["-n", String(device)], timeout: 3600)
+
+    // Odpinamy Z CZEKANIEM, nie przez `defer { Task { ... } }`. Tamta wersja
+    // wracala z funkcji, zanim odpiecie sie wydarzylo - a wolajacy zwykle od
+    // razu podpina obraz z powrotem, wiec podpiecie scigalo sie z zaleglym
+    // odpieciem tego samego urzadzenia.
+    _ = try? await ProcessRunner.run(
+      "/usr/bin/hdiutil", ["detach", String(device), "-force", "-quiet"], timeout: 120)
+
     return CMActionResult(
       succeeded: fsck?.succeeded == true,
       message: fsck?.succeeded == true

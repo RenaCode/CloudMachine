@@ -31,6 +31,8 @@ struct BufferStatus: Equatable {
   var erroredFiles: Int = 0
   /// Dobowy limit uploadu Google Drive wyczerpany - do odnowienia trzeba czekac.
   var dailyQuotaHit: Bool = false
+  /// rclone nie ma gdzie odlozyc danych - bufor pelny samymi niewyslanymi.
+  var outOfSpace: Bool = false
 
   var draining: Bool { uploadsInProgress > 0 || uploadsQueued > 0 }
 }
