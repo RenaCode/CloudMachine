@@ -19,6 +19,14 @@ struct CloudMachineAgent: AsyncParsableCommand {
       BuildApp.self,
       MakeDmg.self,
       SetupSigningCert.self,
+      // Warstwa Google Drive - zastapila skrypty z gdrive/.
+      InstallRclone.self,
+      MountDrive.self,
+      CreateImage.self,
+      AttachImage.self,
+      VerifyImage.self,
+      BufferGuard.self,
+      DriveStatus.self,
     ]
   )
 }
