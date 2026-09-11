@@ -20,10 +20,11 @@ struct DashboardView: View {
       .padding(24)
       .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .task {
-      controller.startAutoRefresh()
-    }
-    .onDisappear { controller.stopAutoRefresh() }
+    .task { controller.startAutoRefresh() }
+    // Celowo BEZ onDisappear: kontroler jest wspolny dla okna i paska menu,
+    // wiec zatrzymanie odswiezania przy zamknieciu okna zamrazalo takze
+    // pasek menu - pokazywal wtedy stan sprzed zamkniecia, wygladajacy jak
+    // awaria, mimo ze wszystko dzialalo.
   }
 
   // MARK: - Naglowek
@@ -38,6 +39,10 @@ struct DashboardView: View {
         Text("Time Machine na Google Drive").font(.subheadline).foregroundStyle(.secondary)
       }
       Spacer()
+      if let at = controller.status.lastRefresh {
+        Text("odswiezono \(at.formatted(date: .omitted, time: .standard))")
+          .font(.caption).foregroundStyle(.secondary)
+      }
       if controller.status.isBusy {
         HStack(spacing: 8) {
           ProgressView().controlSize(.small)

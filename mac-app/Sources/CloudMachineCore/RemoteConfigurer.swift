@@ -6,8 +6,16 @@ import Foundation
 /// interaktywnego kreatora `rclone config`. CLI i GUI uzywaja teraz
 /// DOKLADNIE tej samej sciezki logowania.
 public enum RemoteConfigurer {
+  /// Czy remote istnieje w konfiguracji rclone.
+  ///
+  /// Pyta binarke zarzadzana przez CloudMachine, nie te z Homebrew. Obie czytaja
+  /// ten sam plik konfiguracyjny, ale reszta systemu chodzi na naszej - a stan
+  /// pokazywany uzytkownikowi musi opisywac to, czego uzywamy naprawde, nie
+  /// przypadkowa druga instalacje, ktorej moze kiedys nie byc.
   public static func isConfigured(remoteName: String) async -> Bool {
-    guard let result = try? await ProcessRunner.runRclone(["listremotes"]) else { return false }
+    guard let result = try? await CMTooling.runRclone(["listremotes"], timeout: 30) else {
+      return false
+    }
     return result.stdout.contains("\(remoteName):")
   }
 

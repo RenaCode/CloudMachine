@@ -68,6 +68,10 @@ final class AppStatus: ObservableObject {
   @Published var busyLabel: String = ""
   @Published var logTail: String = ""
   @Published var errorMessage: String?
+  /// Kiedy ostatnio udalo sie odczytac stan. Pokazywane w interfejsie, bo
+  /// zamrozony widok wyglada dokladnie jak awaria - a to dwie rozne rzeczy
+  /// i uzytkownik musi je odroznic bez zagladania do logow.
+  @Published var lastRefresh: Date?
 
   /// Jednozdaniowa odpowiedz na pytanie "czy moje dane sa bezpieczne".
   var headline: String {
