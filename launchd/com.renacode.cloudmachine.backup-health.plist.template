@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.renacode.cloudmachine.backup-health</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__CM_AGENT_BIN__</string>
+    <string>backup-health</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!--
+    Czujka cyklu backupu. Jedyny element, ktory odpowiada na pytanie "czy kopia
+    NADAL powstaje", a nie "czy urzadzenia sa podpiete" - te dwie rzeczy
+    rozjezdzaja sie po cichu i wlasnie ten rozjazd jest tu najgrozniejsza
+    awaria.
+
+    Bez KeepAlive: to jednorazowe sprawdzenie, ktore konczy sie kodem 1, gdy
+    cykl jest zerwany. KeepAlive zamienilby kazda awarie w petle restartow.
+
+    Co 30 minut, przy cyklu godzinowym i progu 3 h - wystarczajaco czesto, zeby
+    zerwany cykl nie przelezal doby, i rzadko, zeby nic nie kosztowac. Czujka
+    czyta lokalny plik preferencji Time Machine, a NIE montowanie Google Drive:
+    nadzor, ktory wisi razem z tym, co nadzoruje, milczy dokladnie wtedy, gdy
+    ma mowic.
+  -->
+  <key>StartInterval</key>
+  <integer>1800</integer>
+  <key>StandardOutPath</key>
+  <string>__CM_LOG_DIR__/launchd-backup-health.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__CM_LOG_DIR__/launchd-backup-health.err.log</string>
+</dict>
+</plist>

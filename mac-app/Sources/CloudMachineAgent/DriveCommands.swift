@@ -128,14 +128,25 @@ struct BufferGuard: AsyncParsableCommand {
     commandName: "buffer-guard",
     abstract: "Wstrzymuje Time Machine, gdy bufor rosnie szybciej, niz idzie wysylka.")
 
+  // Domyslne progi bierzemy Z `Thresholds`, ktore wylicza je z rozmiaru
+  // bufora - NIE wpisujemy ich tu po raz drugi z palca.
+  //
+  // Wpisane liczby (150/40/80) zgadzaly sie z wyliczonymi tylko przypadkiem,
+  // dla bufora 100 GB. launchd uruchamia `buffer-guard` BEZ argumentow, wiec
+  // to wlasnie te literaly trafialy na produkcje - wyliczanie progow
+  // z `cacheSizeGB` bylo w praktyce martwe, a trzy testy pilnujace tego
+  // wyliczenia sprawdzaly `Thresholds()` bezposrednio i przechodzily, nie
+  // dotykajac sciezki, ktora naprawde dziala. Po zmianie `cacheSizeGB` progi
+  // rozjechalyby sie po cichu: dozorca albo wstrzymywalby backup bez przerwy,
+  // albo nie wstrzymalby go nigdy.
   @Option(name: .long, help: "Powyzej tylu GB bufora wstrzymujemy Time Machine.")
-  var highGB: Int = 150
+  var highGB: Int = BufferGuardService.Thresholds().highGB
 
   @Option(name: .long, help: "Ponizej tylu GB bufora wznawiamy.")
-  var lowGB: Int = 40
+  var lowGB: Int = BufferGuardService.Thresholds().lowGB
 
   @Option(name: .long, help: "Ponizej tylu GB wolnych na dysku wstrzymujemy niezaleznie od bufora.")
-  var minFreeGB: Int = 80
+  var minFreeGB: Int = BufferGuardService.Thresholds().minFreeGB
 
   @Option(name: .long, help: "Co ile sekund sprawdzac.")
   var interval: Int = 30
@@ -151,6 +162,50 @@ struct BufferGuard: AsyncParsableCommand {
       await guardService.step()
       try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
     }
+  }
+}
+
+// MARK: - Czujka cyklu backupu
+
+struct BackupHealthCommand: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "backup-health",
+    abstract:
+      "Sprawdza, czy cykl godzinowy NADAL dziala (data ostatniej UDANEJ kopii), i zglasza awarie.")
+
+  @Option(name: .long, help: "Po tylu godzinach bez udanej kopii uznajemy cykl za zerwany.")
+  var maxAgeHours: Double = BackupHealth.maxAgeHours
+
+  @Flag(name: .long, help: "Tylko wypisz stan, bez powiadomienia systemowego.")
+  var quiet = false
+
+  func run() async throws {
+    let report = await BackupHealth.currentReport(maxAgeHours: maxAgeHours)
+
+    if let lastSuccess = report.lastSuccess {
+      print("Ostatnia udana kopia: \(BackupHealth.stamp(lastSuccess))")
+    } else {
+      print("Ostatnia udana kopia: BRAK")
+    }
+    if let lastAttempt = report.lastAttempt {
+      print("Ostatnia proba:       \(BackupHealth.stamp(lastAttempt))")
+    }
+
+    guard !report.healthy else {
+      print("Cykl backupu: OK")
+      if !quiet { await HealthAlert.report(report) }
+      return
+    }
+
+    for problem in report.problems {
+      print("AWARIA: \(problem.summary)")
+      print("        \(problem.detail)")
+    }
+    if !quiet { await HealthAlert.report(report) }
+
+    // Niezerowy kod wyjscia, zeby launchd, `&&` w skrypcie i czlowiek
+    // patrzacy na `echo $?` dostali ten sam sygnal co tekst powyzej.
+    throw ExitCode(1)
   }
 }
 
