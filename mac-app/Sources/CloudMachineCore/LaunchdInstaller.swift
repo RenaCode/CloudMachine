@@ -12,6 +12,10 @@ public enum LaunchdInstaller {
   }
 
   public static func install() async -> CMActionResult {
+    // Zeby polecenia z dokumentacji dzialaly z terminala, a nie konczyly sie
+    // "command not found" - binarka siedzi w bundlu aplikacji.
+    CMTooling.linkCommandIntoPath()
+
     // Instalacja przeladowuje agentow, w tym ten trzymajacy montowanie. Zrobienie
     // tego przy podpietym obrazie wyrywa mu podloge w trakcie - a odpiecie jest
     // zapisem, ktory musi jeszcze doleciec na Dysk. Popelnilem ten blad trzy razy

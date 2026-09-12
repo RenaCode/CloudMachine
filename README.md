@@ -54,6 +54,13 @@ larger than 750 GB.
 
 ## Setup
 
+`cloudmachine-agent` lives inside the app bundle. `install-launchd` symlinks it
+into `/usr/local/bin`; until then, call it by its full path:
+
+```sh
+/Applications/CloudMachine.app/Contents/MacOS/cloudmachine-agent --help
+```
+
 ```sh
 cloudmachine-agent install-rclone     # official binary — the Homebrew build cannot mount
 cloudmachine-agent install-fuse       # FUSE-T, inside CloudMachine, no separate app

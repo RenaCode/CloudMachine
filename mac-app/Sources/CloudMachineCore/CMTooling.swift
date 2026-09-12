@@ -41,6 +41,40 @@ public enum CMTooling {
     try await ProcessRunner.run(managedRclonePath.path, args, timeout: timeout)
   }
 
+  // MARK: - Dostepnosc z terminala
+
+  /// Sciezka, pod ktora `cloudmachine-agent` ma byc widoczny w PATH.
+  public static let commandLinkPath = "/usr/local/bin/cloudmachine-agent"
+
+  /// Zaklada dowiazanie do binarki agenta w PATH.
+  ///
+  /// Bez tego kazde polecenie z dokumentacji - `prepare-shutdown`,
+  /// `drive-status` - konczy sie "command not found", bo binarka siedzi
+  /// w bundlu aplikacji. Roota nie trzeba: `/usr/local/bin` nalezy do
+  /// uzytkownika i grupy admin.
+  @discardableResult
+  public static func linkCommandIntoPath() -> Bool {
+    guard let agent = CMPaths.agentBinaryPath else { return false }
+    let fm = FileManager.default
+    let link = URL(fileURLWithPath: commandLinkPath)
+
+    if let existing = try? fm.destinationOfSymbolicLink(atPath: commandLinkPath),
+      existing == agent.path
+    {
+      return true
+    }
+    try? fm.createDirectory(
+      at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? fm.removeItem(at: link)
+    do {
+      try fm.createSymbolicLink(at: link, withDestinationURL: agent)
+      CMLogger.log("Dodano \(commandLinkPath) -> \(agent.path)")
+      return true
+    } catch {
+      return false
+    }
+  }
+
   // MARK: - FUSE
 
   /// Nasza kopia FUSE-T - zeby nie trzymac w systemie osobnej aplikacji.
