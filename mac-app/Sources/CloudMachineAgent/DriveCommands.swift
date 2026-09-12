@@ -1,0 +1,258 @@
+import ArgumentParser
+import CloudMachineCore
+import Foundation
+
+/// Podkomendy warstwy Google Drive. Zastepuja skrypty z `gdrive/` - launchd
+/// i GUI wolaja odtad wylacznie te binarke, nie powloke.
+
+// MARK: - Bufor
+
+struct MountDrive: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "mount-drive",
+    abstract: "Montuje Google Drive z buforem zapisu. Zostaje na pierwszym planie (dla launchd).")
+
+  func run() async throws {
+    if DriveBufferService.isMounted {
+      print("Juz zamontowane: \(DriveBufferService.mountPoint.path)")
+      return
+    }
+
+    // Deinstalator FUSE-T kasuje cala zawartosc /usr/local/lib pod swoja
+    // sciezka, w tym nasze dowiazanie - odtwarzamy je, zanim cokolwiek sprawdzimy.
+    FuseInstaller.ensureSystemLink()
+
+    // Bez FUSE rclone konczy natychmiast bledem "cgofuse: cannot find FUSE".
+    // Agent ma KeepAlive, wiec probowalby w kolko co 30 s i zalewal log -
+    // lepiej stanac od razu i powiedziec, czego brakuje.
+    let readiness = CMTooling.checkReadiness()
+    guard readiness.ready else {
+      for (what, how) in zip(readiness.missing, readiness.remedies) {
+        FileHandle.standardError.write(Data("Brakuje: \(what)\n  \(how)\n".utf8))
+      }
+      throw ExitCode(1)
+    }
+
+    await DriveBufferService.excludeBufferFromTimeMachine()
+    let args = try DriveBufferService.prepare()
+
+    // Nasza kopia serwera NFS, jesli jest - wtedy osobna instalacja FUSE-T
+    // w systemie nie jest potrzebna.
+    if FileManager.default.isExecutableFile(atPath: CMTooling.bundledNfsServer.path) {
+      setenv("FUSE_NFSSRV_PATH", CMTooling.bundledNfsServer.path, 1)
+    }
+
+    // Podmieniamy sie na rclone zamiast go nadzorowac: launchd ma pilnowac
+    // procesu, ktory faktycznie trzyma montowanie, a nie posrednika.
+    let rclone = CMTooling.managedRclonePath.path
+    var argv: [UnsafeMutablePointer<CChar>?] = ([rclone] + args).map { strdup($0) }
+    argv.append(nil)
+    execv(rclone, &argv)
+
+    FileHandle.standardError.write(Data("Nie udalo sie uruchomic \(rclone)\n".utf8))
+    throw ExitCode(1)
+  }
+}
+
+// MARK: - Obraz backupu
+
+struct CreateImage: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "create-image",
+    abstract: "Tworzy obraz backupu na Google Drive. Jednorazowo.")
+
+  @Option(name: .long, help: "Rozmiar deklarowany w GB (obraz jest rzadki).")
+  var sizeGB: Int = 4000
+
+  func run() async throws {
+    let result = await BackupImageService.create(sizeGB: sizeGB)
+    print(result.message)
+    if result.succeeded {
+      print("Nastepny krok: cloudmachine-agent attach-image, potem")
+      print("  sudo tmutil setdestination \(BackupImageService.targetPath.path)")
+    } else {
+      throw ExitCode(1)
+    }
+  }
+}
+
+struct AttachImage: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "attach-image",
+    abstract: "Podpina obraz backupu jako cel Time Machine.")
+
+  func run() async throws {
+    // Time Machine nie moze zobaczyc celu, zanim bufor bedzie gotowy - inaczej
+    // uzna, ze dysk backupu zniknal.
+    for _ in 0..<60 {
+      if DriveBufferService.isMounted { break }
+      try? await Task.sleep(nanoseconds: 2_000_000_000)
+    }
+    let result = await BackupImageService.attach()
+    print(result.message)
+    if !result.succeeded { throw ExitCode(1) }
+  }
+}
+
+struct DetachImage: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "detach-image",
+    abstract: "Odpina obraz i czeka, az wszystko doleci na Google Drive.")
+
+  @Flag(name: .long, help: "Nie czekaj na wysylke - RYZYKOWNE, patrz BackupImageService.detach.")
+  var noWait = false
+
+  func run() async throws {
+    let result = await BackupImageService.detach(waitForUpload: !noWait)
+    print(result.message)
+    if !result.succeeded { throw ExitCode(1) }
+  }
+}
+
+struct VerifyImage: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "verify-image",
+    abstract: "Sprawdza spojnosc obrazu przez fsck_apfs (hdiutil verify na sparsebundle nie dziala).")
+
+  func run() async throws {
+    let result = await BackupImageService.verify()
+    print(result.message)
+    if !result.succeeded { throw ExitCode(1) }
+  }
+}
+
+// MARK: - Dozorca bufora
+
+struct BufferGuard: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "buffer-guard",
+    abstract: "Wstrzymuje Time Machine, gdy bufor rosnie szybciej, niz idzie wysylka.")
+
+  @Option(name: .long, help: "Powyzej tylu GB bufora wstrzymujemy Time Machine.")
+  var highGB: Int = 150
+
+  @Option(name: .long, help: "Ponizej tylu GB bufora wznawiamy.")
+  var lowGB: Int = 40
+
+  @Option(name: .long, help: "Ponizej tylu GB wolnych na dysku wstrzymujemy niezaleznie od bufora.")
+  var minFreeGB: Int = 80
+
+  @Option(name: .long, help: "Co ile sekund sprawdzac.")
+  var interval: Int = 30
+
+  func run() async throws {
+    let guardService = BufferGuardService(
+      thresholds: .init(highGB: highGB, lowGB: lowGB, minFreeGB: minFreeGB))
+    CMLogger.log(
+      "Dozorca bufora: prog \(highGB) GB / wznowienie \(lowGB) GB / min. wolnego \(minFreeGB) GB")
+
+    // Bez konca: dozorca ma przezyc kazdy backup, nie tylko pierwszy.
+    while true {
+      await guardService.step()
+      try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
+    }
+  }
+}
+
+// MARK: - Bezpieczne wygaszenie
+
+struct PrepareShutdown: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "prepare-shutdown",
+    abstract: "Przygotowuje do restartu: wstrzymuje backup, odpina obraz i czeka na wysylke.")
+
+  func run() async throws {
+    // Kolejnosc nie jest dowolna. Najpierw Time Machine przestaje dokladac
+    // nowych zapisow, dopiero potem odpinamy obraz - inaczej odpiecie
+    // walczyloby z trwajacym backupem.
+    if await TimeMachineStatus.isRunning() {
+      print("Wstrzymuje backup...")
+      _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 120)
+      try? await Task.sleep(nanoseconds: 3_000_000_000)
+    }
+
+    print("Odpinam obraz i czekam na wysylke...")
+    let result = await BackupImageService.detach()
+    print(result.message)
+
+    guard result.succeeded else {
+      print("")
+      print("NIE RESTARTUJ jeszcze - w buforze sa dane, ktore nie doleciely na Dysk.")
+      print("Sprawdz stan:  cloudmachine-agent drive-status")
+      throw ExitCode(1)
+    }
+
+    print("")
+    print("Mozna restartowac. Po starcie agenty podniosa bufor i podepna obraz same.")
+  }
+}
+
+// MARK: - Stan
+
+struct DriveStatus: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "drive-status",
+    abstract: "Stan bufora, kolejki wysylki i Time Machine.")
+
+  func run() async throws {
+    let readiness = CMTooling.checkReadiness()
+    print("Narzedzia:        \(readiness.ready ? "OK" : "brakuje: " + readiness.missing.joined(separator: ", "))")
+    print("Montowanie Drive: \(DriveBufferService.isMounted ? "OK" : "BRAK")")
+    print("Obraz podpiety:   \(BackupImageService.isAttached ? "OK  (\(BackupImageService.targetPath.path))" : "BRAK")")
+    print("Bufor:            \(BufferGuardService.bufferGB()) GB z \(DriveBufferService.cacheSize)")
+    print("Wolne na dysku:   \(BufferGuardService.freeGB()) GB")
+
+    if let stats = await DriveBufferService.queueStats() {
+      print("Kolejka wysylki:  \(stats.uploadsInProgress) w toku, \(stats.uploadsQueued) w kolejce, \(stats.erroredFiles) bledow")
+    } else {
+      print("Kolejka wysylki:  (interfejs rc nieosiagalny)")
+    }
+
+    let safe = await BackupImageService.safeToRebootNow()
+    print("Restart bez pytania: \(safe ? "TAK - kolejka pusta" : "NIE - najpierw prepare-shutdown")")
+
+    if DriveBufferService.hitDailyQuota() {
+      print("UWAGA:            dobowy limit uploadu Google Drive wyczerpany")
+    }
+
+    if let mountPoint = await TimeMachineStatus.currentDestinationMountPoint() {
+      print("Cel Time Machine: \(mountPoint)")
+    } else {
+      print("Cel Time Machine: brak")
+    }
+    if await TimeMachineStatus.isRunning(), let progress = await TimeMachineStatus.currentProgress() {
+      let percent = (progress.percent ?? 0) * 100
+      print("Backup:           trwa, \(String(format: "%.1f", percent))% (\(progress.phase ?? "?"))")
+    } else {
+      print("Backup:           nie trwa")
+    }
+  }
+}
+
+// MARK: - Instalacja FUSE
+
+struct InstallFuse: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "install-fuse",
+    abstract: "Wciaga FUSE-T do CloudMachine, zeby nie bylo osobnej aplikacji w systemie.")
+
+  func run() async throws {
+    let result = await FuseInstaller.install()
+    print(result.message)
+    if !result.succeeded { throw ExitCode(1) }
+  }
+}
+
+// MARK: - Instalacja rclone
+
+struct InstallRclone: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "install-rclone",
+    abstract: "Pobiera oficjalna binarke rclone (ta z Homebrew nie umie montowac).")
+
+  func run() async throws {
+    let result = await RcloneInstaller.install()
+    print(result.message)
+    if !result.succeeded { throw ExitCode(1) }
+  }
+}

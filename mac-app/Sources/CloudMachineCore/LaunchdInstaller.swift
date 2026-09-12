@@ -12,6 +12,29 @@ public enum LaunchdInstaller {
   }
 
   public static func install() async -> CMActionResult {
+    // Zeby polecenia z dokumentacji dzialaly z terminala, a nie konczyly sie
+    // "command not found" - binarka siedzi w bundlu aplikacji.
+    CMTooling.linkCommandIntoPath()
+
+    // Instalacja przeladowuje agentow, w tym ten trzymajacy montowanie. Zrobienie
+    // tego przy podpietym obrazie wyrywa mu podloge w trakcie - a odpiecie jest
+    // zapisem, ktory musi jeszcze doleciec na Dysk. Popelnilem ten blad trzy razy
+    // z rzedu, wiec nie polegamy juz na pamietaniu o nim.
+    if BackupImageService.isAttached {
+      CMLogger.log("Instalacja agentow: najpierw odpinam obraz i czekam na wysylke")
+      let detached = await BackupImageService.detach()
+      CMLogger.log("Instalacja agentow: \(detached.message)")
+      if !detached.succeeded {
+        return CMActionResult(
+          succeeded: false,
+          message: """
+            Nie odpieto obrazu przed przeladowaniem agentow - przerywam, zeby nie \
+            stracic danych czekajacych w buforze.
+            \(detached.message)
+            """)
+      }
+    }
+
     guard let templatesDir = CMPaths.launchdTemplatesDir else {
       return CMActionResult(
         succeeded: false, message: "Nie znaleziono katalogu launchd/ z szablonami.")

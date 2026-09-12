@@ -9,16 +9,23 @@ struct CloudMachineAgent: AsyncParsableCommand {
     abstract:
       "CloudMachine - weryfikacja, konfiguracja Google Drive i instalacja. Wolane przez launchd na harmonogramie, albo recznie z Terminala.",
     subcommands: [
-      VerifyWatchdog.self,
-      VerifyBackup.self,
-      ArchiveWatchdog.self,
-      ArchiveNow.self,
       InstallLaunchd.self,
       ConfigureRemote.self,
       InstallDependencies.self,
       BuildApp.self,
       MakeDmg.self,
       SetupSigningCert.self,
+      // Warstwa Google Drive - zastapila skrypty z gdrive/.
+      InstallRclone.self,
+      InstallFuse.self,
+      MountDrive.self,
+      CreateImage.self,
+      AttachImage.self,
+      DetachImage.self,
+      VerifyImage.self,
+      BufferGuard.self,
+      PrepareShutdown.self,
+      DriveStatus.self,
     ]
   )
 }

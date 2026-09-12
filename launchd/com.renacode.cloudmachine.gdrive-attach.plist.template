@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.renacode.cloudmachine.gdrive-attach</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__CM_AGENT_BIN__</string>
+    <string>attach-image</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!--
+    Podpiecie obrazu jest jednorazowe, wiec nie KeepAlive. Cykliczne
+    uruchomienie naprawia sytuacje, w ktorej obraz zostal odpiety - na przyklad
+    po tym, jak bufor padl i wrocil.
+
+    Kolejnosc wzgledem bufora nie wymaga sterowania z zewnatrz: `attach-image`
+    sam czeka do dwoch minut, az montowanie stanie.
+  -->
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>StandardOutPath</key>
+  <string>__CM_LOG_DIR__/launchd-gdrive-attach.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__CM_LOG_DIR__/launchd-gdrive-attach.err.log</string>
+</dict>
+</plist>
