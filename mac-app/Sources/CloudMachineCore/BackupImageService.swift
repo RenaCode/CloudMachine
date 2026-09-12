@@ -232,12 +232,25 @@ public enum BackupImageService {
   /// wylaczenie Maca - musi przepuscic drenaz do konca.
   public static func detach(force: Bool = false, waitForUpload: Bool = true) async -> CMActionResult
   {
-    await unmountBrowsedSnapshots()
+    let stillMounted = await unmountBrowsedSnapshots()
 
     var args = ["detach", targetPath.path, "-quiet"]
     if force { args.append("-force") }
     let result = try? await ProcessRunner.run("/usr/bin/hdiutil", args, timeout: 120)
     guard result?.succeeded == true else {
+      // Podajemy powod, jesli go znamy. `hdiutil` mowi tylko "resource busy"
+      // i ani slowa o tym, co trzyma urzadzenie - a to prawie zawsze
+      // przegladana migawka backupu.
+      guard stillMounted.isEmpty else {
+        return CMActionResult(
+          succeeded: false,
+          message: """
+            Nie udalo sie odpiac - obraz trzymaja przegladane migawki backupu, \
+            ktorych nie dalo sie odmontowac:
+            \(stillMounted.joined(separator: "\n"))
+            Zamknij okno Time Machine / Findera na backupie i sprobuj ponownie.
+            """)
+      }
       return CMActionResult(succeeded: false, message: "Nie udalo sie odpiac.")
     }
 
@@ -260,22 +273,41 @@ public enum BackupImageService {
   }
 
   /// Odmontowuje migawki backupu podpiete pod `/Volumes/.timemachine/`.
+  /// Zwraca sciezki, ktorych NIE udalo sie odmontowac.
   ///
   /// Przegladanie backupu - w Finderze albo zwyklym `ls` po sciezce z
   /// `tmutil listbackups` - montuje jego migawke tylko do odczytu. Takie
   /// montowanie trzyma urzadzenie obrazu zajete i `hdiutil detach` odmawia,
   /// a komunikat nie mowi ani slowa o tym, co go blokuje.
-  public static func unmountBrowsedSnapshots() async {
-    guard let table = try? mountTable() else { return }
+  ///
+  /// UZYWAMY `diskutil unmount`, NIE `/sbin/umount`. Zmierzone na dzialajacej
+  /// instalacji: `umount` na takiej migawce konczy sie
+  /// `Operation not permitted` dla uzytkownika (montowaniem zarzadza system),
+  /// a `diskutil unmount` na tej samej sciezce przechodzi bez roota.
+  /// Poprzednia wersja wolala `umount` przez `try?` i logowala "Odmontowano"
+  /// NIEZALEZNIE od wyniku - wiec przy 18 podpietych migawkach log meldowal
+  /// 18 sukcesow, zadna nie zostala odmontowana, a `hdiutil detach` zaraz
+  /// potem odmawial bez zwiazku ze soba widocznego w logu.
+  @discardableResult
+  public static func unmountBrowsedSnapshots() async -> [String] {
+    guard let table = try? mountTable() else { return [] }
+    var failed: [String] = []
     for line in table.components(separatedBy: .newlines) {
       guard line.contains("/Volumes/.timemachine/"),
         let range = line.range(of: " on "),
         let end = line.range(of: " (", range: range.upperBound..<line.endIndex)
       else { continue }
       let path = String(line[range.upperBound..<end.lowerBound])
-      _ = try? await ProcessRunner.run("/sbin/umount", [path], timeout: 60)
-      CMLogger.log("Odmontowano przegladana migawke backupu: \(path)")
+      let result = try? await ProcessRunner.run(
+        "/usr/sbin/diskutil", ["unmount", path], timeout: 60)
+      if result?.succeeded == true {
+        CMLogger.log("Odmontowano przegladana migawke backupu: \(path)")
+      } else {
+        failed.append(path)
+        CMLogger.log("NIE udalo sie odmontowac migawki backupu: \(path)")
+      }
     }
+    return failed
   }
 
   // MARK: - Weryfikacja
@@ -307,7 +339,14 @@ public enum BackupImageService {
       return CMActionResult(succeeded: false, message: "Nie znalazlem urzadzenia APFS w obrazie.")
     }
 
-    let fsck = try? await ProcessRunner.run(fsckPath, ["-n", String(device)], timeout: 3600)
+    // BEZ timeoutu. `fsck_apfs` czyta metadane przez montowanie rclone, wiec
+    // jego czas zalezy od lacza i od liczby migawek - zmierzone na obrazie
+    // 210 GiB z 18 migawkami: pojedyncza migawka schodzi w minutach.
+    // Wczesniejsza granica godziny nie chronila przed niczym, a zamieniala
+    // "sprawdzenie jeszcze trwa" w "Obraz NIESPOJNY", bo ubity `fsck` zwraca
+    // niezerowy kod tak samo jak `fsck`, ktory znalazl uszkodzenie. Falszywy
+    // alarm o utracie backupu jest tu grozniejszy niz dlugie czekanie.
+    let fsck = try? await ProcessRunner.run(fsckPath, ["-n", String(device)])
 
     // Odpinamy Z CZEKANIEM, nie przez `defer { Task { ... } }`. Tamta wersja
     // wracala z funkcji, zanim odpiecie sie wydarzylo - a wolajacy zwykle od
@@ -316,10 +355,19 @@ public enum BackupImageService {
     _ = try? await ProcessRunner.run(
       "/usr/bin/hdiutil", ["detach", String(device), "-force", "-quiet"], timeout: 120)
 
+    // "Nie udalo sie sprawdzic" to NIE to samo co "niespojny" - jedno znaczy
+    // brak wyniku, drugie uszkodzony backup. Zlanie ich w jeden komunikat
+    // kazaloby uzytkownikowi odtwarzac cala kopie z powodu nieudanego
+    // uruchomienia narzedzia.
+    guard let fsck else {
+      return CMActionResult(
+        succeeded: false,
+        message: "Nie udalo sie uruchomic \(fsckPath) - spojnosc obrazu POZOSTAJE NIESPRAWDZONA.")
+    }
     return CMActionResult(
-      succeeded: fsck?.succeeded == true,
-      message: fsck?.succeeded == true
-        ? "Obraz spojny." : "Obraz NIESPOJNY: \(fsck?.stdout.suffix(500) ?? "")")
+      succeeded: fsck.succeeded,
+      message: fsck.succeeded
+        ? "Obraz spojny." : "Obraz NIESPOJNY: \(fsck.stdout.suffix(500))")
   }
 
   // MARK: - Gotowosc do restartu

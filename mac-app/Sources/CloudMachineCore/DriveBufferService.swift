@@ -175,6 +175,35 @@ public enum DriveBufferService {
     )
   }
 
+  /// Pojemnosc konta Google Drive, prosto od rclone.
+  ///
+  /// NIKT tego dotad nie sprawdzal. `machines.json` ma pola `drive_total_gb`
+  /// i `limit_gb`, ale nie uzywa ich ani jedna linia kodu poza samym modelem -
+  /// to byl budzet na papierze. Tymczasem wyczerpanie miejsca na Dysku jest dla
+  /// rclone bledem FATALNYM (`--drive-stop-on-upload-limit` +
+  /// `storageQuotaExceeded`): montowanie znika, a Time Machine traci cel.
+  /// Przy przyroscie rzedu 600 MB na cykl godzinowy to nie jest problem
+  /// odlegly, tylko kwestia daty.
+  public static func remoteQuota() async -> (used: UInt64, total: UInt64, free: UInt64)? {
+    guard
+      let result = try? await CMTooling.runRclone(
+        ["about", "--json", "\(remoteName):"], timeout: 120),
+      result.succeeded,
+      let data = result.stdout.data(using: .utf8),
+      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+
+    func bytes(_ key: String) -> UInt64? {
+      if let v = json[key] as? NSNumber, v.int64Value >= 0 { return UInt64(v.int64Value) }
+      return nil
+    }
+    // `total` bywa nieobecne (konta bez limitu) - wtedy nie ma czego pilnowac.
+    guard let total = bytes("total"), total > 0 else { return nil }
+    let used = bytes("used") ?? 0
+    let free = bytes("free") ?? (total > used ? total - used : 0)
+    return (used, total, free)
+  }
+
   /// Czeka, az wysylka ucichnie. Operacje `hdiutil` na montowaniu FUSE-T sa
   /// stabilne tylko przy pustej kolejce - patrz `BackupImageService`.
   @discardableResult
@@ -216,12 +245,24 @@ public enum DriveBufferService {
   /// limitu dobowego. Pierwsza wersja tej funkcji lapala wlasnie to i
   /// wstrzymala backup po 109 GiB wyslanych, czyli przy siodmej czesci limitu.
   ///
-  /// Prawdziwy limit dobowy jest dla rclone fatalny (`--drive-stop-on-upload-limit`),
-  /// wiec proces konczy prace i montowanie znika. Dopoki montowanie stoi,
-  /// rclone sobie radzi i nie ma czego wstrzymywac.
+  /// Prawdziwy limit jest dla rclone fatalny (`--drive-stop-on-upload-limit`
+  /// dziala dokladnie dla `storageQuotaExceeded` i `teamDriveFileLimitExceeded`),
+  /// wiec proces konczy prace i montowanie znika.
+  ///
+  /// UWAGA: NIE wolno dokladac tu warunku "tylko gdy montowanie lezy". Taka
+  /// wersja tu byla i byla martwa: agent `gdrive-buffer` ma `KeepAlive`
+  /// z `ThrottleInterval` 30 s, wiec launchd podnosi rclone z powrotem szybciej,
+  /// niz dozorca bufora zdazy tyknac (co 30 s). Okno, w ktorym montowania
+  /// faktycznie nie ma, jest krotsze od okresu odpytywania - wykrycie limitu
+  /// bylo rzutem moneta, a w praktyce nie zdarzalo sie wcale. Rozpoznanie po
+  /// SWIEZYM wpisie w logu dziala niezaleznie od tego, czy launchd zdazyl juz
+  /// wskrzesic montowanie.
+  ///
+  /// Chwilowa przepustnica (`userRateLimitExceeded`) nadal NIE jest tu lapana -
+  /// patrz `logMentionsUploadLimit`. To ona kiedys wstrzymala backup po
+  /// 109 GiB i to jej dotyczyla ostroznosc, nie stanu montowania.
   public static func hitDailyQuota() -> Bool {
-    if isMounted { return false }
-    return recentLogMentionsUploadLimit()
+    recentLogMentionsUploadLimit()
   }
 
   private static func recentLogMentionsUploadLimit(within minutes: Int = 30) -> Bool {

@@ -151,7 +151,13 @@ public actor BufferGuardService {
     case .pausedForBuffer, .pausedForQuota:
       // Wznawiamy dopiero, gdy wysylka faktycznie nadgonila - inaczej
       // wpadlibysmy w oscylacje start/stop przy progu.
-      if buffer <= thresholds.lowGB {
+      //
+      // Wolne miejsce sprawdzamy TAK SAMO jak przy pauzie. Wczesniej warunek
+      // wznowienia patrzyl wylacznie na bufor: dozorca, ktory wstrzymal backup
+      // z powodu konczacego sie dysku, wznawial go, gdy tylko bufor zszedl
+      // ponizej progu - czyli przy dysku nadal pelnym. Pauza chroniaca dysk
+      // nie moze byc odwolywana przez warunek, ktory o dysku nic nie wie.
+      if buffer <= thresholds.lowGB && free > thresholds.minFreeGB {
         CMLogger.log("WZNOWIENIE: bufor \(buffer) GB, wolne \(free) GB")
         await startBackup()
         state = .running

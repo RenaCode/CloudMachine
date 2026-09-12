@@ -85,14 +85,29 @@ final class AppStatus: ObservableObject {
     if !buffer.imageAttached { return "Obraz backupu niepodpiety" }
     if case .notRegistered = timeMachineState { return "Time Machine nie wskazuje na CloudMachine" }
     if buffer.dailyQuotaHit { return "Dobowy limit Google Drive wyczerpany" }
+    // Pliki, ktorych rclone nie wyslal, istnieja WYLACZNIE na tym Macu -
+    // czyli dokladnie tam, gdzie backup nie ma prawa byc jedyna kopia. To nie
+    // jest szczegol do karty nizej, tylko odpowiedz "nie" na pytanie, czy
+    // dane sa bezpieczne.
+    if buffer.erroredFiles > 0 {
+      return "Nie wyslano \(buffer.erroredFiles) plikow na Google Drive"
+    }
+    if buffer.outOfSpace { return "Bufor pelny - wysylka nie nadaza" }
     if backupProgress != nil { return "Backup w toku" }
     if buffer.draining { return "Wysylanie na Google Drive" }
     return "Gotowe"
   }
 
+  /// Czy stan jest naprawde dobry.
+  ///
+  /// UWAGA: `erroredFiles` i `outOfSpace` MUSZA tu byc. Bez nich pasek menu
+  /// pokazywal zielony znaczek i "Gotowe", podczas gdy czesc pasm obrazu nigdy
+  /// nie doleciala na Dysk - a taka kopia moze sie nie otworzyc. Zepsute
+  /// wygladalo dokladnie tak samo jak sprawne.
   var healthy: Bool {
     guard case .ready = dependencyState, remoteConfigured, buffer.mounted, buffer.imageAttached,
-      case .registered = timeMachineState, !buffer.dailyQuotaHit
+      case .registered = timeMachineState, !buffer.dailyQuotaHit,
+      buffer.erroredFiles == 0, !buffer.outOfSpace
     else { return false }
     return true
   }
