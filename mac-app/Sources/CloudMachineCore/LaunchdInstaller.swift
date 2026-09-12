@@ -43,7 +43,30 @@ public enum LaunchdInstaller {
       return CMActionResult(
         succeeded: false, message: "Nie znaleziono skompilowanej binarki cloudmachine-agent.")
     }
-    let agentBin = stableAgentBinaryPath(resolvedFrom: resolvedAgentBin)
+    // PRZERYWAMY, nie ostrzegamy. Wczesniej nieudane odlozenie binarki
+    // konczylo sie wpisem "OSTRZEZENIE" w logu i dokonczeniem instalacji -
+    // launchd dostawal sciezke do `.build/`, ktora kolejny `swift build` albo
+    // `git clean` kasuje spod dzialajacych agentow. Agent, ktory znika, to
+    // backup, ktory przestaje powstawac, a jedynym sladem jest linia w logu,
+    // do ktorej nikt nie zaglada. Instalacja bez stabilnej binarki jest gorsza
+    // niz brak instalacji, bo wyglada na udana.
+    let agentBin: URL
+    do {
+      agentBin = try stableAgentBinaryPath(resolvedFrom: resolvedAgentBin)
+    } catch let error as NoStableBinary {
+      return CMActionResult(
+        succeeded: false,
+        message: """
+          PRZERWANO: nie udalo sie odlozyc cloudmachine-agent w stabilnym miejscu
+          (\(error.attemptedPath)) - najczesciej brak miejsca albo uprawnien.
+          NIE instaluje agentow wskazujacych na \(error.fallbackPath): ta sciezka
+          znika przy kolejnym `swift build` albo `git clean`, a backupy ustaja
+          bez zadnego widocznego sygnalu.
+          """)
+    } catch {
+      return CMActionResult(
+        succeeded: false, message: "PRZERWANO: \(error.localizedDescription)")
+    }
 
     try? FileManager.default.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
 
@@ -96,6 +119,13 @@ public enum LaunchdInstaller {
       succeeded: true, message: "Zainstalowano agentow: \(installedLabels.joined(separator: ", "))")
   }
 
+  /// Rzucane, gdy nie da sie odlozyc binarki w stabilnym miejscu. Wolajacy ma
+  /// wtedy PRZERWAC instalacje, nie dokonczyc jej gorszym wariantem.
+  struct NoStableBinary: Error {
+    var attemptedPath: String
+    var fallbackPath: String
+  }
+
   /// Jesli `resolved` wskazuje do wewnatrz `.build/` checkoutu
   /// deweloperskiego (przypadek 3 w `CMPaths.agentBinaryPath` - GUI/CLI
   /// odpalone przez `swift run` w drzewie repo), zywa automatyzacja launchd
@@ -106,25 +136,30 @@ public enum LaunchdInstaller {
   /// stabilnej lokalizacji poza drzewem repo - launchd wskazuje na TA kopie.
   /// Binarka spakowana w .app (przypadek 1/2) jest juz stabilna sama w
   /// sobie i nie wymaga kopiowania.
-  private static func stableAgentBinaryPath(resolvedFrom resolved: URL) -> URL {
+  ///
+  /// Rzuca `NoStableBinary`, gdy sie nie uda - patrz `install()`.
+  private static func stableAgentBinaryPath(resolvedFrom resolved: URL) throws -> URL {
     guard resolved.path.contains("/.build/") else { return resolved }
     let stableDir = CMPaths.appSupportDir.appendingPathComponent("bin")
     try? FileManager.default.createDirectory(at: stableDir, withIntermediateDirectories: true)
     let stableBin = stableDir.appendingPathComponent("cloudmachine-agent")
-    try? FileManager.default.removeItem(at: stableBin)
-    guard (try? FileManager.default.copyItem(at: resolved, to: stableBin)) != nil else {
-      // WAZNE: NIE cichy fallback - jesli kopiowanie zawiedzie (dysk pelny,
-      // uprawnienia) PO tym jak stary stabilny plik juz usunieto powyzej,
-      // bez tego ostrzezenia launchd zostalby po cichu wskazany z powrotem
-      // na krucha sciezke deweloperska .build, ktora dokladnie ten mechanizm
-      // mial omijac (kolejny `swift build`/`git clean` moze ja podmienic
-      // albo skasowac spod dzialajacych juz watchdogow).
-      CMLogger.log(
-        "OSTRZEZENIE: nie udalo sie skopiowac cloudmachine-agent do stabilnej lokalizacji (\(stableBin.path)) - launchd bedzie wskazywal na \(resolved.path), ktora moze zniknac przy kolejnym build/clean."
-      )
-      return resolved
+
+    // Kopiujemy OBOK, a stara kopie podmieniamy dopiero po udanym zapisie.
+    // Poprzednia wersja kasowala stary plik PRZED kopiowaniem, wiec nieudane
+    // kopiowanie zostawialo instalacje bez stabilnej binarki w ogole.
+    let staging = stableDir.appendingPathComponent("cloudmachine-agent.nowy")
+    try? FileManager.default.removeItem(at: staging)
+    guard (try? FileManager.default.copyItem(at: resolved, to: staging)) != nil else {
+      throw NoStableBinary(attemptedPath: stableBin.path, fallbackPath: resolved.path)
     }
-    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stableBin.path)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staging.path)
+    guard
+      (try? FileManager.default.replaceItemAt(stableBin, withItemAt: staging)) != nil
+        || (try? FileManager.default.moveItem(at: staging, to: stableBin)) != nil
+    else {
+      try? FileManager.default.removeItem(at: staging)
+      throw NoStableBinary(attemptedPath: stableBin.path, fallbackPath: resolved.path)
+    }
     return stableBin
   }
 
