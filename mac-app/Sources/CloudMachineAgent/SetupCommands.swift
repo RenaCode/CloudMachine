@@ -21,9 +21,17 @@ struct ConfigureRemote: AsyncParsableCommand {
     abstract:
       "Laczy z Google Drive przez rclone (OAuth w przegladarce) i tworzy folder tej maszyny.")
 
+  @Flag(
+    name: .long,
+    help:
+      "Nadpisz istniejacy remote. RYZYKOWNE: podmienia token i uprawnienia."
+  )
+  var replaceExisting = false
+
   func run() async throws {
     let (config, key) = await CLIContext.load()
-    let result = await RemoteConfigurer.connect(config: config, machineKey: key)
+    let result = await RemoteConfigurer.connect(
+      config: config, machineKey: key, replaceExisting: replaceExisting)
     print(result.message)
     if !result.succeeded { throw ExitCode.failure }
   }
