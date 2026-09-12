@@ -179,8 +179,14 @@ struct BackupHealthCommand: AsyncParsableCommand {
   @Flag(name: .long, help: "Tylko wypisz stan, bez powiadomienia systemowego.")
   var quiet = false
 
+  @Option(
+    name: .long,
+    help: "Inny plik preferencji Time Machine - do sprawdzenia czujki na znanej probce.")
+  var preferences: String = BackupHealth.preferencesPath
+
   func run() async throws {
-    let report = await BackupHealth.currentReport(maxAgeHours: maxAgeHours)
+    let report = await BackupHealth.currentReport(
+      maxAgeHours: maxAgeHours, preferencesFile: preferences)
 
     if let lastSuccess = report.lastSuccess {
       print("Ostatnia udana kopia: \(BackupHealth.stamp(lastSuccess))")

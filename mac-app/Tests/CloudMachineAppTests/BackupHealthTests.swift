@@ -174,6 +174,38 @@ final class BackupHealthTests: XCTestCase {
     XCTAssertNil(result)
   }
 
+  /// Domyka luke miedzy PLIKIEM a ocena: zapis do pliku, odczyt tak samo jak
+  /// robi to `currentReport`, i dopiero potem `dates`. Testy na samym
+  /// `evaluate` nie pokrywaja serializacji, a to wlasnie tam "czujka milczy"
+  /// wyglada identycznie jak "wszystko dobrze".
+  func testOdczytPrzezPrawdziwyPlikPlistDajeTeSameDaty() throws {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("cm-health-\(UUID().uuidString).plist")
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let data = try PropertyListSerialization.data(
+      fromPropertyList: preferences(), format: .binary, options: 0)
+    try data.write(to: url)
+
+    let raw = try Data(contentsOf: url)
+    let parsed = try XCTUnwrap(
+      PropertyListSerialization.propertyList(from: raw, format: nil) as? [String: Any])
+    let (lastSuccess, lastAttempt, result) = BackupHealth.dates(
+      inPreferences: parsed, volumeNamed: "CloudMachine")
+
+    XCTAssertEqual(lastSuccess, Date(timeIntervalSince1970: 1_757_698_000))
+    XCTAssertEqual(lastAttempt, Date(timeIntervalSince1970: 1_757_699_000))
+    XCTAssertEqual(result, 0)
+  }
+
+  /// Nieczytelny plik NIE moze wygladac jak zdrowy cykl.
+  func testNieczytelnyPlikNiePrzechodziZaSukces() async {
+    let report = await BackupHealth.currentReport(
+      preferencesFile: "/nie/ma/takiego/pliku.plist")
+    XCTAssertFalse(report.healthy)
+    XCTAssertTrue(report.problems.contains { $0.summary.contains("preferencji Time Machine") })
+  }
+
   // MARK: - Zglaszanie
 
   /// Komunikat z cudzyslowem musi przejsc przez AppleScript bez rozwalenia

@@ -225,11 +225,17 @@ public enum BackupHealth {
 
   // MARK: - Odczyt na zywo
 
+  /// `preferencesFile` da sie podmienic, zeby dalo sie PRZEJSC CALA sciezke
+  /// czujki na znanej zlej probce - odczyt pliku, parsowanie, wybor celu,
+  /// ocena, zgloszenie, kod wyjscia - bez psucia dzialajacego backupu. Test
+  /// jednostkowy na `evaluate` nie pokrywa tego, co dzieje sie miedzy plikiem
+  /// a decyzja, a wlasnie tam siedzialy w tym projekcie ciche awarie.
   public static func currentReport(
-    now: Date = Date(), maxAgeHours: Double = BackupHealth.maxAgeHours
+    now: Date = Date(), maxAgeHours: Double = BackupHealth.maxAgeHours,
+    preferencesFile: String = BackupHealth.preferencesPath
   ) async -> Report {
     let plist =
-      (try? Data(contentsOf: URL(fileURLWithPath: preferencesPath)))
+      (try? Data(contentsOf: URL(fileURLWithPath: preferencesFile)))
       .flatMap {
         try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any]
       }
@@ -241,7 +247,7 @@ public enum BackupHealth {
           Problem(
             summary: "Nie da sie odczytac preferencji Time Machine",
             detail:
-              "\(preferencesPath) jest nieczytelny - najczesciej brak Pelnego dostepu do dysku. Bez tego pliku NIE WIADOMO, kiedy ostatnio powstala kopia, wiec traktujemy to jak awarie, a nie jak brak problemu."
+              "\(preferencesFile) jest nieczytelny - najczesciej brak Pelnego dostepu do dysku. Bez tego pliku NIE WIADOMO, kiedy ostatnio powstala kopia, wiec traktujemy to jak awarie, a nie jak brak problemu."
           )
         ], lastSuccess: nil, lastAttempt: nil)
     }
