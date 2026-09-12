@@ -208,6 +208,9 @@ struct DriveStatus: AsyncParsableCommand {
       print("Kolejka wysylki:  (interfejs rc nieosiagalny)")
     }
 
+    let safe = await BackupImageService.safeToRebootNow()
+    print("Restart bez pytania: \(safe ? "TAK - kolejka pusta" : "NIE - najpierw prepare-shutdown")")
+
     if DriveBufferService.hitDailyQuota() {
       print("UWAGA:            dobowy limit uploadu Google Drive wyczerpany")
     }

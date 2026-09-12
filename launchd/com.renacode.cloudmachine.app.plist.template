@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.renacode.cloudmachine.app</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/open</string>
+    <string>-a</string>
+    <string>/Applications/CloudMachine.app</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!--
+    Autostart interfejsu. Przez `open`, a nie przez uruchomienie binarki
+    wprost: launchd odpalilby ja poza sesja Aqua, a aplikacja z ikona w pasku
+    menu nie ma tam czego rysowac.
+
+    Bez KeepAlive - `open` konczy sie natychmiast po wystartowaniu aplikacji,
+    wiec KeepAlive uruchamialby ja w kolko. Zamkniecie okna przez uzytkownika
+    ma zostac zamknieciem, nie zaproszeniem do restartu.
+
+    Same backupy NIE zaleza od tej aplikacji - robia je agenty gdrive-buffer,
+    gdrive-attach i buffer-guard. To jest wylacznie podglad.
+  -->
+  <key>StandardOutPath</key>
+  <string>__CM_LOG_DIR__/launchd-app.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__CM_LOG_DIR__/launchd-app.err.log</string>
+</dict>
+</plist>

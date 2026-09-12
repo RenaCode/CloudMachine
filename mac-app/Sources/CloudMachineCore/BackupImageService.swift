@@ -322,6 +322,28 @@ public enum BackupImageService {
         ? "Obraz spojny." : "Obraz NIESPOJNY: \(fsck?.stdout.suffix(500) ?? "")")
   }
 
+  // MARK: - Gotowosc do restartu
+
+  /// Czy mozna bezpiecznie wylaczyc Maca bez `prepare-shutdown`.
+  ///
+  /// Ryzyko przy wylaczaniu nie jest stale - istnieje tylko wtedy, gdy w
+  /// buforze czekaja dane jeszcze niewyslane. macOS daje agentom kilkanascie
+  /// sekund na zamkniecie, co przy pustej kolejce wystarcza z zapasem, a przy
+  /// pelnej nie wystarcza wcale.
+  ///
+  /// Zmierzone: kolejka wraca do zera w ciagu kilku minut po kazdym backupie
+  /// godzinowym, wiec przez wieksza czesc doby restart jest po prostu
+  /// bezpieczny. Zamiast kazac uzytkownikowi pamietac o poleceniu przed kazdym
+  /// restartem, mowimy mu, kiedy naprawde jest potrzebne.
+  public static func safeToRebootNow() async -> Bool {
+    guard let stats = await DriveBufferService.queueStats() else {
+      // Bez odczytu ze stanu kolejki nie mamy podstaw twierdzic, ze jest
+      // bezpiecznie - a przy takim pytaniu milczenie musi znaczyc "nie".
+      return false
+    }
+    return stats.isQuiet
+  }
+
   // MARK: - Ponawianie
 
   /// Ponawia operacje `hdiutil` na montowaniu FUSE-T.
