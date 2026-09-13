@@ -92,7 +92,8 @@ public enum FuseInstaller {
     }
 
     guard
-      let dylib = findFile(under: expanded, matching: { $0.hasPrefix("libfuse-t") && $0.hasSuffix(".dylib") }),
+      let dylib = findFile(
+        under: expanded, matching: { $0.hasPrefix("libfuse-t") && $0.hasSuffix(".dylib") }),
       let server = findFile(under: expanded, matching: { $0.hasPrefix("go-nfsv4") })
     else {
       return CMActionResult(
@@ -112,7 +113,8 @@ public enum FuseInstaller {
       try linkSystemLibrary()
     } catch {
       return CMActionResult(
-        succeeded: false, message: "Instalacja FUSE-T nie powiodla sie: \(error.localizedDescription)")
+        succeeded: false,
+        message: "Instalacja FUSE-T nie powiodla sie: \(error.localizedDescription)")
     }
 
     return CMActionResult(

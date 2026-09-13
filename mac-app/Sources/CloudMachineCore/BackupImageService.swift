@@ -256,7 +256,8 @@ public enum BackupImageService {
 
     guard waitForUpload else {
       return CMActionResult(
-        succeeded: true, message: "Odpiete (bez czekania na wysylke - dane moga byc tylko lokalnie).")
+        succeeded: true,
+        message: "Odpiete (bez czekania na wysylke - dane moga byc tylko lokalnie).")
     }
 
     // Zapisy z odpiecia trafiaja do kolejki dopiero po `--vfs-write-back`,

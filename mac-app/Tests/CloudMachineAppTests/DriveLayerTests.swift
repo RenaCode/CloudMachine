@@ -145,7 +145,10 @@ final class DailyQuotaDetectionTests: XCTestCase {
   func testTransientRateLimitIsNotTheDailyQuota() {
     let now = Date()
     let log = [
-      line(2, "Received upload limit error: googleapi: Error 403: User rate limit exceeded., userRateLimitExceeded", now: now),
+      line(
+        2,
+        "Received upload limit error: googleapi: Error 403: User rate limit exceeded., userRateLimitExceeded",
+        now: now),
       line(2, "bands/cf9: vfs cache: failed to upload try #1, will retry in 1m0s", now: now),
     ].joined(separator: "\n")
     XCTAssertFalse(DriveBufferService.logMentionsUploadLimit(log, now: now, within: 30))
@@ -153,7 +156,10 @@ final class DailyQuotaDetectionTests: XCTestCase {
 
   func testRealQuotaErrorIsDetected() {
     let now = Date()
-    let log = line(1, "googleapi: Error 403: The user has exceeded their Drive storage quota, storageQuotaExceeded", now: now)
+    let log = line(
+      1,
+      "googleapi: Error 403: The user has exceeded their Drive storage quota, storageQuotaExceeded",
+      now: now)
     XCTAssertTrue(DriveBufferService.logMentionsUploadLimit(log, now: now, within: 30))
   }
 

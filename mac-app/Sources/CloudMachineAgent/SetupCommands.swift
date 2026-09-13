@@ -5,7 +5,8 @@ import Foundation
 struct InstallLaunchd: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "install-launchd",
-    abstract: "Generuje i instaluje agentow launchd (bufor Drive, podpiecie obrazu, dozorca bufora)."
+    abstract:
+      "Generuje i instaluje agentow launchd (bufor Drive, podpiecie obrazu, dozorca bufora)."
   )
 
   func run() async throws {
@@ -40,7 +41,8 @@ struct ConfigureRemote: AsyncParsableCommand {
 struct InstallDependencies: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "install-dependencies",
-    abstract: "Instaluje rclone przez Homebrew - UWAGA: ta wersja NIE umie montowac, patrz install-rclone.")
+    abstract:
+      "Instaluje rclone przez Homebrew - UWAGA: ta wersja NIE umie montowac, patrz install-rclone.")
 
   func run() async throws {
     let result = await DependencyInstaller.installRclone()

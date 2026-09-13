@@ -23,11 +23,13 @@ public enum RcloneInstaller {
       try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
     } catch {
       return CMActionResult(
-        succeeded: false, message: "Nie moge utworzyc katalogu roboczego: \(error.localizedDescription)")
+        succeeded: false,
+        message: "Nie moge utworzyc katalogu roboczego: \(error.localizedDescription)")
     }
 
     guard let version = await latestVersion() else {
-      return CMActionResult(succeeded: false, message: "Nie udalo sie odczytac numeru wersji rclone.")
+      return CMActionResult(
+        succeeded: false, message: "Nie udalo sie odczytac numeru wersji rclone.")
     }
 
     let arch = currentArch()
@@ -52,7 +54,9 @@ public enum RcloneInstaller {
     guard expected == actual else {
       return CMActionResult(
         succeeded: false,
-        message: "Suma SHA256 sie nie zgadza - NIE instaluje.\n  oczekiwana: \(expected)\n  policzona : \(actual)")
+        message:
+          "Suma SHA256 sie nie zgadza - NIE instaluje.\n  oczekiwana: \(expected)\n  policzona : \(actual)"
+      )
     }
 
     guard
@@ -63,7 +67,8 @@ public enum RcloneInstaller {
       return CMActionResult(succeeded: false, message: "Nie udalo sie rozpakowac archiwum.")
     }
 
-    let extracted = workDir
+    let extracted =
+      workDir
       .appendingPathComponent("rclone-\(version)-\(arch)")
       .appendingPathComponent("rclone")
     let destination = CMTooling.managedRclonePath
@@ -74,11 +79,13 @@ public enum RcloneInstaller {
         [.posixPermissions: 0o755], ofItemAtPath: destination.path)
     } catch {
       return CMActionResult(
-        succeeded: false, message: "Nie udalo sie zainstalowac binarki: \(error.localizedDescription)")
+        succeeded: false,
+        message: "Nie udalo sie zainstalowac binarki: \(error.localizedDescription)")
     }
 
     return CMActionResult(
-      succeeded: true, message: "Zainstalowano rclone \(version) w \(destination.path) (suma SHA256 zgodna).")
+      succeeded: true,
+      message: "Zainstalowano rclone \(version) w \(destination.path) (suma SHA256 zgodna).")
   }
 
   // MARK: - Szczegoly
@@ -97,7 +104,8 @@ public enum RcloneInstaller {
     for line in sumsContent.components(separatedBy: .newlines) {
       let parts = line.split(separator: " ", omittingEmptySubsequences: true)
       guard parts.count >= 2 else { continue }
-      let name = parts.last.map(String.init)?.trimmingCharacters(in: CharacterSet(charactersIn: "*"))
+      let name = parts.last.map(String.init)?.trimmingCharacters(
+        in: CharacterSet(charactersIn: "*"))
       if name == zipName { return String(parts[0]) }
     }
     return nil

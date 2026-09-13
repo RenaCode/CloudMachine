@@ -9,8 +9,11 @@ struct MenuBarContentView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 8) {
-        Image(systemName: controller.status.healthy ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-          .foregroundStyle(controller.status.healthy ? .green : .orange)
+        Image(
+          systemName: controller.status.healthy
+            ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        )
+        .foregroundStyle(controller.status.healthy ? .green : .orange)
         Text(controller.status.headline).bold()
       }
 
@@ -30,9 +33,11 @@ struct MenuBarContentView: View {
       HStack {
         Text("Czeka na wyslanie")
         Spacer()
-        Text(controller.status.buffer.draining ? "\(controller.status.buffer.uploadsQueued)" : "nic")
-          .monospacedDigit()
-          .foregroundStyle(controller.status.buffer.draining ? .orange : .secondary)
+        Text(
+          controller.status.buffer.draining ? "\(controller.status.buffer.uploadsQueued)" : "nic"
+        )
+        .monospacedDigit()
+        .foregroundStyle(controller.status.buffer.draining ? .orange : .secondary)
       }
       .font(.callout)
 
