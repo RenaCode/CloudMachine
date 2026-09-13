@@ -1,261 +1,694 @@
 import CloudMachineCore
 import SwiftUI
 
-/// Glowne okno. Ma odpowiadac na jedno pytanie od razu po otwarciu: czy moje
-/// dane sa bezpieczne. Szczegoly sa nizej, dla tych chwil, gdy odpowiedz brzmi
-/// "nie".
+/// Główny interfejs aplikacji CloudMachine, utrzymany w nowoczesnym systemie
+/// wizualnym RenaCode (spójnym z Dietetyk-AI oraz Trader-AI).
 struct DashboardView: View {
   @EnvironmentObject private var controller: CloudMachineController
   @State private var clientID = ""
   @State private var clientSecret = ""
   @State private var credentialsMessage: String?
+  @State private var selectedTab: Tab = .dashboard
 
-  var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
-        header
-        if let error = controller.status.errorMessage { errorBanner(error) }
-        if !setupSteps.isEmpty { setupCard }
-        bufferCard
-        credentialsCard
-        if let progress = controller.status.backupProgress { progressCard(progress) }
-        actions
+  enum Tab: String, CaseIterable, Identifiable {
+    case dashboard = "Panel główny"
+    case logs = "Logi i monitorowanie"
+
+    var id: String { self.rawValue }
+
+    var icon: String {
+      switch self {
+      case .dashboard: return "square.grid.2x2.fill"
+      case .logs: return "terminal.fill"
       }
-      .padding(24)
-      .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .task { controller.startAutoRefresh() }
-    // Celowo BEZ onDisappear: kontroler jest wspolny dla okna i paska menu,
-    // wiec zatrzymanie odswiezania przy zamknieciu okna zamrazalo takze
-    // pasek menu - pokazywal wtedy stan sprzed zamkniecia, wygladajacy jak
-    // awaria, mimo ze wszystko dzialalo.
   }
 
-  // MARK: - Naglowek
+  var body: some View {
+    ZStack {
+      // Świetliste tło RenaCode
+      AmbientGlowBackground()
 
-  private var header: some View {
-    HStack(spacing: 12) {
-      Image(
-        systemName: controller.status.healthy
-          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-      )
-      .font(.system(size: 32))
-      .foregroundStyle(controller.status.healthy ? .green : .orange)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(controller.status.headline).font(.title2).bold()
-        Text("Time Machine na Google Drive").font(.subheadline).foregroundStyle(.secondary)
-      }
-      Spacer()
-      if let at = controller.status.lastRefresh {
-        Text("odswiezono \(at.formatted(date: .omitted, time: .standard))")
-          .font(.caption).foregroundStyle(.secondary)
-      }
-      if controller.status.isBusy {
-        HStack(spacing: 8) {
-          ProgressView().controlSize(.small)
-          Text(controller.status.busyLabel).font(.caption).foregroundStyle(.secondary)
+      VStack(spacing: 0) {
+        // Górna belka / Nagłówek z logo i zakładkami
+        topHeaderBar
+
+        // Główna zawartość wybranej zakładki
+        if selectedTab == .dashboard {
+          dashboardContent
+        } else {
+          LogsView()
         }
       }
     }
+    .task { controller.startAutoRefresh() }
   }
+
+  // MARK: - Górna Belka Nawigacyjna
+
+  private var topHeaderBar: some View {
+    VStack(spacing: 12) {
+      HStack(spacing: 16) {
+        // Logo ikona z fioletowym i cyjanowym poświatem
+        ZStack {
+          RoundedRectangle(cornerRadius: 12)
+            .fill(RenaCodeTheme.aiGradient)
+            .frame(width: 42, height: 42)
+            .shadow(color: RenaCodeTheme.colorPrimary.opacity(0.45), radius: 12, x: 0, y: 4)
+
+          Image(systemName: "icloud.and.arrow.up.fill")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(.white)
+        }
+
+        VStack(alignment: .leading, spacing: 2) {
+          HStack(spacing: 8) {
+            Text("CloudMachine")
+              .font(.system(size: 20, weight: .bold, design: .rounded))
+              .foregroundStyle(RenaCodeTheme.textMain)
+
+            RenaCodePillBadge(
+              text: "Time Machine",
+              icon: "cloud.fill",
+              color: RenaCodeTheme.colorPrimary
+            )
+
+            RenaCodePillBadge(
+              text: controller.status.healthy ? "Sprawny" : "Uwaga",
+              color: controller.status.healthy
+                ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning
+            )
+          }
+
+          Text("Lokalny bufor SSD & kopia zapasowa na Google Drive")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(RenaCodeTheme.textMuted)
+        }
+
+        Spacer()
+
+        // Informacja o odświeżeniu i wskaźnik pracy
+        HStack(spacing: 12) {
+          if let at = controller.status.lastRefresh {
+            HStack(spacing: 5) {
+              Image(systemName: "arrow.clockwise.circle")
+                .font(.system(size: 11))
+              Text("Odświeżono \(at.formatted(date: .omitted, time: .standard))")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+            }
+            .foregroundStyle(RenaCodeTheme.textDim)
+          }
+
+          if controller.status.isBusy {
+            HStack(spacing: 6) {
+              ProgressView().controlSize(.small)
+              Text(controller.status.busyLabel)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(RenaCodeTheme.colorCyan)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(RenaCodeTheme.colorCyan.opacity(0.12))
+            .clipShape(Capsule())
+          }
+        }
+      }
+
+      // Nawigacja zakładkowa w stylu RenaCode
+      HStack {
+        HStack(spacing: 4) {
+          ForEach(Tab.allCases) { tab in
+            Button(action: {
+              withAnimation(.easeInOut(duration: 0.2)) {
+                selectedTab = tab
+              }
+            }) {
+              HStack(spacing: 6) {
+                Image(systemName: tab.icon)
+                  .font(.system(size: 12, weight: .semibold))
+                Text(tab.rawValue)
+                  .font(.system(size: 13, weight: .semibold))
+              }
+              .foregroundStyle(
+                selectedTab == tab ? RenaCodeTheme.textMain : RenaCodeTheme.textMuted
+              )
+              .padding(.horizontal, 14)
+              .padding(.vertical, 7)
+              .background(
+                ZStack {
+                  if selectedTab == tab {
+                    RoundedRectangle(cornerRadius: 8)
+                      .fill(RenaCodeTheme.colorPrimary.opacity(0.25))
+                      .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                          .stroke(RenaCodeTheme.colorPrimary.opacity(0.4), lineWidth: 1)
+                      )
+                  }
+                }
+              )
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .padding(3)
+        .background(RenaCodeTheme.bgInset)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+          RoundedRectangle(cornerRadius: 10)
+            .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
+        )
+
+        Spacer()
+      }
+    }
+    .padding(.horizontal, 22)
+    .padding(.top, 18)
+    .padding(.bottom, 14)
+    .background(
+      RenaCodeTheme.bgDark.opacity(0.85)
+    )
+    .overlay(
+      Rectangle()
+        .fill(RenaCodeTheme.borderGlass)
+        .frame(height: 1),
+      alignment: .bottom
+    )
+  }
+
+  // MARK: - Zawartość Panelu Głównego (Dashboard Content)
+
+  private var dashboardContent: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 20) {
+
+        // Baner ewentualnego błędu
+        if let error = controller.status.errorMessage {
+          errorBanner(error)
+        }
+
+        // Siatka kart statystyk KPI (Top Row)
+        kpiSummaryGrid
+
+        // Karta aktywnego postępu backupu (jeśli trwa)
+        if let progress = controller.status.backupProgress {
+          progressCard(progress)
+        }
+
+        // Karta kroków konfiguracji ("Do zrobienia")
+        if !setupSteps.isEmpty {
+          setupCard
+        }
+
+        // Szczegóły bufora i wysyłki
+        bufferCard
+
+        // Poświadczenia Google OAuth
+        credentialsCard
+
+        // Dolny pasek akcji
+        actionsToolbar
+      }
+      .padding(22)
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  // MARK: - Baner Błędu
 
   private func errorBanner(_ message: String) -> some View {
-    Text(message)
-      .font(.callout)
-      .padding(12)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-      .textSelection(.enabled)
+    HStack(spacing: 12) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .font(.system(size: 18))
+        .foregroundStyle(RenaCodeTheme.colorDanger)
+
+      Text(message)
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(RenaCodeTheme.textMain)
+        .textSelection(.enabled)
+
+      Spacer()
+    }
+    .padding(14)
+    .background(RenaCodeTheme.colorDanger.opacity(0.12))
+    .clipShape(RoundedRectangle(cornerRadius: 12))
+    .overlay(
+      RoundedRectangle(cornerRadius: 12)
+        .stroke(RenaCodeTheme.colorDanger.opacity(0.35), lineWidth: 1)
+    )
   }
 
-  // MARK: - Konfiguracja
+  // MARK: - Siatka Kart Statystyk (KPI Summary Grid)
 
-  /// Kroki, ktorych brakuje. Pusta lista znaczy, ze wszystko jest na miejscu -
-  /// wtedy karta w ogole sie nie pokazuje.
+  private var kpiSummaryGrid: some View {
+    LazyVGrid(
+      columns: [
+        GridItem(.flexible(), spacing: 14),
+        GridItem(.flexible(), spacing: 14),
+        GridItem(.flexible(), spacing: 14),
+        GridItem(.flexible(), spacing: 14),
+      ], spacing: 14
+    ) {
+      StatCard(
+        title: "Stan Systemu",
+        value: controller.status.healthy ? "Sprawny" : "Wymaga akcji",
+        subtitle: controller.status.headline,
+        systemImage: controller.status.healthy
+          ? "checkmark.shield.fill" : "exclamationmark.shield.fill",
+        iconColor: controller.status.healthy
+          ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning
+      )
+
+      StatCard(
+        title: "Rozmiar Bufora",
+        value: "\(controller.status.buffer.sizeGB) GB",
+        subtitle: "Wolne na dysku: \(controller.status.buffer.freeDiskGB) GB",
+        systemImage: "internaldrive.fill",
+        iconColor: RenaCodeTheme.colorCyan
+      )
+
+      StatCard(
+        title: "Kolejka Wysyłki",
+        value: controller.status.buffer.draining
+          ? "\(controller.status.buffer.uploadsQueued) w kolejce" : "Brak zaległości",
+        subtitle: controller.status.buffer.draining
+          ? "\(controller.status.buffer.uploadsInProgress) transferów w toku" : "Wszystko w chmurze",
+        systemImage: "icloud.and.arrow.up.fill",
+        iconColor: controller.status.buffer.draining
+          ? RenaCodeTheme.colorWarning : RenaCodeTheme.colorSuccess
+      )
+
+      StatCard(
+        title: "Time Machine",
+        value: controller.status.buffer.imageAttached ? "Podpięty" : "Nieodpięty",
+        subtitle: controller.status.buffer.mounted
+          ? "Google Drive zamontowany" : "Drive rozłączony",
+        systemImage: "clock.arrow.circlepath",
+        iconColor: controller.status.buffer.imageAttached
+          ? RenaCodeTheme.colorPrimaryLight : RenaCodeTheme.textDim
+      )
+    }
+  }
+
+  // MARK: - Postęp Backupu
+
+  private func progressCard(_ progress: BackupProgressInfo) -> some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack {
+        HStack(spacing: 8) {
+          ZStack {
+            Circle()
+              .fill(RenaCodeTheme.colorCyan.opacity(0.2))
+              .frame(width: 28, height: 28)
+            Image(systemName: "arrow.triangle.2.circlepath")
+              .font(.system(size: 13, weight: .bold))
+              .foregroundStyle(RenaCodeTheme.colorCyan)
+          }
+
+          Text("Kopia Zapasowa w Toku")
+            .font(.system(size: 16, weight: .bold, design: .rounded))
+            .foregroundStyle(RenaCodeTheme.textMain)
+        }
+
+        Spacer()
+
+        if let percent = progress.percent {
+          Text(String(format: "%.1f%%", percent * 100))
+            .font(.system(size: 18, weight: .bold, design: .monospaced))
+            .foregroundStyle(RenaCodeTheme.colorCyan)
+        }
+      }
+
+      if let percent = progress.percent {
+        GeometryReader { geo in
+          ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 6)
+              .fill(RenaCodeTheme.bgInset)
+              .frame(height: 10)
+
+            RoundedRectangle(cornerRadius: 6)
+              .fill(RenaCodeTheme.cyanGradient)
+              .frame(width: max(0, min(geo.size.width * CGFloat(percent), geo.size.width)), height: 10)
+              .shadow(color: RenaCodeTheme.colorCyan.opacity(0.5), radius: 6, x: 0, y: 0)
+          }
+        }
+        .frame(height: 10)
+      }
+
+      HStack(spacing: 24) {
+        if let done = progress.filesDone, let total = progress.filesTotal, total > 0 {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Przetworzone pliki")
+              .font(.system(size: 11))
+              .foregroundStyle(RenaCodeTheme.textMuted)
+            Text("\(done) / \(total)")
+              .font(.system(size: 13, weight: .semibold, design: .monospaced))
+              .foregroundStyle(RenaCodeTheme.textMain)
+          }
+        }
+
+        if let rate = progress.transferRateMBs {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Prędkość zapisu")
+              .font(.system(size: 11))
+              .foregroundStyle(RenaCodeTheme.textMuted)
+            Text(String(format: "%.1f MB/s", rate))
+              .font(.system(size: 13, weight: .semibold, design: .monospaced))
+              .foregroundStyle(RenaCodeTheme.colorSuccess)
+          }
+        }
+
+        if let phase = progress.phase {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Faza operacji")
+              .font(.system(size: 11))
+              .foregroundStyle(RenaCodeTheme.textMuted)
+            Text(phase)
+              .font(.system(size: 13, weight: .medium))
+              .foregroundStyle(RenaCodeTheme.textMain)
+          }
+        }
+      }
+    }
+    .glassCard(borderColor: RenaCodeTheme.colorCyan.opacity(0.35))
+  }
+
+  // MARK: - Kroki Konfiguracji ("Do Zrobienia")
+
   private var setupSteps: [(String, String?)] {
     var steps: [(String, String?)] = []
     if case .missing(let what, let how) = controller.status.dependencyState {
       for (miss, remedy) in zip(what, how) { steps.append(("Brakuje: \(miss)", remedy)) }
     }
     if !controller.status.remoteConfigured {
-      steps.append(("Google Drive niepolaczony", controller.connectDriveCommand))
+      steps.append(("Google Drive niepołączony", controller.connectDriveCommand))
     }
     if case .notRegistered = controller.status.timeMachineState,
       controller.status.buffer.imageAttached
     {
-      steps.append(("Time Machine nie wskazuje na CloudMachine", controller.setDestinationCommand))
+      steps.append(
+        ("Time Machine nie wskazuje na CloudMachine", controller.setDestinationCommand))
     }
     return steps
   }
 
   private var setupCard: some View {
-    card("Do zrobienia") {
-      ForEach(Array(setupSteps.enumerated()), id: \.offset) { _, step in
-        VStack(alignment: .leading, spacing: 4) {
-          Text(step.0).font(.callout)
-          if let command = step.1 {
-            HStack {
-              Text(command)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-              Spacer()
-              Button("Kopiuj") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(command, forType: .string)
-              }
-              .controlSize(.small)
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(spacing: 8) {
+        Image(systemName: "wrench.and.screwdriver.fill")
+          .font(.system(size: 15))
+          .foregroundStyle(RenaCodeTheme.colorWarning)
+        Text("Wymagane Kroki Konfiguracji")
+          .font(.system(size: 15, weight: .bold, design: .rounded))
+          .foregroundStyle(RenaCodeTheme.textMain)
+      }
+
+      VStack(alignment: .leading, spacing: 12) {
+        ForEach(Array(setupSteps.enumerated()), id: \.offset) { index, step in
+          VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+              Text("\(index + 1)")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 20, height: 20)
+                .background(RenaCodeTheme.colorWarning)
+                .clipShape(Circle())
+
+              Text(step.0)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(RenaCodeTheme.textMain)
             }
-            .padding(8)
-            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+
+            if let command = step.1 {
+              HStack {
+                Text(command)
+                  .font(.system(size: 12, design: .monospaced))
+                  .foregroundStyle(RenaCodeTheme.textMain)
+                  .textSelection(.enabled)
+                Spacer()
+                Button(action: {
+                  NSPasteboard.general.clearContents()
+                  NSPasteboard.general.setString(command, forType: .string)
+                }) {
+                  HStack(spacing: 4) {
+                    Image(systemName: "doc.on.doc")
+                      .font(.system(size: 11))
+                    Text("Kopiuj")
+                      .font(.system(size: 11, weight: .medium))
+                  }
+                }
+                .buttonStyle(SecondaryGlassButtonStyle())
+              }
+              .padding(10)
+              .background(RenaCodeTheme.bgInset)
+              .clipShape(RoundedRectangle(cornerRadius: 8))
+              .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                  .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
+              )
+            }
           }
         }
       }
     }
+    .glassCard(borderColor: RenaCodeTheme.colorWarning.opacity(0.35))
   }
 
-  // MARK: - Bufor
+  // MARK: - Szczegóły Bufora i Wysyłki
 
   private var bufferCard: some View {
-    card("Bufor i wysylka") {
-      row(
-        "Montowanie Drive", controller.status.buffer.mounted ? "dziala" : "brak",
-        ok: controller.status.buffer.mounted)
-      row(
-        "Obraz backupu", controller.status.buffer.imageAttached ? "podpiety" : "niepodpiety",
-        ok: controller.status.buffer.imageAttached)
-      row("Bufor na dysku", "\(controller.status.buffer.sizeGB) GB", ok: true)
-      row(
-        "Wolne na dysku", "\(controller.status.buffer.freeDiskGB) GB",
-        ok: controller.status.buffer.freeDiskGB > 80)
+    VStack(alignment: .leading, spacing: 14) {
+      HStack {
+        HStack(spacing: 8) {
+          Image(systemName: "server.rack")
+            .font(.system(size: 15))
+            .foregroundStyle(RenaCodeTheme.colorCyan)
+          Text("Bufor Lokalny & Stan Wysyłki")
+            .font(.system(size: 15, weight: .bold, design: .rounded))
+            .foregroundStyle(RenaCodeTheme.textMain)
+        }
 
-      // Ta liczba jest wazniejsza od rozmiaru bufora: jesli rosnie i nie wraca
-      // do zera miedzy backupami, wysylka nie nadaza za zapisem.
-      row(
-        "Czeka na wyslanie",
-        controller.status.buffer.draining
-          ? "\(controller.status.buffer.uploadsInProgress) w toku, \(controller.status.buffer.uploadsQueued) w kolejce"
-          : "nic",
-        ok: controller.status.buffer.erroredFiles == 0)
-
-      if controller.status.buffer.erroredFiles > 0 {
-        row("Bledy wysylki", "\(controller.status.buffer.erroredFiles)", ok: false)
+        Spacer()
       }
-      if controller.status.buffer.dailyQuotaHit {
-        row("Limit Google Drive", "dobowy limit wyczerpany", ok: false)
-      }
-    }
-  }
 
-  // MARK: - Postep
-
-  private func progressCard(_ progress: BackupProgressInfo) -> some View {
-    card("Backup w toku") {
-      if let percent = progress.percent {
-        ProgressView(value: min(max(percent, 0), 1))
-        Text(String(format: "%.1f%%", percent * 100)).font(.caption).foregroundStyle(.secondary)
-      }
-      if let done = progress.filesDone, let total = progress.filesTotal, total > 0 {
-        row("Pliki", "\(done) z \(total)", ok: true)
-      }
-      if let rate = progress.transferRateMBs {
-        row("Tempo", String(format: "%.1f MB/s", rate), ok: true)
-      }
-      if let phase = progress.phase {
-        row("Faza", phase, ok: true)
-      }
-    }
-  }
-
-  // MARK: - Akcje
-
-  private var actions: some View {
-    HStack(spacing: 10) {
-      if controller.status.backupProgress == nil {
-        Button("Zrob backup teraz") { Task { await controller.startBackup() } }
-          .disabled(!controller.status.healthy || controller.status.isBusy)
-      } else {
-        Button("Wstrzymaj backup") { Task { await controller.stopBackup() } }
-      }
-      Button("Sprawdz spojnosc obrazu") { Task { await controller.verifyImage() } }
-        .disabled(controller.status.buffer.imageAttached || controller.status.isBusy)
-      Button("Odswiez") { Task { await controller.refreshAll() } }
-      Spacer()
-    }
-  }
-
-  // MARK: - Elementy wspolne
-
-  // MARK: - Poswiadczenia Google
-
-  /// Wlasny `client_id` da sie teraz wpisac tutaj, zamiast recznie wolac
-  /// `security add-generic-password` z README - czyli krok, ktorego nikt nie
-  /// robi, dopoki cos nie przestanie dzialac.
-  ///
-  /// Pola sa PUSTE nawet gdy poswiadczenia sa ustawione: interfejs pokazuje
-  /// wylacznie "jest / nie ma" i nigdy nie wyciaga wartosci z Keychaina.
-  private var credentialsCard: some View {
-    card("Poswiadczenia Google (OAuth)") {
-      HStack(spacing: 6) {
-        Image(
-          systemName: controller.credentials.isComplete
-            ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+      VStack(spacing: 10) {
+        row(
+          "Montowanie Google Drive (FUSE-T)",
+          controller.status.buffer.mounted ? "Zamontowany" : "Nieaktywny",
+          ok: controller.status.buffer.mounted
         )
-        .foregroundStyle(controller.credentials.isComplete ? .green : .orange)
-        Text(controller.credentials.summary)
-          .font(.callout)
-          .fixedSize(horizontal: false, vertical: true)
+
+        Divider().background(RenaCodeTheme.borderGlass)
+
+        row(
+          "Obraz dysku backupu (.sparsebundle)",
+          controller.status.buffer.imageAttached ? "Podpięty do systemu" : "Odłączony",
+          ok: controller.status.buffer.imageAttached
+        )
+
+        Divider().background(RenaCodeTheme.borderGlass)
+
+        row(
+          "Zalokowany bufor na dysku SSD",
+          "\(controller.status.buffer.sizeGB) GB",
+          ok: true
+        )
+
+        Divider().background(RenaCodeTheme.borderGlass)
+
+        row(
+          "Wolne miejsce na lokalnym wolumenie",
+          "\(controller.status.buffer.freeDiskGB) GB",
+          ok: controller.status.buffer.freeDiskGB > 80
+        )
+
+        Divider().background(RenaCodeTheme.borderGlass)
+
+        row(
+          "Kolejka synchronizacji z chmurą",
+          controller.status.buffer.draining
+            ? "\(controller.status.buffer.uploadsInProgress) w toku, \(controller.status.buffer.uploadsQueued) w kolejce"
+            : "Wszystko wysłane",
+          ok: controller.status.buffer.erroredFiles == 0
+        )
+
+        if controller.status.buffer.erroredFiles > 0 {
+          Divider().background(RenaCodeTheme.borderGlass)
+          row(
+            "Błędy wysyłki plików",
+            "\(controller.status.buffer.erroredFiles) plików",
+            ok: false
+          )
+        }
+
+        if controller.status.buffer.dailyQuotaHit {
+          Divider().background(RenaCodeTheme.borderGlass)
+          row(
+            "Limit Google Drive",
+            "Dobowy limit 750 GB wyczerpany",
+            ok: false
+          )
+        }
+      }
+    }
+    .glassCard()
+  }
+
+  // MARK: - Poświadczenia Google OAuth
+
+  private var credentialsCard: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(spacing: 8) {
+        Image(systemName: "key.fill")
+          .font(.system(size: 15))
+          .foregroundStyle(RenaCodeTheme.colorPrimaryLight)
+
+        Text("Poświadczenia Google Drive (OAuth 2.0)")
+          .font(.system(size: 15, weight: .bold, design: .rounded))
+          .foregroundStyle(RenaCodeTheme.textMain)
+
+        Spacer()
+
+        RenaCodePillBadge(
+          text: controller.credentials.isComplete ? "Keychain OK" : "Brak własnych kluczy",
+          icon: controller.credentials.isComplete ? "checkmark.seal.fill" : "lock.open.fill",
+          color: controller.credentials.isComplete
+            ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning
+        )
       }
 
-      SecureField("client_id", text: $clientID)
-        .textFieldStyle(.roundedBorder)
-      SecureField("client_secret", text: $clientSecret)
-        .textFieldStyle(.roundedBorder)
+      Text(controller.credentials.summary)
+        .font(.system(size: 12))
+        .foregroundStyle(RenaCodeTheme.textMuted)
+        .fixedSize(horizontal: false, vertical: true)
+
+      VStack(spacing: 10) {
+        HStack {
+          Text("client_id:")
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+            .foregroundStyle(RenaCodeTheme.textMuted)
+            .frame(width: 100, alignment: .leading)
+
+          SecureField("Wklej client_id...", text: $clientID)
+            .textFieldStyle(.plain)
+            .padding(8)
+            .background(RenaCodeTheme.bgInset)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+              RoundedRectangle(cornerRadius: 8)
+                .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
+            )
+        }
+
+        HStack {
+          Text("client_secret:")
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+            .foregroundStyle(RenaCodeTheme.textMuted)
+            .frame(width: 100, alignment: .leading)
+
+          SecureField("Wklej client_secret...", text: $clientSecret)
+            .textFieldStyle(.plain)
+            .padding(8)
+            .background(RenaCodeTheme.bgInset)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+              RoundedRectangle(cornerRadius: 8)
+                .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
+            )
+        }
+      }
 
       HStack {
-        Button("Zapisz w Keychainie") {
+        Button("Zapisz bezpiecznie w Keychainie") {
           let id = clientID
           let secret = clientSecret
           Task {
             credentialsMessage = await controller.saveCredentials(
               clientID: id, clientSecret: secret)
-            // Nie trzymamy sekretu w pamieci widoku dluzej, niz trzeba.
             clientID = ""
             clientSecret = ""
           }
         }
+        .buttonStyle(PrimaryGradientButtonStyle())
         .disabled(
           clientID.trimmingCharacters(in: .whitespaces).isEmpty
             || clientSecret.trimmingCharacters(in: .whitespaces).isEmpty)
+
         Spacer()
       }
 
       if let message = credentialsMessage {
         Text(message)
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .font(.system(size: 12))
+          .foregroundStyle(RenaCodeTheme.colorCyan)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
+    .glassCard()
   }
 
-  private func card<Content: View>(_ title: String, @ViewBuilder content: () -> Content)
-    -> some View
-  {
-    VStack(alignment: .leading, spacing: 8) {
-      Text(title).font(.headline)
-      content()
+  // MARK: - Dolny Pasek Akcji
+
+  private var actionsToolbar: some View {
+    HStack(spacing: 12) {
+      if controller.status.backupProgress == nil {
+        Button(action: { Task { await controller.startBackup() } }) {
+          HStack(spacing: 6) {
+            Image(systemName: "play.fill")
+            Text("Zrób backup teraz")
+          }
+        }
+        .buttonStyle(PrimaryGradientButtonStyle())
+        .disabled(!controller.status.healthy || controller.status.isBusy)
+      } else {
+        Button(action: { Task { await controller.stopBackup() } }) {
+          HStack(spacing: 6) {
+            Image(systemName: "stop.fill")
+            Text("Wstrzymaj backup")
+          }
+        }
+        .buttonStyle(SecondaryGlassButtonStyle())
+      }
+
+      Button(action: { Task { await controller.verifyImage() } }) {
+        HStack(spacing: 6) {
+          Image(systemName: "checkmark.shield")
+          Text("Sprawdź spójność obrazu")
+        }
+      }
+      .buttonStyle(SecondaryGlassButtonStyle())
+      .disabled(controller.status.buffer.imageAttached || controller.status.isBusy)
+
+      Button(action: { Task { await controller.refreshAll() } }) {
+        HStack(spacing: 6) {
+          Image(systemName: "arrow.clockwise")
+          Text("Odśwież")
+        }
+      }
+      .buttonStyle(SecondaryGlassButtonStyle())
+
+      Spacer()
     }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
   }
+
+  // MARK: - Pomocniczy Wiersz Tabela
 
   private func row(_ label: String, _ value: String, ok: Bool) -> some View {
     HStack {
-      Text(label).foregroundStyle(.secondary)
+      HStack(spacing: 8) {
+        Circle()
+          .fill(ok ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorDanger)
+          .frame(width: 7, height: 7)
+
+        Text(label)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(RenaCodeTheme.textMuted)
+      }
+
       Spacer()
-      Text(value).foregroundStyle(ok ? Color.primary : Color.red)
+
+      Text(value)
+        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+        .foregroundStyle(ok ? RenaCodeTheme.textMain : RenaCodeTheme.colorDanger)
     }
-    .font(.callout)
   }
 }

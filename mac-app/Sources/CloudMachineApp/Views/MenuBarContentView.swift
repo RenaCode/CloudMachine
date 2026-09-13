@@ -1,66 +1,154 @@
 import SwiftUI
 
-/// Zawartosc ikony w pasku menu. Ma sie czytac jednym spojrzeniem - stan
-/// i jedna liczba, ktora naprawde cos znaczy. Reszta jest w oknie glownym.
+/// Zawartość paska menu (MenuBar Extra), utrzymana w nowoczesnym
+/// stylu wizualnym RenaCode.
 struct MenuBarContentView: View {
   @EnvironmentObject private var controller: CloudMachineController
   @Environment(\.openWindow) private var openWindow
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(spacing: 8) {
-        Image(
-          systemName: controller.status.healthy
-            ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-        )
-        .foregroundStyle(controller.status.healthy ? .green : .orange)
-        Text(controller.status.headline).bold()
-      }
-
-      Divider()
-
-      if let progress = controller.status.backupProgress, let percent = progress.percent {
-        HStack {
-          Text("Backup")
-          Spacer()
-          Text(String(format: "%.1f%%", percent * 100)).monospacedDigit()
+    VStack(alignment: .leading, spacing: 12) {
+      // Nagłówek z logo i indeksem sprawności
+      HStack(spacing: 10) {
+        ZStack {
+          RoundedRectangle(cornerRadius: 8)
+            .fill(RenaCodeTheme.aiGradient)
+            .frame(width: 28, height: 28)
+          Image(systemName: "icloud.and.arrow.up.fill")
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(.white)
         }
-        .font(.callout)
-      }
 
-      // Kolejka wysylki mowi wiecej niz rozmiar bufora: dopoki nie wraca do
-      // zera miedzy backupami, dane sa jeszcze tylko lokalnie.
-      HStack {
-        Text("Czeka na wyslanie")
+        VStack(alignment: .leading, spacing: 1) {
+          Text("CloudMachine")
+            .font(.system(size: 13, weight: .bold, design: .rounded))
+            .foregroundStyle(RenaCodeTheme.textMain)
+
+          Text(controller.status.headline)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(
+              controller.status.healthy
+                ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning)
+        }
+
         Spacer()
-        Text(
-          controller.status.buffer.draining ? "\(controller.status.buffer.uploadsQueued)" : "nic"
-        )
-        .monospacedDigit()
-        .foregroundStyle(controller.status.buffer.draining ? .orange : .secondary)
+
+        Circle()
+          .fill(
+            controller.status.healthy ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning
+          )
+          .frame(width: 8, height: 8)
+          .shadow(
+            color: (controller.status.healthy
+              ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning).opacity(0.6), radius: 4
+          )
       }
-      .font(.callout)
 
-      HStack {
-        Text("Bufor")
-        Spacer()
-        Text("\(controller.status.buffer.sizeGB) GB").monospacedDigit().foregroundStyle(.secondary)
+      Divider().background(RenaCodeTheme.borderGlass)
+
+      // Postęp aktywnej kopii zapasowej
+      if let progress = controller.status.backupProgress, let percent = progress.percent {
+        VStack(alignment: .leading, spacing: 4) {
+          HStack {
+            Text("Backup w toku")
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(RenaCodeTheme.textMuted)
+            Spacer()
+            Text(String(format: "%.1f%%", percent * 100))
+              .font(.system(size: 12, weight: .bold, design: .monospaced))
+              .foregroundStyle(RenaCodeTheme.colorCyan)
+          }
+
+          GeometryReader { geo in
+            ZStack(alignment: .leading) {
+              RoundedRectangle(cornerRadius: 3)
+                .fill(RenaCodeTheme.bgInset)
+
+              RoundedRectangle(cornerRadius: 3)
+                .fill(RenaCodeTheme.cyanGradient)
+                .frame(
+                  width: max(0, min(geo.size.width * CGFloat(percent), geo.size.width)), height: 5)
+            }
+          }
+          .frame(height: 5)
+        }
       }
-      .font(.callout)
 
-      Divider()
+      // Stan kolejki i bufora
+      VStack(spacing: 6) {
+        HStack {
+          Text("Czeka na wysłanie")
+            .font(.system(size: 12))
+            .foregroundStyle(RenaCodeTheme.textMuted)
+          Spacer()
+          Text(
+            controller.status.buffer.draining
+              ? "\(controller.status.buffer.uploadsQueued) plików" : "nic"
+          )
+          .font(.system(size: 12, weight: .semibold, design: .monospaced))
+          .foregroundStyle(
+            controller.status.buffer.draining
+              ? RenaCodeTheme.colorWarning : RenaCodeTheme.textMain)
+        }
 
-      if controller.status.backupProgress == nil {
-        Button("Zrob backup teraz") { Task { await controller.startBackup() } }
+        HStack {
+          Text("Bufor SSD")
+            .font(.system(size: 12))
+            .foregroundStyle(RenaCodeTheme.textMuted)
+          Spacer()
+          Text("\(controller.status.buffer.sizeGB) GB")
+            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            .foregroundStyle(RenaCodeTheme.textMain)
+        }
+      }
+
+      Divider().background(RenaCodeTheme.borderGlass)
+
+      // Przyciski akcji
+      VStack(spacing: 6) {
+        if controller.status.backupProgress == nil {
+          Button(action: { Task { await controller.startBackup() } }) {
+            HStack {
+              Image(systemName: "play.fill")
+              Text("Zrób backup teraz")
+              Spacer()
+            }
+          }
+          .buttonStyle(PrimaryGradientButtonStyle())
           .disabled(!controller.status.healthy)
-      } else {
-        Button("Wstrzymaj backup") { Task { await controller.stopBackup() } }
+        } else {
+          Button(action: { Task { await controller.stopBackup() } }) {
+            HStack {
+              Image(systemName: "stop.fill")
+              Text("Wstrzymaj backup")
+              Spacer()
+            }
+          }
+          .buttonStyle(SecondaryGlassButtonStyle())
+        }
+
+        Button(action: { openWindow(id: "dashboard") }) {
+          HStack {
+            Image(systemName: "macwindow")
+            Text("Otwórz CloudMachine")
+            Spacer()
+          }
+        }
+        .buttonStyle(SecondaryGlassButtonStyle())
+
+        Button(action: { NSApplication.shared.terminate(nil) }) {
+          HStack {
+            Image(systemName: "power")
+            Text("Zakończ")
+            Spacer()
+          }
+        }
+        .buttonStyle(SecondaryGlassButtonStyle())
       }
-      Button("Otworz CloudMachine") { openWindow(id: "dashboard") }
-      Button("Zakoncz") { NSApplication.shared.terminate(nil) }
     }
     .padding(14)
-    .frame(width: 260)
+    .frame(width: 270)
+    .background(RenaCodeTheme.bgDark)
     .task { controller.startAutoRefresh(interval: 15) }
   }
 }

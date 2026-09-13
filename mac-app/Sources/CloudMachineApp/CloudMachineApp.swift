@@ -8,14 +8,16 @@ struct CloudMachineApp: App {
     MenuBarExtra("CloudMachine", systemImage: "icloud.and.arrow.up") {
       MenuBarContentView()
         .environmentObject(controller)
+        .preferredColorScheme(.dark)
     }
     .menuBarExtraStyle(.window)
 
     Window("CloudMachine", id: "dashboard") {
       DashboardView()
         .environmentObject(controller)
-        .frame(minWidth: 640, minHeight: 480)
+        .preferredColorScheme(.dark)
+        .frame(minWidth: 780, minHeight: 560)
     }
-    .defaultSize(width: 720, height: 560)
+    .defaultSize(width: 920, height: 680)
   }
 }

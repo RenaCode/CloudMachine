@@ -2,6 +2,8 @@ import AppKit
 import CloudMachineCore
 import SwiftUI
 
+/// Konsola podglądu logów z filtrowaniem i wyszukiwaniem,
+/// dostosowana do systemu wizualnego RenaCode.
 struct LogsView: View {
   @EnvironmentObject private var controller: CloudMachineController
   private let timer = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
@@ -23,61 +25,116 @@ struct LogsView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 14) {
 
       // Pasek narzędzi logów
       HStack(spacing: 12) {
-        // Pole wyszukiwania
-        Image(systemName: "magnifyingglass")
-          .foregroundStyle(.secondary)
-        TextField("Szukaj w logach...".localized, text: $searchText)
-          .textFieldStyle(.roundedBorder)
-          .frame(maxWidth: 240)
+        // Pole wyszukiwania z ikoną szkła powiększającego
+        HStack(spacing: 6) {
+          Image(systemName: "magnifyingglass")
+            .font(.system(size: 12))
+            .foregroundStyle(RenaCodeTheme.textMuted)
 
-        // Filtry typu logów
-        Picker("Filtr:".localized, selection: $selectedFilter) {
+          TextField("Szukaj w logach...".localized, text: $searchText)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .foregroundStyle(RenaCodeTheme.textMain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RenaCodeTheme.bgInset)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+          RoundedRectangle(cornerRadius: 8)
+            .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
+        )
+        .frame(maxWidth: 240)
+
+        // Filtry typu logów (Segmented tab style)
+        HStack(spacing: 3) {
           ForEach(LogFilter.allCases) { filter in
-            Text(filter.localizedName).tag(filter)
+            Button(action: {
+              withAnimation(.easeInOut(duration: 0.15)) {
+                selectedFilter = filter
+              }
+            }) {
+              Text(filter.localizedName)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(
+                  selectedFilter == filter ? RenaCodeTheme.textMain : RenaCodeTheme.textMuted
+                )
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                  ZStack {
+                    if selectedFilter == filter {
+                      RoundedRectangle(cornerRadius: 6)
+                        .fill(RenaCodeTheme.colorPrimary.opacity(0.3))
+                    }
+                  }
+                )
+            }
+            .buttonStyle(.plain)
           }
         }
-        .pickerStyle(.segmented)
-        .frame(width: 280)
+        .padding(3)
+        .background(RenaCodeTheme.bgInset)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+          RoundedRectangle(cornerRadius: 8)
+            .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
+        )
 
         Spacer()
 
-        // Opcje kontrolne
-        Toggle("Autoprzewijanie".localized, isOn: $autoScroll)
-          .toggleStyle(.checkbox)
-
-        Button(action: {
-          controller.refreshLogTail()
-        }) {
-          Label("Odśwież".localized, systemImage: "arrow.clockwise")
+        // Przełącznik autoprzewijania
+        Toggle(isOn: $autoScroll) {
+          Text("Autoprzewijanie".localized)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(RenaCodeTheme.textMuted)
         }
-        .buttonStyle(.bordered)
+        .toggleStyle(.checkbox)
 
-        Button(action: {
-          NSWorkspace.shared.open(CMPaths.logDir)
-        }) {
-          Label("Folder logów".localized, systemImage: "folder")
+        // Odśwież logi
+        Button(action: { controller.refreshLogTail() }) {
+          HStack(spacing: 4) {
+            Image(systemName: "arrow.clockwise")
+              .font(.system(size: 11))
+            Text("Odśwież".localized)
+          }
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(SecondaryGlassButtonStyle())
+
+        // Otwórz folder z logami
+        Button(action: { NSWorkspace.shared.open(CMPaths.logDir) }) {
+          HStack(spacing: 4) {
+            Image(systemName: "folder")
+              .font(.system(size: 11))
+            Text("Folder logów".localized)
+          }
+        }
+        .buttonStyle(SecondaryGlassButtonStyle())
       }
-      .padding(.horizontal, 16)
-      .padding(.top, 12)
+      .padding(.horizontal, 22)
+      .padding(.top, 14)
 
-      // Konsola logów
+      // Okno konsoli logów (Dark Terminal Window)
       ScrollViewReader { proxy in
         ScrollView {
-          VStack(alignment: .leading, spacing: 4) {
+          VStack(alignment: .leading, spacing: 3) {
             let filteredLines = filterLogLines()
 
             if filteredLines.isEmpty {
-              Text("Brak wpisów pasujących do wybranych filtrów.".localized)
-                .italic()
-                .foregroundStyle(.secondary)
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .center)
+              VStack(spacing: 8) {
+                Image(systemName: "text.magnifyingglass")
+                  .font(.system(size: 28))
+                  .foregroundStyle(RenaCodeTheme.textDim)
+                Text("Brak wpisów pasujących do wybranych filtrów.".localized)
+                  .font(.system(size: 13, weight: .medium))
+                  .foregroundStyle(RenaCodeTheme.textMuted)
+              }
+              .padding(40)
+              .frame(maxWidth: .infinity, alignment: .center)
             } else {
               ForEach(0..<filteredLines.count, id: \.self) { index in
                 let line = filteredLines[index]
@@ -86,19 +143,18 @@ struct LogsView: View {
               }
             }
 
-            // Element pomocniczy do przewijania do dołu
             Color.clear
               .frame(height: 1)
               .id("bottom")
           }
-          .padding(12)
+          .padding(14)
           .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(nsColor: .textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background(RenaCodeTheme.bgInset)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
-          RoundedRectangle(cornerRadius: 8)
-            .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+          RoundedRectangle(cornerRadius: 12)
+            .stroke(RenaCodeTheme.borderGlassStrong, lineWidth: 1)
         )
         .onChange(of: controller.status.logTail) { _, _ in
           if autoScroll {
@@ -114,8 +170,8 @@ struct LogsView: View {
           }
         }
       }
-      .padding(.horizontal, 16)
-      .padding(.bottom, 16)
+      .padding(.horizontal, 22)
+      .padding(.bottom, 22)
     }
     .onReceive(timer) { _ in
       controller.refreshLogTail()
@@ -127,14 +183,12 @@ struct LogsView: View {
     let allLines = controller.status.logTail.split(separator: "\n").map(String.init)
 
     return allLines.filter { line in
-      // Najpierw filtr wyszukiwania tekstowego
       if !searchText.isEmpty {
         guard line.localizedCaseInsensitiveContains(searchText) else {
           return false
         }
       }
 
-      // Następnie filtry kategorii
       switch selectedFilter {
       case .all:
         return true
@@ -153,7 +207,7 @@ struct LogsView: View {
   }
 }
 
-// MARK: - Komponent pojedynczej linii logu
+// MARK: - Komponent Pojedynczej Linii Logu
 
 struct LogLineView: View {
   var line: String
@@ -161,7 +215,7 @@ struct LogLineView: View {
   var body: some View {
     HStack(alignment: .top, spacing: 6) {
       Text(line)
-        .font(.system(.caption, design: .monospaced))
+        .font(.system(size: 11, weight: .medium, design: .monospaced))
         .foregroundStyle(lineColor)
         .textSelection(.enabled)
         .multilineTextAlignment(.leading)
@@ -174,29 +228,29 @@ struct LogLineView: View {
       || line.localizedCaseInsensitiveContains("critical:")
       || line.localizedCaseInsensitiveContains("fatal:")
     {
-      return .red
+      return RenaCodeTheme.colorDanger
     }
 
     if line.localizedCaseInsensitiveContains("ostrzezenie")
       || line.localizedCaseInsensitiveContains("warning:")
       || line.localizedCaseInsensitiveContains("warn:")
     {
-      return .orange
+      return RenaCodeTheme.colorWarning
     }
 
     if line.localizedCaseInsensitiveContains("rclone:")
       || line.localizedCaseInsensitiveContains("transfer")
     {
-      return .cyan
+      return RenaCodeTheme.colorCyan
     }
 
     if line.localizedCaseInsensitiveContains("OK")
       || line.localizedCaseInsensitiveContains("sukces")
       || line.localizedCaseInsensitiveContains("success")
     {
-      return .green
+      return RenaCodeTheme.colorSuccess
     }
 
-    return .primary
+    return RenaCodeTheme.textMain
   }
 }
