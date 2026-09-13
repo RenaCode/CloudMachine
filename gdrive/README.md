@@ -44,7 +44,7 @@ przepuszcza okolo **dwoch operacji na plik na sekunde** i ma limit **400 000
 plikow**, co premiuje duze pasma - ale kazda zmiana brudzi **cale** pasmo, co
 przy dobowym limicie **750 GB** premiuje male.
 
-Zmierzone (`poc-amplification.sh`, obraz 3 GB, zmiana 300 MB):
+Zmierzone (`cloudmachine-poc amplification`, obraz 3 GB, zmiana 300 MB):
 
 | Pasmo | Pasm na 3 GB | Rozrzucona zmiana | Dopisanie (jak TM) | Plikow na 200 GB |
 |-------|--------------|-------------------|--------------------|------------------|
@@ -85,7 +85,7 @@ Pozostale backendy FUSE-T nie pomagaja: `backend=fskit` w ogole sie nie montuje,
 
 ## Co przetrwa smierc warstwy chmurowej
 
-`poc-pullplug.sh` odpina zastepnik montowania w trakcie zapisu, czyli symuluje
+`cloudmachine-poc pullplug` odpina zastepnik montowania w trakcie zapisu, czyli symuluje
 padniecie procesu rclone albo wysypanie sie FUSE-T. Trzy rundy, **zero
 nieodwracalnych strat** - obraz za kazdym razem przeszedl `fsck_apfs`.
 
@@ -125,9 +125,20 @@ Nie sa czescia dzialajacego systemu - uruchamia sie je recznie, gdy trzeba cos
 zmierzyc albo potwierdzic regresje. Mierza zachowanie `hdiutil` i FUSE-T, czyli
 rzeczy, ktorych testem jednostkowym sie nie zmierzy.
 
+Siedza w osobnej binarce `cloudmachine-poc`, ktorej `build-app` NIE wklada do
+`CloudMachine.app` - nie trafiaja wiec na maszyny uzytkownikow, a mimo to sa
+budowane i sprawdzane przez CI razem z reszta kodu. Kazdy z nich tworzy i
+kasuje obrazy dyskow, dlatego celowo nie sa podkomendami `cloudmachine-agent`:
+nie ma jak odpalic ich przez pomylke na produkcji.
+
 ```sh
-BAND_MB=32 WORKLOAD=append ./poc-amplification.sh   # wzmocnienie zapisu
-BAND_MB=32 ROUNDS=3 ./poc-pullplug.sh               # smierc warstwy chmurowej
+cd mac-app
+swift run cloudmachine-poc amplification --band-mb 32 --workload append
+swift run cloudmachine-poc pullplug --band-mb 32 --rounds 3
+
+# po przerwanym przebiegu zostaja podpiete obrazy - sprzatanie:
+swift run cloudmachine-poc amplification --clean
+swift run cloudmachine-poc pullplug --clean
 ```
 
 ## Czego nadal nie wiadomo
@@ -135,7 +146,7 @@ BAND_MB=32 ROUNDS=3 ./poc-pullplug.sh               # smierc warstwy chmurowej
 - Jak montowanie zachowa sie pod obciazeniem pelnego, wielogodzinnego backupu.
   Pojedyncze operacje dzialaja (zapis 50 MB przy 267 MB/s), ale to inna skala.
 - Czy rclone nigdy nie usuwa z bufora danych jeszcze niewyslanych.
-  `poc-pullplug.sh` pokrywa mocniejszy przypadek - smierc calej warstwy - ale
+  `cloudmachine-poc pullplug` pokrywa mocniejszy przypadek - smierc calej warstwy - ale
   nie ten konkretny, bo wymaga dzialajacego rclone.
 - Czy `tmutil setdestination` przyjmie cel spoza `/Volumes`. Od tego zalezy, czy
   da sie usunac koniecznosc recznej interwencji po nieczystym odpieciu.

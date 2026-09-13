@@ -33,7 +33,7 @@ public enum BackupImageService {
   }
 
   /// 32 MB na pasmo, w sektorach po 512 B. Wybrane pomiarem - patrz
-  /// `gdrive/poc-amplification.sh` i tabela w `gdrive/README.md`.
+  /// `cloudmachine-poc amplification` i tabela w `gdrive/README.md`.
   ///
   /// Dwie sily ciagna w przeciwne strony. Google Drive przepuszcza okolo dwoch
   /// operacji na plik na sekunde, wiec male pasma wydluzaja pierwsza wysylke.
