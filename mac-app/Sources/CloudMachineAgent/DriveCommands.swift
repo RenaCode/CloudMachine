@@ -83,10 +83,24 @@ struct AttachImage: AsyncParsableCommand {
 
   func run() async throws {
     // Time Machine nie moze zobaczyc celu, zanim bufor bedzie gotowy - inaczej
-    // uzna, ze dysk backupu zniknal.
-    for _ in 0..<60 {
-      if DriveBufferService.isMounted { break }
-      try? await Task.sleep(nanoseconds: 2_000_000_000)
+    // uzna, ze dysk backupu zniknal. Ile czekamy i na co dokladnie - patrz
+    // `BufferReadiness`.
+    let ready = await BufferReadiness.wait(
+      sleep: { seconds in
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+      },
+      probe: {
+        BufferReadiness.isReady(
+          mounted: DriveBufferService.isMounted,
+          imageVisible: BackupImageService.exists)
+      })
+    if !ready {
+      print(
+        """
+        Bufor nie stanal w \(Int(BufferReadiness.defaultTimeout / 60)) min - nie podpinam obrazu.
+        Time Machine jest teraz BEZ CELU. Sprawdz: cloudmachine-agent drive-status
+        """)
+      throw ExitCode(1)
     }
     let result = await BackupImageService.attach()
     print(result.message)
