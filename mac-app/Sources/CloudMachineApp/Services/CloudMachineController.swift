@@ -48,7 +48,8 @@ final class CloudMachineController: ObservableObject {
     let readiness = CMTooling.checkReadiness()
     status.dependencyState =
       readiness.ready ? .ready : .missing(readiness.missing, readiness.remedies)
-    status.remoteConfigured = await RemoteConfigurer.isConfigured(remoteName: DriveBufferService.remoteName)
+    status.remoteConfigured = await RemoteConfigurer.isConfigured(
+      remoteName: DriveBufferService.remoteName)
     status.hasFullDiskAccess = FileManager.default.isReadableFile(
       atPath: NSHomeDirectory() + "/Library/Application Support/com.apple.TCC")
   }
@@ -155,7 +156,8 @@ final class CloudMachineController: ObservableObject {
       let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["startbackup"], timeout: 60)
       return CMActionResult(
         succeeded: result?.succeeded == true,
-        message: result?.succeeded == true ? "Backup uruchomiony." : "Nie udalo sie uruchomic backupu.")
+        message: result?.succeeded == true
+          ? "Backup uruchomiony." : "Nie udalo sie uruchomic backupu.")
     }
   }
 
@@ -164,7 +166,8 @@ final class CloudMachineController: ObservableObject {
       let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 60)
       return CMActionResult(
         succeeded: result?.succeeded == true,
-        message: result?.succeeded == true ? "Backup wstrzymany." : "Nie udalo sie wstrzymac backupu.")
+        message: result?.succeeded == true
+          ? "Backup wstrzymany." : "Nie udalo sie wstrzymac backupu.")
     }
   }
 

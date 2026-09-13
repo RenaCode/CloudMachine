@@ -31,9 +31,12 @@ struct DashboardView: View {
 
   private var header: some View {
     HStack(spacing: 12) {
-      Image(systemName: controller.status.healthy ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-        .font(.system(size: 32))
-        .foregroundStyle(controller.status.healthy ? .green : .orange)
+      Image(
+        systemName: controller.status.healthy
+          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+      )
+      .font(.system(size: 32))
+      .foregroundStyle(controller.status.healthy ? .green : .orange)
       VStack(alignment: .leading, spacing: 2) {
         Text(controller.status.headline).font(.title2).bold()
         Text("Time Machine na Google Drive").font(.subheadline).foregroundStyle(.secondary)
@@ -110,12 +113,15 @@ struct DashboardView: View {
 
   private var bufferCard: some View {
     card("Bufor i wysylka") {
-      row("Montowanie Drive", controller.status.buffer.mounted ? "dziala" : "brak",
+      row(
+        "Montowanie Drive", controller.status.buffer.mounted ? "dziala" : "brak",
         ok: controller.status.buffer.mounted)
-      row("Obraz backupu", controller.status.buffer.imageAttached ? "podpiety" : "niepodpiety",
+      row(
+        "Obraz backupu", controller.status.buffer.imageAttached ? "podpiety" : "niepodpiety",
         ok: controller.status.buffer.imageAttached)
       row("Bufor na dysku", "\(controller.status.buffer.sizeGB) GB", ok: true)
-      row("Wolne na dysku", "\(controller.status.buffer.freeDiskGB) GB",
+      row(
+        "Wolne na dysku", "\(controller.status.buffer.freeDiskGB) GB",
         ok: controller.status.buffer.freeDiskGB > 80)
 
       // Ta liczba jest wazniejsza od rozmiaru bufora: jesli rosnie i nie wraca
@@ -175,7 +181,9 @@ struct DashboardView: View {
 
   // MARK: - Elementy wspolne
 
-  private func card<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+  private func card<Content: View>(_ title: String, @ViewBuilder content: () -> Content)
+    -> some View
+  {
     VStack(alignment: .leading, spacing: 8) {
       Text(title).font(.headline)
       content()

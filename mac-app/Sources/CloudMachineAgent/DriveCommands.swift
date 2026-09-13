@@ -126,7 +126,8 @@ struct DetachImage: AsyncParsableCommand {
 struct VerifyImage: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "verify-image",
-    abstract: "Sprawdza spojnosc obrazu przez fsck_apfs (hdiutil verify na sparsebundle nie dziala).")
+    abstract:
+      "Sprawdza spojnosc obrazu przez fsck_apfs (hdiutil verify na sparsebundle nie dziala).")
 
   func run() async throws {
     let result = await BackupImageService.verify()
@@ -271,20 +272,27 @@ struct DriveStatus: AsyncParsableCommand {
 
   func run() async throws {
     let readiness = CMTooling.checkReadiness()
-    print("Narzedzia:        \(readiness.ready ? "OK" : "brakuje: " + readiness.missing.joined(separator: ", "))")
+    print(
+      "Narzedzia:        \(readiness.ready ? "OK" : "brakuje: " + readiness.missing.joined(separator: ", "))"
+    )
     print("Montowanie Drive: \(DriveBufferService.isMounted ? "OK" : "BRAK")")
-    print("Obraz podpiety:   \(BackupImageService.isAttached ? "OK  (\(BackupImageService.targetPath.path))" : "BRAK")")
+    print(
+      "Obraz podpiety:   \(BackupImageService.isAttached ? "OK  (\(BackupImageService.targetPath.path))" : "BRAK")"
+    )
     print("Bufor:            \(BufferGuardService.bufferGB()) GB z \(DriveBufferService.cacheSize)")
     print("Wolne na dysku:   \(BufferGuardService.freeGB()) GB")
 
     if let stats = await DriveBufferService.queueStats() {
-      print("Kolejka wysylki:  \(stats.uploadsInProgress) w toku, \(stats.uploadsQueued) w kolejce, \(stats.erroredFiles) bledow")
+      print(
+        "Kolejka wysylki:  \(stats.uploadsInProgress) w toku, \(stats.uploadsQueued) w kolejce, \(stats.erroredFiles) bledow"
+      )
     } else {
       print("Kolejka wysylki:  (interfejs rc nieosiagalny)")
     }
 
     let safe = await BackupImageService.safeToRebootNow()
-    print("Restart bez pytania: \(safe ? "TAK - kolejka pusta" : "NIE - najpierw prepare-shutdown")")
+    print(
+      "Restart bez pytania: \(safe ? "TAK - kolejka pusta" : "NIE - najpierw prepare-shutdown")")
 
     if DriveBufferService.hitDailyQuota() {
       print("UWAGA:            dobowy limit uploadu Google Drive wyczerpany")
@@ -295,9 +303,11 @@ struct DriveStatus: AsyncParsableCommand {
     } else {
       print("Cel Time Machine: brak")
     }
-    if await TimeMachineStatus.isRunning(), let progress = await TimeMachineStatus.currentProgress() {
+    if await TimeMachineStatus.isRunning(), let progress = await TimeMachineStatus.currentProgress()
+    {
       let percent = (progress.percent ?? 0) * 100
-      print("Backup:           trwa, \(String(format: "%.1f", percent))% (\(progress.phase ?? "?"))")
+      print(
+        "Backup:           trwa, \(String(format: "%.1f", percent))% (\(progress.phase ?? "?"))")
     } else {
       print("Backup:           nie trwa")
     }
