@@ -11,6 +11,37 @@ public enum LaunchdInstaller {
     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
   }
 
+  /// Nazwa procesu interfejsu - binarka w `Contents/MacOS`, nie bundel.
+  static let appProcessName = "CloudMachine.app/Contents/MacOS/CloudMachine"
+
+  /// Zamyka dzialajacy interfejs, zeby launchd mogl wystartowac NOWY.
+  ///
+  /// Najpierw grzecznie (`osascript quit`), zeby aplikacja zdazyla posprzatac;
+  /// dopiero potem twardo. Interfejs nie robi backupow - robia je agenty - wiec
+  /// jego ubicie niczego nie przerywa.
+  static func terminateRunningApp() async {
+    let running = try? await ProcessRunner.run("/usr/bin/pgrep", ["-f", appProcessName])
+    guard running?.succeeded == true,
+      !(running?.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    else { return }
+
+    CMLogger.log("Instalacja agentow: zamykam dzialajacy interfejs, zeby wstal na nowej binarce")
+    _ = try? await ProcessRunner.run(
+      "/usr/bin/osascript", ["-e", "quit app \"CloudMachine\""], timeout: 30)
+
+    // Dajemy chwile na czyste zamkniecie, potem sprawdzamy i dobijamy.
+    for _ in 0..<10 {
+      try? await Task.sleep(nanoseconds: 500_000_000)
+      let still = try? await ProcessRunner.run("/usr/bin/pgrep", ["-f", appProcessName])
+      let alive =
+        still?.succeeded == true
+        && !(still?.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+      if !alive { return }
+    }
+    CMLogger.log("Instalacja agentow: interfejs nie zamknal sie sam - koncze go twardo")
+    _ = try? await ProcessRunner.run("/usr/bin/pkill", ["-f", appProcessName], timeout: 30)
+  }
+
   public static func install() async -> CMActionResult {
     // Zeby polecenia z dokumentacji dzialaly z terminala, a nie konczyly sie
     // "command not found" - binarka siedzi w bundlu aplikacji.
@@ -82,6 +113,19 @@ public enum LaunchdInstaller {
       _ = try? await ProcessRunner.run("/bin/launchctl", ["unload", oldMountPlist.path])
       try? FileManager.default.removeItem(at: oldMountPlist)
     }
+
+    // Interfejs trzeba UBIC, zanim launchd wystartuje go na nowo.
+    //
+    // Agent uruchamia go przez `open -a`, a `open -a` na DZIALAJACEJ aplikacji
+    // tylko ja uaktywnia - nie podmienia. Dzialajacy proces trzyma stary,
+    // odlaczony plik wykonywalny (inode sprzed podmiany bundla) i chodzi na nim
+    // do wylogowania albo restartu Maca.
+    //
+    // Zaobserwowane 13 wrz 2026: po DWoCH wdrozeniach pasek menu wciaz pokazywal
+    // "dysk niepodpiety", bo interfejs byl z 12 wrz - inode procesu 1129507643
+    // wobec 1129717794 na dysku. Wersja z CLI byla juz nowa, wiec CLI i GUI
+    // mowily co innego o tej samej maszynie.
+    await terminateRunningApp()
 
     guard
       let templates = try? FileManager.default.contentsOfDirectory(
