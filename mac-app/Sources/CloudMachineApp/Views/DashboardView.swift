@@ -271,7 +271,8 @@ struct DashboardView: View {
         value: controller.status.buffer.draining
           ? "\(controller.status.buffer.uploadsQueued) w kolejce" : "Brak zaległości",
         subtitle: controller.status.buffer.draining
-          ? "\(controller.status.buffer.uploadsInProgress) transferów w toku" : "Wszystko w chmurze",
+          ? "\(controller.status.buffer.uploadsInProgress) transferów w toku"
+          : "Wszystko w chmurze",
         systemImage: "icloud.and.arrow.up.fill",
         iconColor: controller.status.buffer.draining
           ? RenaCodeTheme.colorWarning : RenaCodeTheme.colorSuccess
@@ -327,7 +328,9 @@ struct DashboardView: View {
 
             RoundedRectangle(cornerRadius: 6)
               .fill(RenaCodeTheme.cyanGradient)
-              .frame(width: max(0, min(geo.size.width * CGFloat(percent), geo.size.width)), height: 10)
+              .frame(
+                width: max(0, min(geo.size.width * CGFloat(percent), geo.size.width)), height: 10
+              )
               .shadow(color: RenaCodeTheme.colorCyan.opacity(0.5), radius: 6, x: 0, y: 0)
           }
         }

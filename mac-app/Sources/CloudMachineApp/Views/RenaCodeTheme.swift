@@ -7,7 +7,8 @@ public enum RenaCodeTheme {
 
   public static let bgDark = Color(red: 7 / 255, green: 9 / 255, blue: 19 / 255)  // #070913
   public static let bgDarkEnd = Color(red: 13 / 255, green: 17 / 255, blue: 39 / 255)  // #0D1127
-  public static let bgCard = Color(red: 18 / 255, green: 22 / 255, blue: 41 / 255).opacity(0.75)  // #121629
+  // #121629
+  public static let bgCard = Color(red: 18 / 255, green: 22 / 255, blue: 41 / 255).opacity(0.75)
   public static let bgCardHover = Color(red: 26 / 255, green: 32 / 255, blue: 58 / 255).opacity(
     0.85)
   public static let bgInset = Color(red: 9 / 255, green: 12 / 255, blue: 24 / 255).opacity(0.65)
@@ -18,13 +19,20 @@ public enum RenaCodeTheme {
     .opacity(0.35)
 
   // Akcenty kolorystyczne
-  public static let colorPrimary = Color(red: 124 / 255, green: 58 / 255, blue: 237 / 255)  // #7C3AED Fiolet AI
-  public static let colorPrimaryLight = Color(red: 192 / 255, green: 132 / 255, blue: 252 / 255)  // #C084FC
-  public static let colorCyan = Color(red: 6 / 255, green: 182 / 255, blue: 212 / 255)  // #06B6D4 Cyjan aktywności
-  public static let colorSuccess = Color(red: 52 / 255, green: 211 / 255, blue: 153 / 255)  // #34D399 Szmaragd
-  public static let colorSuccessDark = Color(red: 16 / 255, green: 185 / 255, blue: 129 / 255)  // #10B981
-  public static let colorWarning = Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255)  // #F59E0B Pomarańcz
-  public static let colorDanger = Color(red: 248 / 255, green: 113 / 255, blue: 113 / 255)  // #F87171 Czerwień
+  // #7C3AED Fiolet AI
+  public static let colorPrimary = Color(red: 124 / 255, green: 58 / 255, blue: 237 / 255)
+  // #C084FC
+  public static let colorPrimaryLight = Color(red: 192 / 255, green: 132 / 255, blue: 252 / 255)
+  // #06B6D4 Cyjan aktywności
+  public static let colorCyan = Color(red: 6 / 255, green: 182 / 255, blue: 212 / 255)
+  // #34D399 Szmaragd
+  public static let colorSuccess = Color(red: 52 / 255, green: 211 / 255, blue: 153 / 255)
+  // #10B981
+  public static let colorSuccessDark = Color(red: 16 / 255, green: 185 / 255, blue: 129 / 255)
+  // #F59E0B Pomarańcz
+  public static let colorWarning = Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255)
+  // #F87171 Czerwień
+  public static let colorDanger = Color(red: 248 / 255, green: 113 / 255, blue: 113 / 255)
 
   public static let textMain = Color(red: 241 / 255, green: 245 / 255, blue: 249 / 255)  // #F1F5F9
   public static let textMuted = Color(red: 148 / 255, green: 163 / 255, blue: 184 / 255)  // #94A3B8
