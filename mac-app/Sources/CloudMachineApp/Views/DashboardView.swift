@@ -6,6 +6,9 @@ import SwiftUI
 /// "nie".
 struct DashboardView: View {
   @EnvironmentObject private var controller: CloudMachineController
+  @State private var clientID = ""
+  @State private var clientSecret = ""
+  @State private var credentialsMessage: String?
 
   var body: some View {
     ScrollView {
@@ -14,6 +17,7 @@ struct DashboardView: View {
         if let error = controller.status.errorMessage { errorBanner(error) }
         if !setupSteps.isEmpty { setupCard }
         bufferCard
+        credentialsCard
         if let progress = controller.status.backupProgress { progressCard(progress) }
         actions
       }
@@ -180,6 +184,59 @@ struct DashboardView: View {
   }
 
   // MARK: - Elementy wspolne
+
+  // MARK: - Poswiadczenia Google
+
+  /// Wlasny `client_id` da sie teraz wpisac tutaj, zamiast recznie wolac
+  /// `security add-generic-password` z README - czyli krok, ktorego nikt nie
+  /// robi, dopoki cos nie przestanie dzialac.
+  ///
+  /// Pola sa PUSTE nawet gdy poswiadczenia sa ustawione: interfejs pokazuje
+  /// wylacznie "jest / nie ma" i nigdy nie wyciaga wartosci z Keychaina.
+  private var credentialsCard: some View {
+    card("Poswiadczenia Google (OAuth)") {
+      HStack(spacing: 6) {
+        Image(
+          systemName: controller.credentials.isComplete
+            ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        )
+        .foregroundStyle(controller.credentials.isComplete ? .green : .orange)
+        Text(controller.credentials.summary)
+          .font(.callout)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      SecureField("client_id", text: $clientID)
+        .textFieldStyle(.roundedBorder)
+      SecureField("client_secret", text: $clientSecret)
+        .textFieldStyle(.roundedBorder)
+
+      HStack {
+        Button("Zapisz w Keychainie") {
+          let id = clientID
+          let secret = clientSecret
+          Task {
+            credentialsMessage = await controller.saveCredentials(
+              clientID: id, clientSecret: secret)
+            // Nie trzymamy sekretu w pamieci widoku dluzej, niz trzeba.
+            clientID = ""
+            clientSecret = ""
+          }
+        }
+        .disabled(
+          clientID.trimmingCharacters(in: .whitespaces).isEmpty
+            || clientSecret.trimmingCharacters(in: .whitespaces).isEmpty)
+        Spacer()
+      }
+
+      if let message = credentialsMessage {
+        Text(message)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
 
   private func card<Content: View>(_ title: String, @ViewBuilder content: () -> Content)
     -> some View

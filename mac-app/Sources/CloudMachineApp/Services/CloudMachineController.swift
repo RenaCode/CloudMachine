@@ -9,6 +9,10 @@ import SwiftUI
 final class CloudMachineController: ObservableObject {
   let status = AppStatus()
 
+  /// Stan wlasnych poswiadczen Google - tylko "jest / nie ma", nigdy wartosc.
+  @Published var credentials = RemoteConfigurer.CredentialsState(
+    hasClientID: false, hasClientSecret: false)
+
   private var refreshTask: Task<Void, Never>?
   private var lastBytesDone: Double?
   private var lastBytesSampledAt: Date?
@@ -31,6 +35,7 @@ final class CloudMachineController: ObservableObject {
   }
 
   func refreshAll() async {
+    await refreshCredentials()
     await refreshDependencies()
     await refreshBuffer()
     await refreshTimeMachine()
@@ -52,6 +57,30 @@ final class CloudMachineController: ObservableObject {
       remoteName: DriveBufferService.remoteName)
     status.hasFullDiskAccess = FileManager.default.isReadableFile(
       atPath: NSHomeDirectory() + "/Library/Application Support/com.apple.TCC")
+  }
+
+  /// Stan wlasnych poswiadczen OAuth. Sprawdzamy TYLKO istnienie wpisu -
+  /// siegniecie po sama wartosc potrafi podniesc okno Keychaina, a to okno
+  /// nie ma prawa wyskakiwac przy zwyklym odswiezaniu interfejsu.
+  private func refreshCredentials() async {
+    credentials = await RemoteConfigurer.credentialsState()
+  }
+
+  /// Zapisuje poswiadczenia i odswieza stan.
+  ///
+  /// Nie przekonfigurowuje remote: token wydany na starym `client_id` dziala
+  /// dalej, wiec samo wpisanie nowych wartosci NIC nie zmienia, dopoki nie
+  /// przejdzie `configure-remote --replace-existing`. Mowimy to wprost.
+  func saveCredentials(clientID: String, clientSecret: String) async -> String {
+    do {
+      try await RemoteConfigurer.storeCredentials(
+        clientID: clientID, clientSecret: clientSecret)
+      await refreshCredentials()
+      return
+        "Zapisane w Keychainie. Uwaga: istniejace polaczenie nadal dziala na starym client_id - zeby uzyc nowego, przejdz configure-remote --replace-existing."
+    } catch {
+      return "Nie zapisano: \(error.localizedDescription)"
+    }
   }
 
   private func refreshBuffer() async {
