@@ -341,3 +341,39 @@ struct InstallRclone: AsyncParsableCommand {
     if !result.succeeded { throw ExitCode(1) }
   }
 }
+
+// MARK: - Wersja
+
+/// Odpowiada na pytanie "czy dziala to, co w repozytorium".
+///
+/// Samo `1.1.0` na to nie odpowiada - dlatego wypisujemy commit i stan drzewa
+/// z chwili budowania, a przy braku bundla mowimy wprost, ze to build z drzewa
+/// roboczego, zamiast zmyslac numer.
+struct Version: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "version",
+    abstract: "Wypisuje wersje, numer budowy i commit, z ktorego zbudowano te binarke.")
+
+  @Flag(name: .long, help: "Tylko jedna linia, bez opisu.")
+  var short = false
+
+  func run() async throws {
+    guard let version = AppVersionReader.current() else {
+      print("Build z drzewa roboczego (poza bundlem) - brak danych o wersji.")
+      return
+    }
+    guard !short else {
+      print(version.summary)
+      return
+    }
+    print("Wersja:  \(version.shortVersion)")
+    print("Budowa:  \(version.build)")
+    print("Commit:  \(version.commit)")
+    if version.dirty {
+      print("")
+      print("UWAGA: zbudowano z BRUDNEGO drzewa - w binarce jest kod, ktorego")
+      print("       nie ma w zadnym commicie. Numer commitu NIE opisuje tego,")
+      print("       co naprawde dziala.")
+    }
+  }
+}

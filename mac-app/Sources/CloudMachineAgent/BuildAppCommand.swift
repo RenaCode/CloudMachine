@@ -75,6 +75,18 @@ struct BuildApp: AsyncParsableCommand {
     var infoPlistContent = try String(contentsOf: infoPlistTemplate, encoding: .utf8)
     infoPlistContent = infoPlistContent.replacingOccurrences(of: "__CM_VERSION__", with: version)
     infoPlistContent = infoPlistContent.replacingOccurrences(of: "__CM_BUILD__", with: buildNumber)
+    let commit = await resolveCommit(projectRoot: projectRoot)
+    let dirty = await workingTreeIsDirty(projectRoot: projectRoot)
+    infoPlistContent = infoPlistContent.replacingOccurrences(of: "__CM_COMMIT__", with: commit)
+    infoPlistContent = infoPlistContent.replacingOccurrences(
+      of: "__CM_DIRTY__", with: dirty ? "true" : "false")
+    if dirty {
+      // Nie przerywamy - budowanie z brudnego drzewa jest normalne przy pracy.
+      // Ale binarka niesie wtedy kod, ktorego nie ma w zadnym commicie, wiec
+      // pozniejsze "zainstalowana jest wersja X" byloby klamstwem, gdyby nikt
+      // tego nie powiedzial glosno.
+      print("==> UWAGA: budujesz z BRUDNEGO drzewa - wersja nie wskaze commitu.")
+    }
     try infoPlistContent.write(
       to: appBundle.appendingPathComponent("Contents/Info.plist"), atomically: true, encoding: .utf8
     )
@@ -126,6 +138,30 @@ struct BuildApp: AsyncParsableCommand {
 
     print("==> Gotowe: \(appBundle.path)")
     print("Nastepny krok: cloudmachine-agent make-dmg")
+  }
+
+  /// Krotki SHA commitu, z ktorego budujemy.
+  private func resolveCommit(projectRoot: URL) async -> String {
+    guard
+      let result = try? await ProcessRunner.run(
+        "/usr/bin/git", ["-C", projectRoot.path, "rev-parse", "--short", "HEAD"]),
+      result.succeeded
+    else { return AppVersion.unknownCommit }
+    let sha = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    return sha.isEmpty ? AppVersion.unknownCommit : sha
+  }
+
+  /// Czy w drzewie sa zmiany, ktorych nie ma w commicie.
+  ///
+  /// `status --porcelain` obejmuje tez pliki nieszledzone - i dobrze: nowy
+  /// plik zrodlowy, ktorego nikt nie dodal, tak samo wchodzi do binarki.
+  private func workingTreeIsDirty(projectRoot: URL) async -> Bool {
+    guard
+      let result = try? await ProcessRunner.run(
+        "/usr/bin/git", ["-C", projectRoot.path, "status", "--porcelain"]),
+      result.succeeded
+    else { return false }
+    return !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   private func resolveBuildNumber(projectRoot: URL) async -> String {

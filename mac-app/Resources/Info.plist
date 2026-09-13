@@ -12,6 +12,16 @@
   <string>__CM_BUILD__</string>
   <key>CFBundleShortVersionString</key>
   <string>__CM_VERSION__</string>
+  <!--
+    Numer wersji i numer budowy nie wystarczaja, zeby wskazac, CO dokladnie
+    dziala: VERSION stoi w miejscu miesiacami, a numer budowy (liczba commitow)
+    powtarza sie miedzy galeziami. SHA commitu wskazuje jednoznacznie, a
+    CMGitDirty mowi, czy w binarce siedzi kod, ktorego nie ma w zadnym commicie.
+  -->
+  <key>CMGitCommit</key>
+  <string>__CM_COMMIT__</string>
+  <key>CMGitDirty</key>
+  <string>__CM_DIRTY__</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleExecutable</key>
