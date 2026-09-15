@@ -202,6 +202,13 @@ public enum BackupImageService {
       }
     }
 
+    // Cisza w kolejce nie jest tu wygoda, tylko warunkiem powodzenia:
+    // `hdiutil` na wolumenie FUSE-T odrzuca montowanie tym czesciej, im
+    // bardziej rclone jest zajety (patrz `retryingFlakyMount`). Przy
+    // `writeBackSeconds` liczonym w minutach kolejka sama nie opustoszeje
+    // w ponizszym limicie czasu, wiec najpierw wymuszamy wysylke - inaczej
+    // podpiecie po kazdym starcie bylo by loteria.
+    await DriveBufferService.expireQueuedUploads()
     await DriveBufferService.waitUntilQuiet(timeout: 120)
 
     let result = await retryingFlakyMount(attempts: 5) {
@@ -260,11 +267,24 @@ public enum BackupImageService {
         message: "Odpiete (bez czekania na wysylke - dane moga byc tylko lokalnie).")
     }
 
-    // Zapisy z odpiecia trafiaja do kolejki dopiero po `--vfs-write-back`,
-    // wiec najpierw dajemy im szanse tam trafic, a dopiero potem czekamy
-    // na cisze. Bez tej przerwy kolejka wygladalaby na pusta, bo jeszcze
-    // by sie nie zdazyla zapelnic.
+    // Zapisy z odpiecia musza najpierw trafic do kolejki - bez tej przerwy
+    // wygladalaby na pusta, bo jeszcze by sie nie zdazyla zapelnic.
+    //
+    // UWAGA co do mechanizmu: pozycja pojawia sie w kolejce ZARAZ po zapisie,
+    // tyle ze z terminem wysylki `writeBackSeconds` w przod (widac to w
+    // `vfs/queue` jako dodatnie `expiry`). Ta przerwa czeka wiec na samo
+    // zakolejkowanie, a NIE na uplyw tego terminu - wczesniejszy komentarz
+    // w tym miejscu twierdzil odwrotnie.
     try? await Task.sleep(nanoseconds: 35_000_000_000)
+
+    // Terminy przesuwamy dopiero teraz, gdy kolejka jest juz kompletna.
+    // Bez tego drenaz trwalby tyle, co `writeBackSeconds` (dziesiec minut),
+    // czyli dluzej niz ponizszy limit czasu - i odpiecie zglaszaloby
+    // niepowodzenie za kazdym razem.
+    let forced = await DriveBufferService.expireQueuedUploads()
+    if forced > 0 {
+      CMLogger.log("Odpiecie: wymuszono wysylke \(forced) pozycji z kolejki")
+    }
     let drained = await DriveBufferService.waitUntilQuiet(timeout: 600)
     return CMActionResult(
       succeeded: drained,

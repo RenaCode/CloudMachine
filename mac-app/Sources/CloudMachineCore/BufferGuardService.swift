@@ -112,17 +112,32 @@ public actor BufferGuardService {
     let running = await TimeMachineStatus.isRunning()
     let percent = (await TimeMachineStatus.currentProgress())?.percent ?? 0
 
-    // Limit dobowy ma pierwszenstwo: dopoki sie nie odnowi, wysylka nie ruszy,
-    // wiec pozwolenie Time Machine na dalsza prace tylko napompuje bufor.
-    if DriveBufferService.hitDailyQuota() {
+    // Brak MIEJSCA na Dysku ma pierwszenstwo i nie minie sam: dopoki
+    // uzytkownik czegos nie skasuje, wysylka nie ruszy, a dalsza praca
+    // Time Machine tylko pompuje bufor.
+    if DriveBufferService.hitStorageQuota() {
       if state != .pausedForQuota {
-        CMLogger.log("Dobowy limit uploadu Google Drive wyczerpany - wstrzymuje Time Machine")
+        CMLogger.log("Brak miejsca na Google Drive - wstrzymuje Time Machine")
         await stopBackup()
         state = .pausedForQuota
       }
       return Snapshot(
         state: state, bufferGB: buffer, freeGB: free, backupRunning: running, percent: percent)
     }
+
+    // Dobowy limit uploadu to CO INNEGO i celowo NIE wstrzymuje backupu.
+    //
+    // Zmierzone na dwoch epizodach (12 i 15 wrzesnia 2026): przy zatorze
+    // trwajacym kilka godzin bufor ani drgnal - 99-103 GB, dokladnie tyle,
+    // co zwykle - a kolejka rozeszla sie sama, gdy okno kroczace 24 h
+    // przesunelo sie do przodu. Pauza kosztowalaby wtedy kopie i nie dalaby
+    // nic w zamian. Przed zapelnieniem dysku chronia progi ponizej i one
+    // dzialaja niezaleznie od tego, co jest przyczyna zatoru.
+    //
+    // Zglaszamy natomiast ZAWSZE, bo zator z 12 wrzesnia przeszedl zupelnie
+    // niezauwazony - trzy godziny bez wysylki i ani jednego sladu poza
+    // surowym logiem rclone.
+    await reportUploadStall(DriveBufferService.uploadStalled())
 
     switch state {
     case .idle:
@@ -171,6 +186,27 @@ public actor BufferGuardService {
   public func currentState() -> State { state }
 
   // MARK: - Sterowanie Time Machine
+
+  /// Zglasza poczatek i koniec zatoru wysylki - raz na zmiane stanu.
+  ///
+  /// Stan trzymamy w pliku, a nie w polu, bo `buffer-guard` chodzi pod
+  /// launchd z `KeepAlive`: po kazdym wskrzeszeniu procesu pole zaczynaloby
+  /// od zera i ten sam zator zglaszalby sie od nowa co 30 sekund.
+  private func reportUploadStall(_ stalled: Bool) async {
+    let marker = CMPaths.appSupportDir.appendingPathComponent(".upload-stalled")
+    let reported = FileManager.default.fileExists(atPath: marker.path)
+    guard stalled != reported else { return }
+
+    if stalled {
+      FileManager.default.createFile(atPath: marker.path, contents: nil)
+      let message = "Wysylka na Google Drive stoi - wyczerpany limit dobowy."
+      CMLogger.log("\(message) Kopie ida dalej, zator mija sam w kilka godzin.")
+      await HealthAlert.notify(title: "CloudMachine: wysylka na Dysk stoi", message: message)
+    } else {
+      try? FileManager.default.removeItem(at: marker)
+      CMLogger.log("Wysylka na Google Drive ruszyla z powrotem.")
+    }
+  }
 
   private func stopBackup() async {
     _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 120)

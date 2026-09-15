@@ -31,6 +31,25 @@ public enum DriveBufferService {
   public static let cacheSizeGB = 100
   public static var cacheSize: String { "\(cacheSizeGB)G" }
 
+  /// Ile rclone czeka od ostatniej zmiany pasma, zanim je wysle.
+  ///
+  /// To NIE jest ustawienie ostroznosciowe, tylko zderzak na wzmocnienie
+  /// zapisu. Time Machine przepisuje te same pasma przez caly przebieg, a przy
+  /// krotkim odroczeniu kazde dotkniecie to pelne 32 MB wysylane od nowa.
+  /// Zmierzone na wlasnym logu (56 533 odstepow miedzy kolejnymi wysylkami
+  /// TEGO SAMEGO pasma): mediana odstepu to 9,5 minuty, wiec 10 minut sklei
+  /// okolo polowy powtorzen. Dalsze wydluzanie oplaca sie coraz slabiej
+  /// (15 min -> 57%, 30 min -> 70%), a rosnie okno, w ktorym dane sa TYLKO
+  /// lokalnie.
+  ///
+  /// Historia: bylo 30 s i przy tej wartosci doba 14/15 wrzesnia 2026
+  /// wypchnela 823 GB na Dysk przy realnej zmianie okolo 45 GB - czyli ponad
+  /// dobowy limit Google (750 GB), co zablokowalo wysylke na kilka godzin.
+  ///
+  /// Kazda sciezka wygaszania MUSI wymuszac wysylke przez
+  /// `expireQueuedUploads()`, inaczej odpiecie czekaloby tyle, co to odroczenie.
+  public static let writeBackSeconds = 600
+
   /// Adres interfejsu sterujacego rclone. Slucha tylko na petli zwrotnej, ale
   /// kazdy lokalny proces moze przez niego sterowac montowaniem - jesli kiedys
   /// uznamy to za zbyt luzne, trzeba dolozyc `--rc-user`/`--rc-pass`.
@@ -73,7 +92,7 @@ public enum DriveBufferService {
       // Cache nie moze wyrzucac danych, ktore czekaja na wyslanie - stad
       // wysoki wiek. Rozmiarem rzadzi --vfs-cache-max-size.
       "--vfs-cache-max-age", "9999h",
-      "--vfs-write-back", "30s",
+      "--vfs-write-back", "\(writeBackSeconds)s",
       "--vfs-cache-poll-interval", "1m",
       "--cache-dir", cacheDir.path,
       "--dir-cache-time", "5m",
@@ -216,6 +235,46 @@ public enum DriveBufferService {
     return false
   }
 
+  /// Przesuwa termin wysylki wszystkich czekajacych pozycji na "teraz".
+  ///
+  /// Potrzebne przy KAZDYM wygaszaniu. Pozycja trafia do kolejki zaraz po
+  /// zapisie - widac ja w `vfs/queue` od razu - ale z terminem wymagalnosci
+  /// `writeBackSeconds` w przod. Bez przesuniecia odpiecie czekaloby cale te
+  /// dziesiec minut, a `prepare-shutdown` przed restartem Maca stalby sie nie
+  /// do zniesienia. To nie jest kosmetyka: uzytkownik, ktory nie chce czekac,
+  /// wylaczy Maca bez `prepare-shutdown`, a to juz raz zostawilo Time Machine
+  /// bez celu na cala noc.
+  ///
+  /// Wolac PO tym, jak zapisy z odpiecia zdazyly trafic do kolejki - pozycje
+  /// dolozone pozniej nie zostana ruszone.
+  ///
+  /// Zwraca liczbe pozycji, ktorym przesunieto termin.
+  @discardableResult
+  public static func expireQueuedUploads() async -> Int {
+    guard
+      let result = try? await CMTooling.runRclone(
+        ["rc", "--url", rcAddress, "vfs/queue"], timeout: 30),
+      result.succeeded,
+      let data = result.stdout.data(using: .utf8),
+      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let queue = json["queue"] as? [[String: Any]]
+    else { return 0 }
+
+    var moved = 0
+    for item in queue {
+      // Pozycji juz wysylanej nie da sie przyspieszyc - rclone to ignoruje,
+      // wiec nie marnujemy na nia wywolania.
+      if (item["uploading"] as? Bool) == true { continue }
+      guard let id = (item["id"] as? NSNumber)?.intValue else { continue }
+      // Duza liczba ujemna zamiast zera - tak opisuje to samo rclone.
+      let response = try? await CMTooling.runRclone(
+        ["rc", "--url", rcAddress, "vfs/queue-set-expiry", "id=\(id)", "expiry=-1000000000"],
+        timeout: 30)
+      if response?.succeeded == true { moved += 1 }
+    }
+    return moved
+  }
+
   /// Rozmiar bufora w bajtach - z obchodu katalogu.
   ///
   /// Uzywane TYLKO awaryjnie, gdy interfejs sterujacy rclone nie odpowiada.
@@ -261,20 +320,89 @@ public enum DriveBufferService {
   /// Chwilowa przepustnica (`userRateLimitExceeded`) nadal NIE jest tu lapana -
   /// patrz `logMentionsUploadLimit`. To ona kiedys wstrzymala backup po
   /// 109 GiB i to jej dotyczyla ostroznosc, nie stanu montowania.
-  public static func hitDailyQuota() -> Bool {
-    recentLogMentionsUploadLimit()
+  public static func hitStorageQuota() -> Bool {
+    guard let text = recentLog(bytes: 256 * 1024) else { return false }
+    return logMentionsUploadLimit(text, now: Date(), within: 30)
   }
 
-  private static func recentLogMentionsUploadLimit(within minutes: Int = 30) -> Bool {
-    guard let handle = try? FileHandle(forReadingFrom: logFile) else { return false }
+  /// Czy wysylka faktycznie STOI - rozpoznane po zachowaniu, nie po tresci.
+  ///
+  /// Dobowy limit uploadu Google (750 GB) zglasza sie jako `403
+  /// userRateLimitExceeded`, czyli DOKLADNIE tym samym kodem, co zwykle
+  /// chwilowe dlawienie tempa. Po tekscie rozroznic sie ich nie da i nie
+  /// nalezy probowac - pierwsza wersja `logMentionsUploadLimit` probowala
+  /// i wstrzymala backup po 109 GiB z 750 GB.
+  ///
+  /// Rozroznia je natomiast STOSUNEK sukcesow do bledow w oknie czasowym.
+  /// Zmierzone na wlasnym logu:
+  ///   - dlawienie:  11 wrz 14h -> 4833, 12 wrz 09h -> 1,07, 15 wrz 08h -> 2,39
+  ///   - realny zator: 12 wrz 10-12h -> 0,002-0,011, 15 wrz 09h -> 0,003
+  /// Miedzy jednym a drugim leza DWA RZEDY WIELKOSCI, wiec prog 0,1 ma zapas
+  /// w obie strony.
+  ///
+  /// `minErrors` chroni przed cisza: w oknie bez ruchu jest zero bledow
+  /// i zero sukcesow, a to nie jest zator.
+  public static func uploadStalled() -> Bool {
+    // Wieksze okno niz przy tescie tekstowym: w trakcie zatoru log rosnie
+    // o okolo 90 KB na minute, wiec 256 KB pokazaloby tylko ostatnie trzy
+    // minuty i stosunek liczylby sie z probki bez ani jednego sukcesu.
+    guard let text = recentLog(bytes: 4 * 1024 * 1024) else { return false }
+    return logShowsUploadStalled(text, now: Date(), within: 30)
+  }
+
+  /// Zbiorcza odpowiedz "wysylka na Dysk nie idzie" - do pokazania
+  /// uzytkownikowi. Dozorca bufora NIE uzywa tej funkcji, bo dla niego roznica
+  /// miedzy jednym a drugim jest zasadnicza: brak miejsca nie minie sam,
+  /// a limit dobowy mija w kilka godzin.
+  public static func hitDailyQuota() -> Bool {
+    hitStorageQuota() || uploadStalled()
+  }
+
+  /// Ogon logu rclone jako tekst. Zwraca `nil`, gdy logu nie ma.
+  private static func recentLog(bytes: UInt64) -> String? {
+    guard let handle = try? FileHandle(forReadingFrom: logFile) else { return nil }
     defer { try? handle.close() }
     let size = (try? handle.seekToEnd()) ?? 0
-    let window: UInt64 = 256 * 1024
-    try? handle.seek(toOffset: size > window ? size - window : 0)
-    guard let data = try? handle.readToEnd(),
-      let text = String(data: data, encoding: .utf8)
-    else { return false }
-    return logMentionsUploadLimit(text, now: Date(), within: minutes)
+    try? handle.seek(toOffset: size > bytes ? size - bytes : 0)
+    guard let data = try? handle.readToEnd() else { return nil }
+    // Ogon prawie zawsze zaczyna sie w polowie znaku wielobajtowego, wiec
+    // dekodujemy stratnie - inaczej caly odczyt przepadalby przez jeden bajt.
+    return String(decoding: data, as: UTF8.self)
+  }
+
+  /// Czysta wersja rozpoznania zatoru - liczy sukcesy i bledy w oknie.
+  ///
+  /// Sukcesem jest linia `... : Copied (...)`, bledem `Received upload limit
+  /// error`. Oba pochodza z tego samego logu i tego samego zdarzenia, wiec
+  /// stosunek nie wymaga zadnej kalibracji miedzy maszynami.
+  public static func logShowsUploadStalled(
+    _ text: String, now: Date, within minutes: Int,
+    minErrors: Int = 300, maxSuccessRatio: Double = 0.1
+  ) -> Bool {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
+    formatter.timeZone = TimeZone.current
+    let cutoff = now.addingTimeInterval(-Double(minutes) * 60)
+
+    var errors = 0
+    var successes = 0
+    for line in text.components(separatedBy: .newlines).reversed() {
+      guard line.count > 19, let stamp = formatter.date(from: String(line.prefix(19))) else {
+        continue
+      }
+      // Log jest chronologiczny, wiec pierwsza linia starsza od okna konczy
+      // liczenie - dalej sa juz same starsze.
+      if stamp < cutoff { break }
+      let lower = line.lowercased()
+      if lower.contains("received upload limit error") {
+        errors += 1
+      } else if lower.contains(": copied (") {
+        successes += 1
+      }
+    }
+
+    guard errors >= minErrors else { return false }
+    return Double(successes) < maxSuccessRatio * Double(errors)
   }
 
   /// Szuka sladu limitu tylko w swiezych wpisach. Bez ograniczenia czasowego

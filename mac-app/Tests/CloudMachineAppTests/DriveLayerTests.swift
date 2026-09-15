@@ -176,6 +176,102 @@ final class DailyQuotaDetectionTests: XCTestCase {
   }
 }
 
+/// Rozpoznanie ZATORU wysylki po zachowaniu rclone.
+///
+/// Wszystkie proporcje ponizej sa ZMIERZONE na produkcyjnym `rclone.log` tej
+/// maszyny, nie wymyslone. Tekst bledu jest w obu przypadkach identyczny -
+/// gdyby dalo sie je rozroznic po tresci, ta klasa nie musialaby istniec.
+final class UploadStallDetectionTests: XCTestCase {
+  private let formatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "yyyy/MM/dd HH:mm:ss"
+    return f
+  }()
+
+  /// Buduje probke o zadanym stosunku sukcesow do bledow, w oknie.
+  private func sample(errors: Int, successes: Int, minutesAgo: Int, now: Date) -> String {
+    let stamp = formatter.string(from: now.addingTimeInterval(-Double(minutesAgo) * 60))
+    var lines: [String] = []
+    for _ in 0..<errors {
+      lines.append(
+        "\(stamp) ERROR : Google drive root 'CloudMachine/mac-studio': Received upload limit "
+          + "error: googleapi: Error 403: User rate limit exceeded., userRateLimitExceeded")
+    }
+    for i in 0..<successes {
+      lines.append(
+        "\(stamp) INFO  : mac-studio.sparsebundle/bands/\(String(i, radix: 16)): "
+          + "Copied (replaced existing)")
+    }
+    return lines.joined(separator: "\n")
+  }
+
+  /// ZNANA ZLA PROBKA. 12 wrzesnia 2026, godzina 10: 5467 bledow i 59 udanych
+  /// wysylek. Wysylka stala wtedy trzy godziny i NIC tego nie zglosilo.
+  func testRealStallIsDetected() {
+    let now = Date()
+    let log = sample(errors: 5467, successes: 59, minutesAgo: 5, now: now)
+    XCTAssertTrue(DriveBufferService.logShowsUploadStalled(log, now: now, within: 30))
+  }
+
+  /// Drugi zator, 15 wrzesnia godzina 9: 8915 bledow, 31 sukcesow.
+  func testSecondRealStallIsDetected() {
+    let now = Date()
+    let log = sample(errors: 8915, successes: 31, minutesAgo: 2, now: now)
+    XCTAssertTrue(DriveBufferService.logShowsUploadStalled(log, now: now, within: 30))
+  }
+
+  /// ZNANA DOBRA PROBKA. 12 wrzesnia godzina 9, tuz PRZED zatorem: tyle samo
+  /// bledow co sukcesow (781 do 833). Wysylka szla. To jest ta sytuacja,
+  /// ktora kiedys niepotrzebnie wstrzymala backup po 109 GiB.
+  func testThrottlingWithUploadsFlowingIsNotAStall() {
+    let now = Date()
+    let log = sample(errors: 781, successes: 833, minutesAgo: 5, now: now)
+    XCTAssertFalse(DriveBufferService.logShowsUploadStalled(log, now: now, within: 30))
+  }
+
+  /// 15 wrzesnia godzina 8: 1040 bledow, ale 2481 sukcesow - dlawienie tempa
+  /// przy wysylce idacej pelna para. Godzine pozniej to samo przeszlo w zator
+  /// i wtedy juz musi zadzialac.
+  func testHeavyThrottlingWithMoreSuccessesIsNotAStall() {
+    let now = Date()
+    let log = sample(errors: 1040, successes: 2481, minutesAgo: 10, now: now)
+    XCTAssertFalse(DriveBufferService.logShowsUploadStalled(log, now: now, within: 30))
+  }
+
+  /// 11 wrzesnia godzina 14: JEDEN blad na 4833 udane wysylki. Pojedyncze
+  /// odbicie nie jest zatorem, choc stosunek sukcesow bylby tu bez znaczenia -
+  /// ratuje nas dolny prog liczby bledow.
+  func testSingleErrorIsNotAStall() {
+    let now = Date()
+    let log = sample(errors: 1, successes: 4833, minutesAgo: 5, now: now)
+    XCTAssertFalse(DriveBufferService.logShowsUploadStalled(log, now: now, within: 30))
+  }
+
+  /// Zator, ktory byl i minal, nie moze trzymac alarmu w nieskonczonosc -
+  /// wpis zostaje w logu na zawsze.
+  func testStallOutsideTheWindowIsIgnored() {
+    let now = Date()
+    let log = sample(errors: 5467, successes: 59, minutesAgo: 120, now: now)
+    XCTAssertFalse(DriveBufferService.logShowsUploadStalled(log, now: now, within: 30))
+  }
+
+  /// Cisza to nie zator. W oknie bez ruchu nie ma ani bledow, ani sukcesow -
+  /// bez dolnego progu liczby bledow stosunek 0/0 dalby falszywy alarm.
+  func testSilenceIsNotAStall() {
+    XCTAssertFalse(DriveBufferService.logShowsUploadStalled("", now: Date(), within: 30))
+  }
+
+  /// Odroczenie wysylki musi isc do rclone z jednej stalej - inaczej zmiana
+  /// jednego miejsca zostawia drugie z poprzednia wartoscia.
+  func testMountUsesConfiguredWriteBack() {
+    let args = DriveBufferService.mountArguments()
+    guard let index = args.firstIndex(of: "--vfs-write-back") else {
+      return XCTFail("brak --vfs-write-back w argumentach montowania")
+    }
+    XCTAssertEqual(args[index + 1], "\(DriveBufferService.writeBackSeconds)s")
+  }
+}
+
 /// Decyzje dozorcy bufora. Komentarz przy `step()` obiecywal, ze wydzielenie
 /// go z petli sluzy testowaniu - a testu nie bylo. Tu jest.
 final class BufferGuardThresholdTests: XCTestCase {
