@@ -10,16 +10,18 @@ struct DashboardView: View {
   @State private var credentialsMessage: String?
   @State private var selectedTab: Tab = .dashboard
 
+  /// Zakladka jest jedna. Byla druga, z surowym dziennikiem, i zostala
+  /// usunieta swiadomie: dziennik odpowiada na pytanie "co sie stalo o 3:46",
+  /// a uzytkownik pyta "czy moja kopia jest bezpieczna". Na to odpowiada teraz
+  /// karta stanu wysylki. Jak czytac dzienniki - opisane w README.
   enum Tab: String, CaseIterable, Identifiable {
     case dashboard = "Panel główny"
-    case logs = "Logi i monitorowanie"
 
     var id: String { self.rawValue }
 
     var icon: String {
       switch self {
       case .dashboard: return "square.grid.2x2.fill"
-      case .logs: return "terminal.fill"
       }
     }
   }
@@ -33,12 +35,8 @@ struct DashboardView: View {
         // Górna belka / Nagłówek z logo i zakładkami
         topHeaderBar
 
-        // Główna zawartość wybranej zakładki
-        if selectedTab == .dashboard {
-          dashboardContent
-        } else {
-          LogsView()
-        }
+        // Główna zawartość
+        dashboardContent
       }
     }
     .task { controller.startAutoRefresh() }
@@ -188,6 +186,9 @@ struct DashboardView: View {
 
         // Siatka kart statystyk KPI (Top Row)
         kpiSummaryGrid
+
+        // Czy kopia dolatuje na Dysk - i dlaczego nie, jesli nie
+        uploadStateCard
 
         // Karta aktywnego postępu backupu (jeśli trwa)
         if let progress = controller.status.backupProgress {
@@ -523,11 +524,16 @@ struct DashboardView: View {
           )
         }
 
-        if controller.status.buffer.dailyQuotaHit {
+        if controller.status.buffer.driveFull {
+          Divider().background(RenaCodeTheme.borderGlass)
+          row("Miejsce na Google Drive", "Brak miejsca", ok: false)
+        }
+
+        if controller.status.buffer.dailyQuotaExhausted {
           Divider().background(RenaCodeTheme.borderGlass)
           row(
             "Limit Google Drive",
-            "Dobowy limit 750 GB wyczerpany",
+            "Dobowe 750 GB wyczerpane",
             ok: false
           )
         }
@@ -670,6 +676,82 @@ struct DashboardView: View {
       .buttonStyle(SecondaryGlassButtonStyle())
 
       Spacer()
+    }
+  }
+
+  // MARK: - Stan Wysylki na Google Drive
+
+  /// Odpowiada na jedyne pytanie, ktore uzytkownik naprawde zadaje: czy moja
+  /// kopia jest bezpieczna. Jedno zdanie, pod nim wyjasnienie po ludzku.
+  ///
+  /// Kolor rozroznia TRZY rzeczy, nie dwie. Zielony - jest dobrze. Bursztynowy -
+  /// nie jest nominalnie, ale nic nie rob, minie samo (limit dobowy Google).
+  /// Czerwony - trzeba zareagowac. Bez srodkowego stanu wyczerpany limit
+  /// musialby udawac albo awarie, albo porzadek, a nie jest ani jednym, ani drugim.
+  ///
+  /// Teksty nie ida przez `.localized` celowo: wiekszosc wariantow wstawia
+  /// liczbe do zdania, wiec i tak nie trafilaby w slownik tlumaczen.
+  private var uploadStateCard: some View {
+    let state = controller.status.buffer.uploadState
+    let accent = uploadAccent(state)
+
+    return VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 12) {
+        ZStack {
+          Circle()
+            .fill(accent.opacity(0.15))
+            .frame(width: 40, height: 40)
+
+          Image(systemName: uploadIcon(state))
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(accent)
+        }
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text(uploadBadge(state))
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(accent)
+
+          Text(state.headline)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(RenaCodeTheme.textMain)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Spacer(minLength: 0)
+      }
+
+      Text(state.explanation)
+        .font(.system(size: 13))
+        .foregroundStyle(RenaCodeTheme.textMuted)
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .glassCard(borderColor: accent.opacity(0.35))
+  }
+
+  private func uploadAccent(_ state: UploadState) -> Color {
+    if state.needsAttention { return RenaCodeTheme.colorDanger }
+    if !state.isNominal { return RenaCodeTheme.colorWarning }
+    return RenaCodeTheme.colorSuccess
+  }
+
+  private func uploadBadge(_ state: UploadState) -> String {
+    if state.needsAttention { return "WYMAGA REAKCJI" }
+    if !state.isNominal { return "MINIE SAMO — NIC NIE RÓB" }
+    return "W PORZĄDKU"
+  }
+
+  private func uploadIcon(_ state: UploadState) -> String {
+    switch state {
+    case .mountDown: return "icloud.slash.fill"
+    case .driveFull: return "externaldrive.badge.xmark"
+    case .failedFiles: return "exclamationmark.triangle.fill"
+    case .bufferFull: return "tray.full.fill"
+    case .dailyQuotaExhausted: return "hourglass"
+    case .flowing: return "arrow.up.circle.fill"
+    case .upToDate: return "checkmark.icloud.fill"
     }
   }
 

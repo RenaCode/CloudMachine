@@ -41,10 +41,6 @@ final class CloudMachineController: ObservableObject {
     await refreshTimeMachine()
     await refreshProgress()
     status.lastRefresh = Date()
-    // Logu NIE czytamy w cyklu odswiezania - jest od tego osobna zakladka,
-    // ktora wola refreshLogTail() sama, gdy jest widoczna. Czytanie pliku co
-    // kilka sekund w tle tylko po to, zeby nikt na to nie patrzyl, jest
-    // marnotrawstwem.
   }
 
   // MARK: - Poszczegolne odczyty
@@ -92,7 +88,10 @@ final class CloudMachineController: ObservableObject {
     // wywolania stat co 10 sekund na dysku, na ktory leci backup.
     buffer.sizeGB = BufferGuardService.bufferGB(stats: stats)
     buffer.freeDiskGB = BufferGuardService.freeGB()
-    buffer.dailyQuotaHit = DriveBufferService.hitDailyQuota()
+    // Dwa osobne pytania, bo odpowiedzi znacza co innego: brak miejsca trzeba
+    // naprawic, limit dobowy mija sam.
+    buffer.driveFull = DriveBufferService.hitStorageQuota()
+    buffer.dailyQuotaExhausted = DriveBufferService.uploadStalled()
     if let stats {
       buffer.uploadsQueued = stats.uploadsQueued
       buffer.uploadsInProgress = stats.uploadsInProgress
@@ -139,17 +138,6 @@ final class CloudMachineController: ObservableObject {
     lastBytesDone = progress.bytes
     lastBytesSampledAt = Date()
     status.backupProgress = info
-  }
-
-  func refreshLogTail() {
-    guard let handle = try? FileHandle(forReadingFrom: CMPaths.combinedLogFile) else { return }
-    defer { try? handle.close() }
-    let size = (try? handle.seekToEnd()) ?? 0
-    let window: UInt64 = 16 * 1024
-    try? handle.seek(toOffset: size > window ? size - window : 0)
-    if let data = try? handle.readToEnd(), let text = String(data: data, encoding: .utf8) {
-      status.logTail = text
-    }
   }
 
   // MARK: - Akcje

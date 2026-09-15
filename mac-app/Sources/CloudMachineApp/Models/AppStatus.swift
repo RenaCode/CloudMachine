@@ -29,12 +29,30 @@ struct BufferStatus: Equatable {
   var uploadsQueued: Int = 0
   var uploadsInProgress: Int = 0
   var erroredFiles: Int = 0
-  /// Dobowy limit uploadu Google Drive wyczerpany - do odnowienia trzeba czekac.
-  var dailyQuotaHit: Bool = false
+  /// Na Google Drive nie ma miejsca. NIE minie samo.
+  var driveFull: Bool = false
+  /// Dobowy limit ZAPISU Google (750 GB) wyczerpany. Mija sam.
+  ///
+  /// Trzymane osobno od `driveFull`, bo to sa dwie rozne sytuacje o tym samym
+  /// objawie: jedna znaczy "poczekaj", druga "zwolnij miejsce". Wczesniej byly
+  /// jednym polem i interfejs nie mogl ich rozroznic.
+  var dailyQuotaExhausted: Bool = false
   /// rclone nie ma gdzie odlozyc danych - bufor pelny samymi niewyslanymi.
   var outOfSpace: Bool = false
 
   var draining: Bool { uploadsInProgress > 0 || uploadsQueued > 0 }
+
+  /// Jedno zrodlo prawdy o tym, czy kopia dolatuje na Dysk - i dlaczego nie.
+  var uploadState: UploadState {
+    UploadState.from(
+      mounted: mounted,
+      queued: uploadsQueued,
+      inProgress: uploadsInProgress,
+      failedFiles: erroredFiles,
+      bufferOutOfSpace: outOfSpace,
+      driveFull: driveFull,
+      dailyQuotaExhausted: dailyQuotaExhausted)
+  }
 }
 
 struct LastRunResult: Equatable {
@@ -68,7 +86,6 @@ final class AppStatus: ObservableObject {
   @Published var hasFullDiskAccess: Bool = false
   @Published var isBusy: Bool = false
   @Published var busyLabel: String = ""
-  @Published var logTail: String = ""
   @Published var errorMessage: String?
   /// Kiedy ostatnio udalo sie odczytac stan. Pokazywane w interfejsie, bo
   /// zamrozony widok wyglada dokladnie jak awaria - a to dwie rozne rzeczy
@@ -84,17 +101,14 @@ final class AppStatus: ObservableObject {
     if !buffer.mounted { return "Bufor nie dziala" }
     if !buffer.imageAttached { return "Obraz backupu niepodpiety" }
     if case .notRegistered = timeMachineState { return "Time Machine nie wskazuje na CloudMachine" }
-    if buffer.dailyQuotaHit { return "Dobowy limit Google Drive wyczerpany" }
-    // Pliki, ktorych rclone nie wyslal, istnieja WYLACZNIE na tym Macu -
-    // czyli dokladnie tam, gdzie backup nie ma prawa byc jedyna kopia. To nie
-    // jest szczegol do karty nizej, tylko odpowiedz "nie" na pytanie, czy
-    // dane sa bezpieczne.
-    if buffer.erroredFiles > 0 {
-      return "Nie wyslano \(buffer.erroredFiles) plikow na Google Drive"
-    }
-    if buffer.outOfSpace { return "Bufor pelny - wysylka nie nadaza" }
+    // O wysylce mowi JEDNO zrodlo - inaczej pasek menu i karta stanu potrafily
+    // twierdzic co innego. Pliki, ktorych rclone nie wyslal, istnieja WYLACZNIE
+    // na tym Macu, czyli dokladnie tam, gdzie backup nie ma prawa byc jedyna
+    // kopia; `UploadState` stawia je przed limitem dobowym wlasnie dlatego.
+    let upload = buffer.uploadState
+    if !upload.isNominal { return upload.headline }
     if backupProgress != nil { return "Backup w toku" }
-    if buffer.draining { return "Wysylanie na Google Drive" }
+    if upload.isMovingData { return upload.headline }
     return "Gotowe"
   }
 
@@ -106,8 +120,7 @@ final class AppStatus: ObservableObject {
   /// wygladalo dokladnie tak samo jak sprawne.
   var healthy: Bool {
     guard case .ready = dependencyState, remoteConfigured, buffer.mounted, buffer.imageAttached,
-      case .registered = timeMachineState, !buffer.dailyQuotaHit,
-      buffer.erroredFiles == 0, !buffer.outOfSpace
+      case .registered = timeMachineState, buffer.uploadState.isNominal
     else { return false }
     return true
   }

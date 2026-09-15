@@ -282,7 +282,8 @@ struct DriveStatus: AsyncParsableCommand {
     print("Bufor:            \(BufferGuardService.bufferGB()) GB z \(DriveBufferService.cacheSize)")
     print("Wolne na dysku:   \(BufferGuardService.freeGB()) GB")
 
-    if let stats = await DriveBufferService.queueStats() {
+    let queueStats = await DriveBufferService.queueStats()
+    if let stats = queueStats {
       print(
         "Kolejka wysylki:  \(stats.uploadsInProgress) w toku, \(stats.uploadsQueued) w kolejce, \(stats.erroredFiles) bledow"
       )
@@ -294,8 +295,19 @@ struct DriveStatus: AsyncParsableCommand {
     print(
       "Restart bez pytania: \(safe ? "TAK - kolejka pusta" : "NIE - najpierw prepare-shutdown")")
 
-    if DriveBufferService.hitDailyQuota() {
-      print("UWAGA:            dobowy limit uploadu Google Drive wyczerpany")
+    // Ta sama odpowiedz, co na karcie w interfejsie - jedno zrodlo, zeby CLI
+    // i GUI nie mogly twierdzic czegos innego o tym samym stanie.
+    let upload = UploadState.from(
+      mounted: DriveBufferService.isMounted,
+      queued: queueStats?.uploadsQueued ?? 0,
+      inProgress: queueStats?.uploadsInProgress ?? 0,
+      failedFiles: queueStats?.erroredFiles ?? 0,
+      bufferOutOfSpace: queueStats?.outOfSpace ?? false,
+      driveFull: DriveBufferService.hitStorageQuota(),
+      dailyQuotaExhausted: DriveBufferService.uploadStalled())
+    print("Wysylka:          \(upload.headline)")
+    if !upload.isNominal {
+      print("                  \(upload.explanation.replacingOccurrences(of: "\n", with: " "))")
     }
 
     if let mountPoint = await TimeMachineStatus.currentDestinationMountPoint() {

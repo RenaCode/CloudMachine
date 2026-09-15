@@ -126,12 +126,17 @@ Obraz podpiety:   OK  (/Volumes/CloudMachine)
 Bufor:            103 GB z 100G
 Wolne na dysku:   288 GB
 Kolejka wysylki:  0 w toku, 0 w kolejce, 0 bledow
+Wysylka:          Wszystko wyslane na Google Drive
 Cel Time Machine: /Volumes/CloudMachine
 Backup:           nie trwa
 ```
 
 The number that matters is the upload queue. Until it returns to zero between
 backups, part of the backup is still only on this Mac.
+
+The `Wysylka:` line is the same verdict the app window shows, computed in one
+place so the two can never disagree. When it is not nominal it prints a second
+line saying why, and whether it clears on its own.
 
 Three launchd agents keep it alive, all running the binary inside the app:
 
@@ -171,6 +176,54 @@ and launchd see the same answer as you do.
 It deliberately reads a local file rather than calling `tmutil latestbackup`:
 the latter mounts a snapshot on a volume that lives on Google Drive, and a
 watchdog that hangs when the mount is sick is silent exactly when it is needed.
+
+### Reading the logs
+
+The app window deliberately does **not** show a log viewer. It answers one
+question — is the backup reaching Google Drive, and if not, why — and a wall of
+timestamped lines is not that answer. It also aged badly: the pane showed the
+tail of the log, so on a quiet day it still displayed last night's failure and
+looked like a live one.
+
+Logs are a diagnostic tool, so they live here instead.
+
+| File | What it holds |
+|---|---|
+| `~/Library/Logs/CloudMachine/cloudmachine.log` | everything the agents decided: pauses, resumes, alerts, attach/detach |
+| `~/.cloudmachine/rclone.log` | every transfer and every API error, one line each |
+| `~/Library/Logs/CloudMachine/launchd-*.out.log` | stdout per agent, one file each |
+
+Both main logs are rotated by size, so they will not eat the disk.
+
+**Check the timestamps before concluding anything.** An entry is not news
+because it is the last one in the file; on a quiet day the newest line can be
+hours old.
+
+```sh
+# Did anything fail today?
+grep "^\[$(date +%Y-%m-%d)" ~/Library/Logs/CloudMachine/cloudmachine.log | grep -i awaria
+
+# Is the upload actually moving, or only erroring? Successes vs refusals per minute.
+grep "^$(date +%Y/%m/%d)" ~/.cloudmachine/rclone.log \
+  | awk '{k=$1" "substr($2,1,5)}
+         /: Copied \(/     {ok[k]++}
+         /upload limit/   {err[k]++}
+         END {for (k in ok) seen[k]; for (k in err) seen[k];
+              for (k in seen) print k, "ok:" ok[k]+0, "err:" err[k]+0}' \
+  | sort | tail -20
+```
+
+That second one is worth knowing, because a wall of `403` lines on its own says
+very little. Google returns `userRateLimitExceeded` both for ordinary throttling
+and for the exhausted 750 GB/day write quota, and the text is identical — it was
+measured at exactly 1:1 across 81036 error lines here. What separates them is
+whether anything is still getting through. Ordinary throttling runs at one
+success per error or better; a real stall drops to roughly one in a hundred.
+`buffer-guard` uses that same ratio to decide whether to report a stall, so this
+command shows you what it is looking at.
+
+Empty logs after a fresh install are normal — the agents only write when
+something happens.
 
 ### Before rebooting
 

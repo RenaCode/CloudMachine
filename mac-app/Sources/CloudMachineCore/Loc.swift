@@ -52,18 +52,6 @@ public enum Loc {
       "Dalej": "Next",
       "Wstecz": "Back",
       "Zakończ": "Finish",
-      // LogsView
-      "Filtruj logi...": "Filter logs...",
-      "Wyczyść": "Clear",
-      "Odśwież": "Refresh",
-      "Wszystkie": "All",
-      "Błędy": "Errors",
-      "Transfery rclone": "rclone transfers",
-      "Szukaj w logach...": "Search logs...",
-      "Filtr:": "Filter:",
-      "Autoprzewijanie": "Auto-scroll",
-      "Folder logów": "Log Folder",
-      "Brak wpisów pasujących do wybranych filtrów.": "No entries matching selected filters.",
       // MenuBarContentView
       "Pokaż główne okno": "Show Main Window",
       "Zakończ CloudMachine": "Quit CloudMachine",

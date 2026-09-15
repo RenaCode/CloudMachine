@@ -38,7 +38,7 @@ final class AppStatusHealthTests: XCTestCase {
     let status = zdrowy()
     status.buffer.erroredFiles = 7
     XCTAssertFalse(status.healthy, "Niewyslane pasma NIE moga uchodzic za zdrowy stan.")
-    XCTAssertEqual(status.headline, "Nie wyslano 7 plikow na Google Drive")
+    XCTAssertEqual(status.headline, "Nie wysłano 7 fragmentów kopii")
   }
 
   /// rclone melduje, ze nie ma juz gdzie odlozyc danych. Mocniejszy sygnal niz
@@ -47,7 +47,7 @@ final class AppStatusHealthTests: XCTestCase {
     let status = zdrowy()
     status.buffer.outOfSpace = true
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.headline, "Bufor pelny - wysylka nie nadaza")
+    XCTAssertEqual(status.headline, "Wysyłka nie nadąża za zapisem")
   }
 
   func testBrakMontowaniaOdbieraZielonyZnaczek() {
@@ -71,10 +71,21 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertEqual(status.headline, "Time Machine nie wskazuje na CloudMachine")
   }
 
+  /// Limit dobowy NIE wymaga reakcji, ale pasma leza wtedy tylko na tym Macu -
+  /// wiec zielony znaczek sie nie nalezy.
   func testWyczerpanyLimitDriveOdbieraZielonyZnaczek() {
     let status = zdrowy()
-    status.buffer.dailyQuotaHit = true
+    status.buffer.dailyQuotaExhausted = true
     XCTAssertFalse(status.healthy)
+    XCTAssertFalse(status.buffer.uploadState.needsAttention)
+  }
+
+  /// Brak miejsca na Dysku to co INNEGO niz limit dobowy: nie minie samo.
+  func testBrakMiejscaNaDyskuWymagaReakcji() {
+    let status = zdrowy()
+    status.buffer.driveFull = true
+    XCTAssertFalse(status.healthy)
+    XCTAssertTrue(status.buffer.uploadState.needsAttention)
   }
 
   func testNiepolaczonyDriveOdbieraZielonyZnaczek() {
@@ -90,6 +101,6 @@ final class AppStatusHealthTests: XCTestCase {
     let status = zdrowy()
     status.buffer.uploadsQueued = 12
     XCTAssertTrue(status.healthy)
-    XCTAssertEqual(status.headline, "Wysylanie na Google Drive")
+    XCTAssertEqual(status.headline, "Wysyłanie na Google Drive — 12 w kolejce")
   }
 }
