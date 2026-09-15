@@ -107,6 +107,14 @@ security add-generic-password -a client_secret -s cloudmachine-gdrive -w -U
 Without `-w <value>`, `security` prompts — the secret stays out of your shell
 history and out of `ps`.
 
+The app window can do the same thing: the *Poświadczenia Google Drive* card,
+folded away at the bottom since it is a once-ever step. It writes through the
+`security` tool rather than the Keychain API on purpose — an entry created by
+`SecItemAdd` gets an ACL limited to the program that made it, and reading it
+from a different binary raises an authorisation dialog. The launchd agent has
+nobody to show that dialog to, so it would read nothing and quietly fall back to
+the shared `client_id`.
+
 Your own credentials are not optional polish: rclone's shared `client_id` is
 being retired during 2026, and Google rate-limits per `client_id`, so on the
 shared one you compete with every other rclone user. If the Keychain entries are

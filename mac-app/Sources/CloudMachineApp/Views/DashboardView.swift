@@ -8,23 +8,7 @@ struct DashboardView: View {
   @State private var clientID = ""
   @State private var clientSecret = ""
   @State private var credentialsMessage: String?
-  @State private var selectedTab: Tab = .dashboard
-
-  /// Zakladka jest jedna. Byla druga, z surowym dziennikiem, i zostala
-  /// usunieta swiadomie: dziennik odpowiada na pytanie "co sie stalo o 3:46",
-  /// a uzytkownik pyta "czy moja kopia jest bezpieczna". Na to odpowiada teraz
-  /// karta stanu wysylki. Jak czytac dzienniki - opisane w README.
-  enum Tab: String, CaseIterable, Identifiable {
-    case dashboard = "Panel główny"
-
-    var id: String { self.rawValue }
-
-    var icon: String {
-      switch self {
-      case .dashboard: return "square.grid.2x2.fill"
-      }
-    }
-  }
+  @State private var credentialsExpanded = false
 
   var body: some View {
     ZStack {
@@ -112,52 +96,6 @@ struct DashboardView: View {
         }
       }
 
-      // Nawigacja zakładkowa w stylu RenaCode
-      HStack {
-        HStack(spacing: 4) {
-          ForEach(Tab.allCases) { tab in
-            Button(action: {
-              withAnimation(.easeInOut(duration: 0.2)) {
-                selectedTab = tab
-              }
-            }) {
-              HStack(spacing: 6) {
-                Image(systemName: tab.icon)
-                  .font(.system(size: 12, weight: .semibold))
-                Text(tab.rawValue)
-                  .font(.system(size: 13, weight: .semibold))
-              }
-              .foregroundStyle(
-                selectedTab == tab ? RenaCodeTheme.textMain : RenaCodeTheme.textMuted
-              )
-              .padding(.horizontal, 14)
-              .padding(.vertical, 7)
-              .background(
-                ZStack {
-                  if selectedTab == tab {
-                    RoundedRectangle(cornerRadius: 8)
-                      .fill(RenaCodeTheme.colorPrimary.opacity(0.25))
-                      .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                          .stroke(RenaCodeTheme.colorPrimary.opacity(0.4), lineWidth: 1)
-                      )
-                  }
-                }
-              )
-            }
-            .buttonStyle(.plain)
-          }
-        }
-        .padding(3)
-        .background(RenaCodeTheme.bgInset)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(
-          RoundedRectangle(cornerRadius: 10)
-            .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
-        )
-
-        Spacer()
-      }
     }
     .padding(.horizontal, 22)
     .padding(.top, 18)
@@ -544,92 +482,110 @@ struct DashboardView: View {
 
   // MARK: - Poświadczenia Google OAuth
 
+  /// Poswiadczenia sa zwiniete domyslnie. Wpisuje sie je RAZ, przy zakladaniu
+  /// wlasnego klienta OAuth, a potem juz nigdy - trzymanie dwoch pol na haslo
+  /// na wierzchu panelu, ktory ma odpowiadac na pytanie o stan kopii, tylko
+  /// odciaga uwage. Znaczek przy naglowku mowi, czy jest co rozwijac.
   private var credentialsCard: some View {
     VStack(alignment: .leading, spacing: 14) {
-      HStack(spacing: 8) {
-        Image(systemName: "key.fill")
-          .font(.system(size: 15))
-          .foregroundStyle(RenaCodeTheme.colorPrimaryLight)
+      Button {
+        withAnimation(.easeInOut(duration: 0.18)) { credentialsExpanded.toggle() }
+      } label: {
+        HStack(spacing: 8) {
+          Image(systemName: "key.fill")
+            .font(.system(size: 15))
+            .foregroundStyle(RenaCodeTheme.colorPrimaryLight)
 
-        Text("Poświadczenia Google Drive (OAuth 2.0)")
-          .font(.system(size: 15, weight: .bold, design: .rounded))
-          .foregroundStyle(RenaCodeTheme.textMain)
+          Text("Poświadczenia Google Drive (OAuth 2.0)")
+            .font(.system(size: 15, weight: .bold, design: .rounded))
+            .foregroundStyle(RenaCodeTheme.textMain)
 
-        Spacer()
+          Spacer()
 
-        RenaCodePillBadge(
-          text: controller.credentials.isComplete ? "Keychain OK" : "Brak własnych kluczy",
-          icon: controller.credentials.isComplete ? "checkmark.seal.fill" : "lock.open.fill",
-          color: controller.credentials.isComplete
-            ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning
-        )
-      }
+          RenaCodePillBadge(
+            text: controller.credentials.isComplete ? "Keychain OK" : "Brak własnych kluczy",
+            icon: controller.credentials.isComplete ? "checkmark.seal.fill" : "lock.open.fill",
+            color: controller.credentials.isComplete
+              ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning
+          )
 
-      Text(controller.credentials.summary)
-        .font(.system(size: 12))
-        .foregroundStyle(RenaCodeTheme.textMuted)
-        .fixedSize(horizontal: false, vertical: true)
-
-      VStack(spacing: 10) {
-        HStack {
-          Text("client_id:")
-            .font(.system(size: 12, weight: .medium, design: .monospaced))
+          Image(systemName: "chevron.right")
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(RenaCodeTheme.textMuted)
-            .frame(width: 100, alignment: .leading)
-
-          SecureField("Wklej client_id...", text: $clientID)
-            .textFieldStyle(.plain)
-            .padding(8)
-            .background(RenaCodeTheme.bgInset)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-              RoundedRectangle(cornerRadius: 8)
-                .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
-            )
+            .rotationEffect(.degrees(credentialsExpanded ? 90 : 0))
         }
-
-        HStack {
-          Text("client_secret:")
-            .font(.system(size: 12, weight: .medium, design: .monospaced))
-            .foregroundStyle(RenaCodeTheme.textMuted)
-            .frame(width: 100, alignment: .leading)
-
-          SecureField("Wklej client_secret...", text: $clientSecret)
-            .textFieldStyle(.plain)
-            .padding(8)
-            .background(RenaCodeTheme.bgInset)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-              RoundedRectangle(cornerRadius: 8)
-                .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
-            )
-        }
+        .contentShape(Rectangle())
       }
+      .buttonStyle(.plain)
 
-      HStack {
-        Button("Zapisz bezpiecznie w Keychainie") {
-          let id = clientID
-          let secret = clientSecret
-          Task {
-            credentialsMessage = await controller.saveCredentials(
-              clientID: id, clientSecret: secret)
-            clientID = ""
-            clientSecret = ""
+      if credentialsExpanded {
+
+        Text(controller.credentials.summary)
+          .font(.system(size: 12))
+          .foregroundStyle(RenaCodeTheme.textMuted)
+          .fixedSize(horizontal: false, vertical: true)
+
+        VStack(spacing: 10) {
+          HStack {
+            Text("client_id:")
+              .font(.system(size: 12, weight: .medium, design: .monospaced))
+              .foregroundStyle(RenaCodeTheme.textMuted)
+              .frame(width: 100, alignment: .leading)
+
+            SecureField("Wklej client_id...", text: $clientID)
+              .textFieldStyle(.plain)
+              .padding(8)
+              .background(RenaCodeTheme.bgInset)
+              .clipShape(RoundedRectangle(cornerRadius: 8))
+              .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                  .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
+              )
+          }
+
+          HStack {
+            Text("client_secret:")
+              .font(.system(size: 12, weight: .medium, design: .monospaced))
+              .foregroundStyle(RenaCodeTheme.textMuted)
+              .frame(width: 100, alignment: .leading)
+
+            SecureField("Wklej client_secret...", text: $clientSecret)
+              .textFieldStyle(.plain)
+              .padding(8)
+              .background(RenaCodeTheme.bgInset)
+              .clipShape(RoundedRectangle(cornerRadius: 8))
+              .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                  .stroke(RenaCodeTheme.borderGlass, lineWidth: 1)
+              )
           }
         }
-        .buttonStyle(PrimaryGradientButtonStyle())
-        .disabled(
-          clientID.trimmingCharacters(in: .whitespaces).isEmpty
-            || clientSecret.trimmingCharacters(in: .whitespaces).isEmpty)
 
-        Spacer()
-      }
+        HStack {
+          Button("Zapisz bezpiecznie w Keychainie") {
+            let id = clientID
+            let secret = clientSecret
+            Task {
+              credentialsMessage = await controller.saveCredentials(
+                clientID: id, clientSecret: secret)
+              clientID = ""
+              clientSecret = ""
+            }
+          }
+          .buttonStyle(PrimaryGradientButtonStyle())
+          .disabled(
+            clientID.trimmingCharacters(in: .whitespaces).isEmpty
+              || clientSecret.trimmingCharacters(in: .whitespaces).isEmpty)
 
-      if let message = credentialsMessage {
-        Text(message)
-          .font(.system(size: 12))
-          .foregroundStyle(RenaCodeTheme.colorCyan)
-          .fixedSize(horizontal: false, vertical: true)
+          Spacer()
+        }
+
+        if let message = credentialsMessage {
+          Text(message)
+            .font(.system(size: 12))
+            .foregroundStyle(RenaCodeTheme.colorCyan)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
     }
     .glassCard()
