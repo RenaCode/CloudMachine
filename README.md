@@ -30,17 +30,31 @@ knows the cloud exists.
 
 ## What it costs in practice
 
-Measured on a Mac Studio, 332 Mbit/s uplink, ~600 GB of live data:
+Measured on a Mac Studio, 332 Mbit/s uplink:
 
 | | |
 |---|---|
 | Full backup | 210 GiB, about two hours |
-| Incremental backup | ~370 MB, a few minutes |
-| Daily upload | ~9 GB — 1.2% of Google's 750 GB/day ceiling |
-| Google Drive used | 214 GiB |
+| Incremental backup | ~370 MB of new data, a few minutes |
+| Google Drive used | 265 GiB (Sep 2026) |
+| Actually uploaded per day | **327–595 GB** — see below |
 
-The daily cap only matters for the first backup, and only if the source is
-larger than 750 GB.
+That last row is not a typo, and it is the number that surprises people. What
+Time Machine *writes* and what rclone *sends* are different quantities, because
+the unit of upload is a 32 MB band and any touch of a band re-sends all of it.
+Time Machine revisits the same bands throughout a run, so one changed byte can
+cost 32 MB several times over.
+
+Measured here across five days: bands were re-sent a median of **9.5 minutes
+apart**, giving 7.6× to 24× more traffic than the underlying change. On 14–15
+September 2026 that put 823 GB on the wire in 24 hours for roughly 45 GB of real
+change — past Google's 750 GB/day write ceiling, which blocked *all* uploads for
+several hours.
+
+So the daily cap is not just a first-backup concern, and it does not require a
+source larger than 750 GB. A 265 GiB backup reached it. `--vfs-write-back` is
+the lever that keeps it in check — see [Why the pieces are what they
+are](#why-the-pieces-are-what-they-are).
 
 ---
 
@@ -126,6 +140,7 @@ Obraz podpiety:   OK  (/Volumes/CloudMachine)
 Bufor:            103 GB z 100G
 Wolne na dysku:   288 GB
 Kolejka wysylki:  0 w toku, 0 w kolejce, 0 bledow
+Restart bez pytania: TAK - kolejka pusta
 Wysylka:          Wszystko wyslane na Google Drive
 Cel Time Machine: /Volumes/CloudMachine
 Backup:           nie trwa
@@ -138,14 +153,23 @@ The `Wysylka:` line is the same verdict the app window shows, computed in one
 place so the two can never disagree. When it is not nominal it prints a second
 line saying why, and whether it clears on its own.
 
-Three launchd agents keep it alive, all running the binary inside the app:
+Five launchd agents keep it alive, all running code from inside the app:
 
 | Agent | Job |
 |---|---|
 | `gdrive-buffer` | holds the rclone mount; `KeepAlive` |
 | `gdrive-attach` | attaches the image, retries every 15 minutes |
-| `buffer-guard` | pauses Time Machine when the buffer outgrows the uplink |
+| `buffer-guard` | watches the buffer and the upload; `KeepAlive` |
 | `backup-health` | every 30 min: is a backup still *completing*? |
+| `app` | the menu-bar app itself |
+
+`buffer-guard` distinguishes two things that look identical in every counter and
+mean opposite things. **Out of space on Drive** does not pass on its own, so it
+pauses Time Machine until someone frees space. **The daily write quota** clears
+by itself within hours, so it only reports — measured twice, the buffer did not
+move off 99–103 GB during either stall, and pausing would have cost backups for
+nothing. The disk is still protected either way: the size thresholds below act
+whatever the cause.
 
 ### Knowing when it stops working
 
@@ -238,6 +262,11 @@ changes", it costs the volume's root directory. `prepare-shutdown` stops the
 backup, detaches, waits for the queue to drain, and refuses to report success
 while anything is still local.
 
+It stays quick despite the ten-minute `--vfs-write-back`: detaching pulls every
+queued expiry forward first, so the wait is the upload itself, not the delay. A
+`prepare-shutdown` nobody is willing to sit through is one nobody runs, and
+skipping it is what once left Time Machine without a destination overnight.
+
 Sleep is safe and needs nothing: the buffer survives, uploads resume on wake,
 and Power Nap wakes the Mac for scheduled backups.
 
@@ -252,6 +281,25 @@ actual write pattern, 64 MB bands cost exactly twice the transfer of 8 MB bands.
 32 MB is the smallest band at which the first upload stops being bound by
 Drive's per-file rate and becomes bound by the link. The size is fixed when the
 image is created and cannot be changed afterwards.
+
+**A ten-minute write-back.** `--vfs-write-back` sets how long rclone waits after
+a band stops changing before sending it. Short delays send a band again on every
+touch; long delays coalesce those touches into one upload but widen the window
+where data exists only locally.
+
+It was 30 s, and that is how 823 GB went out in a day for 45 GB of change. The
+current 600 s comes from measurement rather than taste: across 56,533 gaps
+between consecutive re-sends of the same band, the median gap is 9.5 minutes, so
+ten minutes absorbs about half of the repeats. Going further pays less and less —
+15 minutes reaches 57%, 30 minutes 70% — while the local-only window grows in
+proportion.
+
+The catch is that a long write-back breaks every drain path, because a queued
+item carries a future expiry and `waitUntilQuiet` counts it. Detaching would
+block for the full ten minutes and time out. `expireQueuedUploads()` pulls those
+expiries forward through rclone's `vfs/queue-set-expiry`, so detach still drains
+in seconds. Attach does the same before waiting, since `hdiutil` on FUSE-T
+rejects mounts more often while rclone is busy.
 
 **Its own rclone.** The Homebrew build is compiled without FUSE and refuses to
 mount outright. CloudMachine installs the official binary beside it, verified by
@@ -345,10 +393,11 @@ Mac alone.
 
 ## Measurement harnesses
 
-`gdrive/` holds the scripts used to measure the behaviour behind these
-decisions — write amplification per band size, and what survives the cloud layer
-dying mid-write. They are not part of the running system; see
-[gdrive/README.md](gdrive/README.md) for the numbers.
+The measurements behind these decisions — write amplification per band size, and
+what survives the cloud layer dying mid-write — are written up in
+[gdrive/README.md](gdrive/README.md). The shell harnesses that produced them are
+gone; that work now lives as subcommands of `cloudmachine-agent`, which is why
+`gdrive/` holds nothing but the write-up.
 
 ---
 
