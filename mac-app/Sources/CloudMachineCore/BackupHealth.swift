@@ -100,6 +100,7 @@ public enum BackupHealth {
     queueReadable: Bool,
     driveFreeBytes: UInt64? = nil,
     localFreeGB: Int? = nil,
+    imageDeadErrno: Int32? = nil,
     maxAgeHours: Double = BackupHealth.maxAgeHours
   ) -> Report {
     var problems: [Problem] = []
@@ -117,6 +118,15 @@ public enum BackupHealth {
         Problem(
           summary: "Obraz backupu nie jest podpiety",
           detail: "Time Machine nie widzi celu \(BackupImageService.targetPath.path)."))
+    } else if let errno = imageDeadErrno {
+      // Podpiety, ale martwy - stan, ktory do 22 wrz 2026 nie istnial dla
+      // zadnego czujnika i przez to trwal 15 godzin. Patrz `ImageProbe`.
+      problems.append(
+        Problem(
+          summary: "Obraz backupu jest podpiety, ale MARTWY (errno \(errno))",
+          detail:
+            "Urzadzenie obrazu przestalo oddawac dane - Time Machine widzi to jako odlaczony dysk. "
+            + "Naprawa: cloudmachine-agent attach-image (odpina na sile i podpina na nowo)."))
     }
     if !destinationRegistered {
       problems.append(
@@ -256,6 +266,9 @@ public enum BackupHealth {
       inPreferences: plist, volumeNamed: BackupImageService.volumeName)
 
     let stats = await DriveBufferService.queueStats()
+    let attachment = BackupImageService.attachment
+    var deadErrno: Int32?
+    if case .dead(let errno) = attachment { deadErrno = errno }
     let registered =
       await TimeMachineStatus.currentDestinationMountPoint() == BackupImageService.targetPath.path
 
@@ -265,7 +278,7 @@ public enum BackupHealth {
       result: result,
       now: now,
       mounted: DriveBufferService.isMounted,
-      attached: BackupImageService.isAttached,
+      attached: attachment != .detached,
       destinationRegistered: registered,
       erroredFiles: stats?.erroredFiles ?? 0,
       outOfSpace: stats?.outOfSpace ?? false,
@@ -275,6 +288,7 @@ public enum BackupHealth {
       // komunikat o tym samym tylko rozmywa ten pierwszy.
       driveFreeBytes: (await DriveBufferService.remoteQuota())?.free,
       localFreeGB: BufferGuardService.freeGB(),
+      imageDeadErrno: deadErrno,
       maxAgeHours: maxAgeHours)
   }
 

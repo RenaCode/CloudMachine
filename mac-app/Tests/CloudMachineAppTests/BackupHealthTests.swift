@@ -38,6 +38,20 @@ final class BackupHealthTests: XCTestCase {
       queueReadable: queueReadable)
   }
 
+  /// Obraz w tablicy montowan, ale odczyt pada - 22 wrz 2026 przez 15 h zaden
+  /// czujnik nie mial dla tego stanu nazwy. Teraz ma.
+  func testMartwyObrazAlarmuje() {
+    let report = BackupHealth.evaluate(
+      lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
+      result: 0, now: now, mounted: true, attached: true, destinationRegistered: true,
+      erroredFiles: 0, outOfSpace: false, queueReadable: true, imageDeadErrno: ENXIO)
+    XCTAssertFalse(report.healthy)
+    XCTAssertTrue(report.problems.contains { $0.summary.contains("MARTWY") })
+    XCTAssertFalse(
+      report.problems.contains { $0.summary.contains("nie jest podpiety") },
+      "Martwy to inny stan niz niepodpiety - jeden alarm, nie dwa.")
+  }
+
   func testSprawnyCyklNieAlarmuje() {
     XCTAssertTrue(healthyInput().healthy, "Czujka, ktora alarmuje zawsze, nie niesie informacji.")
   }

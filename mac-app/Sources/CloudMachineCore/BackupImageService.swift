@@ -56,9 +56,45 @@ public enum BackupImageService {
     return ok && isDir.boolValue
   }
 
+  /// Czy wolumen figuruje w tablicy montowan.
+  ///
+  /// UWAGA: to mowi tylko, ze `hdiutil` kiedys podpial obraz - NIE, ze obraz
+  /// oddaje dane. Martwe urzadzenie (patrz `ImageProbe`) siedzi w tej tablicy
+  /// tak samo jak zywe. Do pytania "czy Time Machine ma gdzie pisac" sluzy
+  /// `attachment`; `isAttached` zostaje tam, gdzie chodzi o samo odpiecie.
   public static var isAttached: Bool {
     guard let out = try? mountTable() else { return false }
     return out.contains(" on \(targetPath.path) ")
+  }
+
+  public enum Attachment: Equatable {
+    case detached
+    case attached
+    /// W tablicy montowan, ale odczyt pada z podanym `errno`. Time Machine
+    /// widzi ten stan jako "dysk odlaczony" i nie zrobi ani jednej kopii,
+    /// dopoki obraz nie zostanie odpiety i podpiety na nowo.
+    case dead(errno: Int32)
+
+    public var isUsable: Bool { self == .attached }
+  }
+
+  /// Stan podpiecia z uwzglednieniem tego, czy urzadzenie ZYJE.
+  public static var attachment: Attachment {
+    guard isAttached else { return .detached }
+    switch ImageProbe.probe(volume: targetPath) {
+    case .dead(let errno): return .dead(errno: errno)
+    case .readable, .nothingToProbe: return .attached
+    }
+  }
+
+  public static func describe(_ attachment: Attachment) -> String {
+    switch attachment {
+    case .detached: return "BRAK"
+    case .attached: return "OK  (\(targetPath.path))"
+    case .dead(let errno):
+      return
+        "MARTWY - w tablicy montowan, ale odczyt pada (errno \(errno)); attach-image podpina na nowo"
+    }
   }
 
   private static func mountTable() throws -> String {
@@ -180,8 +216,26 @@ public enum BackupImageService {
     guard exists else {
       return CMActionResult(succeeded: false, message: "Brak obrazu - najpierw go utworz.")
     }
-    if isAttached {
+    switch attachment {
+    case .attached:
       return CMActionResult(succeeded: true, message: "Juz podpiete: \(targetPath.path)")
+    case .dead(let errno):
+      // Obraz jest w tablicy montowan, ale nie oddaje danych. Do 22 wrz 2026
+      // ta funkcja mowila wtedy "Juz podpiete" i wychodzila - agent podpinajacy
+      // powtarzal to co 15 minut przez 15 godzin, a Time Machine nie mial celu.
+      // Jedyna droga jest odpiecie (musi byc `-force`, zwykle odmawia na
+      // martwym urzadzeniu) i podpiecie od nowa. Czekanie na wysylke zostaje:
+      // to, co zdazylo trafic do bufora rclone, nadal ma doleciec na Dysk.
+      CMLogger.log("Obraz martwy (errno \(errno)) - odpinam na sile i podpinam od nowa")
+      let detached = await detach(force: true)
+      CMLogger.log("Odpiecie martwego obrazu: \(detached.message)")
+      guard !isAttached else {
+        return CMActionResult(
+          succeeded: false,
+          message: "Obraz martwy (errno \(errno)) i nie dal sie odpiac: \(detached.message)")
+      }
+    case .detached:
+      break
     }
 
     await purgeStaleDevices()

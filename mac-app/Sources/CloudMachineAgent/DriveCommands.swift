@@ -276,9 +276,7 @@ struct DriveStatus: AsyncParsableCommand {
       "Narzedzia:        \(readiness.ready ? "OK" : "brakuje: " + readiness.missing.joined(separator: ", "))"
     )
     print("Montowanie Drive: \(DriveBufferService.isMounted ? "OK" : "BRAK")")
-    print(
-      "Obraz podpiety:   \(BackupImageService.isAttached ? "OK  (\(BackupImageService.targetPath.path))" : "BRAK")"
-    )
+    print("Obraz podpiety:   \(BackupImageService.describe(BackupImageService.attachment))")
     print("Bufor:            \(BufferGuardService.bufferGB()) GB z \(DriveBufferService.cacheSize)")
     print("Wolne na dysku:   \(BufferGuardService.freeGB()) GB")
 

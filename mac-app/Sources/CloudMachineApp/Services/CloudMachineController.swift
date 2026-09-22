@@ -83,7 +83,9 @@ final class CloudMachineController: ObservableObject {
     let stats = await DriveBufferService.queueStats()
     var buffer = BufferStatus()
     buffer.mounted = DriveBufferService.isMounted
-    buffer.imageAttached = BackupImageService.isAttached
+    // Martwy obraz (w tablicy montowan, ale bez odczytu) liczy sie jako
+    // NIEPODPIETY - z punktu widzenia Time Machine dokladnie tym jest.
+    buffer.imageAttached = BackupImageService.attachment.isUsable
     // Rozmiar bufora bierzemy od rclone; wlasny obchod katalogu to 6504
     // wywolania stat co 10 sekund na dysku, na ktory leci backup.
     buffer.sizeGB = BufferGuardService.bufferGB(stats: stats)

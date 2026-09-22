@@ -219,7 +219,7 @@ struct DashboardView: View {
 
       StatCard(
         title: "Time Machine",
-        value: controller.status.buffer.imageAttached ? "Podpięty" : "Nieodpięty",
+        value: controller.status.buffer.imageAttached ? "Podpięty" : "Niepodpięty",
         subtitle: controller.status.buffer.mounted
           ? "Google Drive zamontowany" : "Drive rozłączony",
         systemImage: "clock.arrow.circlepath",

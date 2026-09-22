@@ -6,6 +6,24 @@ struct MenuBarContentView: View {
   @EnvironmentObject private var controller: CloudMachineController
   @Environment(\.openWindow) private var openWindow
 
+  /// Otwiera panel i wyciąga go NA WIERZCH.
+  ///
+  /// Aplikacja jest agentem paska menu (`LSUIElement`), więc samo
+  /// `openWindow` tworzy okno, ale nie aktywuje aplikacji - okno lądowało
+  /// pod oknami programu, w którym użytkownik akurat pracował. Aktywacja
+  /// musi być jawna i musi iść PO utworzeniu okna, stąd odłożenie na
+  /// następny obieg pętli zdarzeń.
+  private func showDashboard() {
+    openWindow(id: "dashboard")
+    DispatchQueue.main.async {
+      NSApp.activate(ignoringOtherApps: true)
+      let dashboard = NSApp.windows.first {
+        $0.identifier?.rawValue == "dashboard" || $0.title == "CloudMachine"
+      }
+      dashboard?.makeKeyAndOrderFront(nil)
+    }
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       // Nagłówek z logo i indeksem sprawności
@@ -127,7 +145,7 @@ struct MenuBarContentView: View {
           .buttonStyle(SecondaryGlassButtonStyle())
         }
 
-        Button(action: { openWindow(id: "dashboard") }) {
+        Button(action: showDashboard) {
           HStack {
             Image(systemName: "macwindow")
             Text("Otwórz CloudMachine")
