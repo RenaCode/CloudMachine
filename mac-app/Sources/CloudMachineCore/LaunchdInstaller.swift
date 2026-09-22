@@ -52,8 +52,15 @@ public enum LaunchdInstaller {
     // zapisem, ktory musi jeszcze doleciec na Dysk. Popelnilem ten blad trzy razy
     // z rzedu, wiec nie polegamy juz na pamietaniu o nim.
     if BackupImageService.isAttached {
-      CMLogger.log("Instalacja agentow: najpierw odpinam obraz i czekam na wysylke")
-      let detached = await BackupImageService.detach()
+      // Martwy obraz (patrz `ImageProbe`) nie da sie odpiac grzecznie -
+      // `hdiutil detach` bez `-force` odmawia, a instalacja stanelaby na
+      // dokladnie tym stanie, ktory ma naprawic.
+      let attachment = BackupImageService.attachment
+      let force = !attachment.isUsable
+      CMLogger.log(
+        "Instalacja agentow: najpierw odpinam obraz\(force ? " (martwy - na sile)" : "") i czekam na wysylke"
+      )
+      let detached = await BackupImageService.detach(force: force)
       CMLogger.log("Instalacja agentow: \(detached.message)")
       if !detached.succeeded {
         return CMActionResult(
