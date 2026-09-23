@@ -28,6 +28,13 @@ struct BufferStatus: Equatable {
   /// nadaza za zapisem.
   var uploadsQueued: Int = 0
   var uploadsInProgress: Int = 0
+  /// Czy powyzsze liczniki w ogole pochodza z odczytu.
+  ///
+  /// Domyslnie `false` i to jest wazniejsze niz wyglada: swiezo utworzony
+  /// `BufferStatus` ma same zera, ktore nie sa pomiarem. Domyslne `true`
+  /// znaczyloby "pusta kolejka" i pasek menu swiecilby na zielono, zanim
+  /// cokolwiek zostalo sprawdzone.
+  var queueKnown: Bool = false
   var erroredFiles: Int = 0
   /// Na Google Drive nie ma miejsca. NIE minie samo.
   var driveFull: Bool = false
@@ -46,6 +53,7 @@ struct BufferStatus: Equatable {
   var uploadState: UploadState {
     UploadState.from(
       mounted: mounted,
+      queueKnown: queueKnown,
       queued: uploadsQueued,
       inProgress: uploadsInProgress,
       failedFiles: erroredFiles,

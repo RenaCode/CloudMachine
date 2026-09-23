@@ -207,14 +207,22 @@ struct DashboardView: View {
 
       StatCard(
         title: "Kolejka Wysyłki",
-        value: controller.status.buffer.draining
-          ? "\(controller.status.buffer.uploadsQueued) w kolejce" : "Brak zaległości",
-        subtitle: controller.status.buffer.draining
-          ? "\(controller.status.buffer.uploadsInProgress) transferów w toku"
-          : "Wszystko w chmurze",
+        // Bez odczytu kolejki ta karta nie ma prawa powiedziec "Brak
+        // zaleglosci" - zera sa wtedy brakiem pomiaru, nie wynikiem.
+        value: !controller.status.buffer.queueKnown
+          ? "—"
+          : (controller.status.buffer.draining
+            ? "\(controller.status.buffer.uploadsQueued) w kolejce" : "Brak zaległości"),
+        subtitle: !controller.status.buffer.queueKnown
+          ? "rclone nie odpowiedział"
+          : (controller.status.buffer.draining
+            ? "\(controller.status.buffer.uploadsInProgress) transferów w toku"
+            : "Wszystko w chmurze"),
         systemImage: "icloud.and.arrow.up.fill",
-        iconColor: controller.status.buffer.draining
-          ? RenaCodeTheme.colorWarning : RenaCodeTheme.colorSuccess
+        iconColor: !controller.status.buffer.queueKnown
+          ? RenaCodeTheme.colorWarning
+          : (controller.status.buffer.draining
+            ? RenaCodeTheme.colorWarning : RenaCodeTheme.colorSuccess)
       )
 
       StatCard(
@@ -447,10 +455,12 @@ struct DashboardView: View {
 
         row(
           "Kolejka synchronizacji z chmurą",
-          controller.status.buffer.draining
-            ? "\(controller.status.buffer.uploadsInProgress) w toku, \(controller.status.buffer.uploadsQueued) w kolejce"
-            : "Wszystko wysłane",
-          ok: controller.status.buffer.erroredFiles == 0
+          !controller.status.buffer.queueKnown
+            ? "nie odczytano"
+            : (controller.status.buffer.draining
+              ? "\(controller.status.buffer.uploadsInProgress) w toku, \(controller.status.buffer.uploadsQueued) w kolejce"
+              : "Wszystko wysłane"),
+          ok: controller.status.buffer.queueKnown && controller.status.buffer.erroredFiles == 0
         )
 
         if controller.status.buffer.erroredFiles > 0 {
@@ -693,11 +703,9 @@ struct DashboardView: View {
     return RenaCodeTheme.colorSuccess
   }
 
-  private func uploadBadge(_ state: UploadState) -> String {
-    if state.needsAttention { return "WYMAGA REAKCJI" }
-    if !state.isNominal { return "MINIE SAMO — NIC NIE RÓB" }
-    return "W PORZĄDKU"
-  }
+  /// Etykieta idzie prosto z `UploadState`. Skladanie jej tutaj z dwoch bool-i
+  /// ograniczalo interfejs do trzech wariantow, a stanow jest wiecej.
+  private func uploadBadge(_ state: UploadState) -> String { state.badge }
 
   private func uploadIcon(_ state: UploadState) -> String {
     switch state {
@@ -708,6 +716,7 @@ struct DashboardView: View {
     case .dailyQuotaExhausted: return "hourglass"
     case .flowing: return "arrow.up.circle.fill"
     case .upToDate: return "checkmark.icloud.fill"
+    case .queueUnknown: return "questionmark.circle.fill"
     }
   }
 

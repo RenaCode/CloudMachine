@@ -297,6 +297,7 @@ struct DriveStatus: AsyncParsableCommand {
     // i GUI nie mogly twierdzic czegos innego o tym samym stanie.
     let upload = UploadState.from(
       mounted: DriveBufferService.isMounted,
+      queueKnown: queueStats != nil,
       queued: queueStats?.uploadsQueued ?? 0,
       inProgress: queueStats?.uploadsInProgress ?? 0,
       failedFiles: queueStats?.erroredFiles ?? 0,

@@ -167,10 +167,23 @@ public enum DriveBufferService {
   /// UWAGA: `--rc-no-auth` to flaga SERWERA. Klient `rclone rc` jej nie
   /// przyjmuje i konczy sie bledem "unknown flag" - kosztowalo to juz jedno
   /// ciche zepsucie podgladu stanu.
+  ///
+  /// Limit czasu 60 s, a nie 30 s: 23.09.2026 to samo wywolanie trwalo
+  /// **36,7 s** przy zapchanym buforze (kolejne 0,03 s - wiec sporadycznie, pod
+  /// obciazeniem). Przy 30 s konczylo sie `nil`, a `nil` szedl dalej jako
+  /// komplet zer i interfejs oglaszal "Wszystko wyslane" przy 386 pasmach w
+  /// kolejce. Samo podniesienie limitu tego nie naprawia - od tego jest
+  /// `UploadState.queueUnknown` - ale sprawia, ze pytanie zwykle dostaje
+  /// odpowiedz.
+  ///
+  /// Wyzej nie warto. Petla odswiezania interfejsu chodzi co 10 s i czeka na
+  /// ten odczyt, a `drive-status` pyta dwa razy (drugi raz przez
+  /// `safeToRebootNow`). Przy martwym rclone kazda sekunda limitu to sekunda
+  /// zamrozonego okna, a odpowiedz i tak nie przyjdzie.
   public static func queueStats() async -> QueueStats? {
     guard
       let result = try? await CMTooling.runRclone(
-        ["rc", "--url", rcAddress, "vfs/stats"], timeout: 30),
+        ["rc", "--url", rcAddress, "vfs/stats"], timeout: 60),
       result.succeeded,
       let data = result.stdout.data(using: .utf8),
       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

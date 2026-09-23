@@ -27,13 +27,24 @@ public enum UploadState: Equatable, Sendable {
   case flowing(queued: Int)
   /// Nic nie czeka - wszystko jest na Dysku.
   case upToDate
+  /// Nie udalo sie odczytac kolejki - stan wysylki jest NIEZNANY.
+  ///
+  /// Trzeci stan obok "dobrze" i "zle", i musi istniec osobno. Wczesniej brak
+  /// odpowiedzi od `rclone rc` konczyl sie podstawieniem zer, z czego wychodzil
+  /// `.upToDate`: przy 386 pasmach w kolejce interfejs pisal "Wszystko wyslane
+  /// na Google Drive". Falszywy spokoj jest gorszy od braku odpowiedzi, bo
+  /// gasi czujke dokladnie wtedy, gdy nikt nie wie, co sie dzieje.
+  case queueUnknown
 
   /// Czy stan wymaga reakcji czlowieka. `false` znaczy "samo sie ulozy",
   /// a nie "wszystko dobrze" - patrz `dailyQuotaExhausted`.
   public var needsAttention: Bool {
     switch self {
     case .mountDown, .driveFull, .failedFiles, .bufferFull: return true
-    case .dailyQuotaExhausted, .flowing, .upToDate: return false
+    // Nieznany stan NIE wola o czlowieka: pojedyncze przekroczenie limitu
+    // czasu zdarza sie przy obciazonym rclone i mija samo. Gdy nie mija,
+    // alarmuje `backup-health` - od trwalosci jest on, nie kolor karty.
+    case .dailyQuotaExhausted, .flowing, .upToDate, .queueUnknown: return false
     }
   }
 
@@ -47,7 +58,8 @@ public enum UploadState: Equatable, Sendable {
   public var isNominal: Bool {
     switch self {
     case .flowing, .upToDate: return true
-    case .mountDown, .driveFull, .failedFiles, .bufferFull, .dailyQuotaExhausted: return false
+    case .mountDown, .driveFull, .failedFiles, .bufferFull, .dailyQuotaExhausted, .queueUnknown:
+      return false
     }
   }
 
@@ -55,6 +67,22 @@ public enum UploadState: Equatable, Sendable {
   public var isMovingData: Bool {
     if case .flowing = self { return true }
     return false
+  }
+
+  /// Etykieta nad naglowkiem karty: co uzytkownik ma z tym zrobic.
+  ///
+  /// Wczesniej interfejs skladal ja z dwoch bool-i (`needsAttention`,
+  /// `isNominal`), wiec umial wyrazic tylko trzy warianty i kazdy nowy stan
+  /// musial sie do ktoregos wcisnac. `queueUnknown` nie pasuje do zadnego:
+  /// nie jest awaria, nie jest porzadkiem i nie jest tez "minie samo", bo nikt
+  /// nie wie, czy jest co przeczekiwac.
+  public var badge: String {
+    switch self {
+    case .mountDown, .driveFull, .failedFiles, .bufferFull: return "WYMAGA REAKCJI"
+    case .dailyQuotaExhausted: return "MINIE SAMO — NIC NIE RÓB"
+    case .queueUnknown: return "NIE WIADOMO — SPRAWDŹ ZA CHWILĘ"
+    case .flowing, .upToDate: return "W PORZĄDKU"
+    }
   }
 
   /// Jedno zdanie do paska i naglowka karty.
@@ -67,6 +95,7 @@ public enum UploadState: Equatable, Sendable {
     case .dailyQuotaExhausted: return "Wysyłka wstrzymana — dobowy limit Google"
     case .flowing(let queued): return "Wysyłanie na Google Drive — \(queued) w kolejce"
     case .upToDate: return "Wszystko wysłane na Google Drive"
+    case .queueUnknown: return "Nie wiadomo, co czeka w kolejce"
     }
   }
 
@@ -108,6 +137,13 @@ public enum UploadState: Equatable, Sendable {
       return "\(queued) fragmentów kopii czeka w kolejce i leci na Dysk."
     case .upToDate:
       return "Nic nie czeka w kolejce — kopia na Google Drive jest kompletna."
+    case .queueUnknown:
+      return """
+        rclone nie odpowiedział na pytanie o kolejkę, więc nie wiadomo, ile kopii \
+        czeka jeszcze na wysłanie. To nie znaczy, że coś się zepsuło — pod obciążeniem \
+        odpowiedź potrafi się spóźnić. Znaczy tylko tyle, że w tej chwili nikt tego \
+        nie wie. Jeśli utrzymuje się dłużej, zgłosi to kontrola cyklu backupu.
+        """
     }
   }
 
@@ -116,8 +152,15 @@ public enum UploadState: Equatable, Sendable {
   /// Kolejnosc NIE jest dowolna - od najtwardszego faktu do najmiekszego.
   /// `failedFiles` wyprzedza limit dobowy, bo "rclone odpuscil" znaczy, ze
   /// kopia jest niekompletna TERAZ, a limit znaczy tylko, ze poczeka.
+  /// `queueKnown` NIE ma wartosci domyslnej i to jest celowe. Wszystkie
+  /// liczniki ponizej pochodza z `vfs/stats`; gdy rclone nie odpowie, wolajacy
+  /// ma pod reka same zera i zadne z nich nie znaczy "zero". Wymuszony
+  /// argument zmusza kazde miejsce w kodzie do odpowiedzi na pytanie, ktore
+  /// wczesniej przemilczano - stad brala sie plansza "Wszystko wyslane" przy
+  /// pelnej kolejce.
   public static func from(
     mounted: Bool,
+    queueKnown: Bool,
     queued: Int,
     inProgress: Int,
     failedFiles: Int,
@@ -127,6 +170,11 @@ public enum UploadState: Equatable, Sendable {
   ) -> UploadState {
     if !mounted { return .mountDown }
     if driveFull { return .driveFull }
+    // Przed kazdym stanem liczonym z licznikow, bo bez odczytu kolejki nie da
+    // sie odroznic "nic nie czeka" od "nie wiem, co czeka". Limit dobowy tez
+    // tu przepada, i slusznie: skoro nie wiadomo, czy rclone czegos nie
+    // porzucil, to "poczekaj, minie samo" nie jest uczciwa odpowiedzia.
+    if !queueKnown { return .queueUnknown }
     if failedFiles > 0 { return .failedFiles(failedFiles) }
     if bufferOutOfSpace { return .bufferFull }
     if dailyQuotaExhausted { return .dailyQuotaExhausted }

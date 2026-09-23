@@ -21,8 +21,22 @@ final class AppStatusHealthTests: XCTestCase {
     var buffer = BufferStatus()
     buffer.mounted = true
     buffer.imageAttached = true
+    // Musi byc jawne: `BufferStatus` zaczyna od "kolejki nie odczytano", zeby
+    // swiezy, niesprawdzony stan nie uchodzil za pusta kolejke.
+    buffer.queueKnown = true
     status.buffer = buffer
     return status
+  }
+
+  /// REGRESJA 23.09.2026: `rclone rc` nie odpowiedzial w limicie czasu,
+  /// wolajacy podstawil zera i pasek menu pokazal "Gotowe" przy 386 pasmach
+  /// czekajacych w kolejce.
+  func testNieodczytanaKolejkaOdbieraZielonyZnaczek() {
+    let status = zdrowy()
+    status.buffer.queueKnown = false
+    XCTAssertFalse(status.healthy, "Nie wiadomo = nie zielono.")
+    XCTAssertNotEqual(status.headline, "Gotowe")
+    XCTAssertEqual(status.buffer.uploadState, .queueUnknown)
   }
 
   func testZdrowyStanJestZdrowy() {

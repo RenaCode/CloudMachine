@@ -94,6 +94,9 @@ final class CloudMachineController: ObservableObject {
     // naprawic, limit dobowy mija sam.
     buffer.driveFull = DriveBufferService.hitStorageQuota()
     buffer.dailyQuotaExhausted = DriveBufferService.uploadStalled()
+    // Rozroznienie "odczytano" od "wyszlo zero" - bez tego brak odpowiedzi od
+    // rclone wygladal na pusta kolejke.
+    buffer.queueKnown = stats != nil
     if let stats {
       buffer.uploadsQueued = stats.uploadsQueued
       buffer.uploadsInProgress = stats.uploadsInProgress
