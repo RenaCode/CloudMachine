@@ -104,7 +104,27 @@ struct AttachImage: AsyncParsableCommand {
     }
     let result = await BackupImageService.attach()
     print(result.message)
-    if !result.succeeded { throw ExitCode(1) }
+
+    // Trzy przypadki, nie dwa. To polecenie chodzi pod launchd co 900 s, wiec
+    // jego kod wyjscia jest zapisem w `launchd-gdrive-attach.err.log` - tam,
+    // gdzie czlowiek patrzy, pytajac "czy backup dziala". "Obraz zajety przez
+    // odpinanie, ktore wlasnie trwa" NIE JEST awaria: nastepny tik za 15 minut
+    // zastanie juz wolny obraz i podepnie. Zapisywanie tego jako bledu to ten
+    // sam wzorzec, ktory ten kod tepi w druga strone - stan normalny czytany
+    // jako awaria, zamiast braku odpowiedzi czytanego jako odpowiedz.
+    //
+    // Rozstrzyga TYP wyniku (`CMActionResult.Disposition`), nie tresc
+    // komunikatu - dopasowanie do tekstu psuje sie przy pierwszej zmianie
+    // zdania i nikt tego nie zauwaza. `switch` jest wyczerpujacy, wiec nowy
+    // przypadek nie przejdzie tedy po cichu.
+    switch result.disposition {
+    case .ok:
+      break
+    case .skipped:
+      print("Nie jest to blad - nastepny przebieg agenta sprobuje ponownie.")
+    case .failed:
+      throw ExitCode(1)
+    }
   }
 }
 
@@ -275,10 +295,15 @@ struct DriveStatus: AsyncParsableCommand {
     print(
       "Narzedzia:        \(readiness.ready ? "OK" : "brakuje: " + readiness.missing.joined(separator: ", "))"
     )
-    print("Montowanie Drive: \(DriveBufferService.isMounted ? "OK" : "BRAK")")
+    let mounted = DriveBufferService.mountedState()
+    print("Montowanie Drive: \(StatusLines.mounted(mounted))")
     print("Obraz podpiety:   \(BackupImageService.describe(BackupImageService.attachment))")
     print("Bufor:            \(BufferGuardService.bufferGB()) GB z \(DriveBufferService.cacheSize)")
-    print("Wolne na dysku:   \(BufferGuardService.freeGB()) GB")
+    // NIE `\(BufferGuardService.freeGB()) GB` - to zwraca `Int?`, odkad brak
+    // pomiaru przestal udawac zero, a interpolacja opcjonalnej wartosci
+    // wypisywala `Wolne na dysku: Optional(427) GB`. Kompilator mowil o tym
+    // tylko ostrzezeniem, wiec nie zatrzymalo to ani builda, ani testow.
+    print("Wolne na dysku:   \(StatusLines.freeDisk(BufferGuardService.freeGB()))")
 
     let queueStats = await DriveBufferService.queueStats()
     if let stats = queueStats {
@@ -296,7 +321,12 @@ struct DriveStatus: AsyncParsableCommand {
     // Ta sama odpowiedz, co na karcie w interfejsie - jedno zrodlo, zeby CLI
     // i GUI nie mogly twierdzic czegos innego o tym samym stanie.
     let upload = UploadState.from(
-      mounted: DriveBufferService.isMounted,
+      // `UploadState` nie ma stanu "nie wiadomo, czy zamontowane", a dolozenie
+      // go dotknelo by plikow poza moim zakresem. `?? false` daje wtedy
+      // `.mountDown` ("Wysylka nie dziala") - czyli ostrzega, zamiast
+      // uspokajac, a wiersz "Montowanie Drive" wyzej mowi juz wprost
+      // "NIE WIADOMO". Falszywy alarm jest tu wlasciwym kierunkiem pomylki.
+      mounted: mounted ?? false,
       queueKnown: queueStats != nil,
       queued: queueStats?.uploadsQueued ?? 0,
       inProgress: queueStats?.uploadsInProgress ?? 0,
@@ -321,6 +351,15 @@ struct DriveStatus: AsyncParsableCommand {
         "Backup:           trwa, \(String(format: "%.1f", percent))% (\(progress.phase ?? "?"))")
     } else {
       print("Backup:           nie trwa")
+    }
+
+    // Na samym koncu i bez wyrownania do kolumny - to nie jest kolejny wiersz
+    // stanu, tylko cos, co ma zaklocic czytanie. `HealthAlert` od niedawna nie
+    // zamyka sprawy znacznikiem, dopoki powiadomienie nie doszlo, wiec
+    // niedoreczony alarm nie ginie juz na 12 h - ale bez tego bloku nikt by sie
+    // o nim nie dowiedzial, bo powiadomienia systemowego z definicji nie widac.
+    for line in StatusLines.undeliveredAlert(HealthAlert.lastDeliveryFailure()) {
+      print(line)
     }
   }
 }
