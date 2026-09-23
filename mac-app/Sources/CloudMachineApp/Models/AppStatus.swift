@@ -22,7 +22,10 @@ struct BufferStatus: Equatable {
   var mounted: Bool = false
   var imageAttached: Bool = false
   var sizeGB: Int = 0
-  var freeDiskGB: Int = 0
+  /// `nil` = pomiaru NIE BYLO (statfs zawiodl), a nie "zero gigabajtow" -
+  /// patrz `BufferGuardService.freeGB()`. To samo rozroznienie, co
+  /// `queueKnown` nizej.
+  var freeDiskGB: Int?
   /// Ile plikow czeka na wyslanie. Ta liczba jest wazniejsza od rozmiaru
   /// bufora: jesli rosnie i nie wraca do zera miedzy backupami, wysylka nie
   /// nadaza za zapisem.
@@ -63,6 +66,52 @@ struct BufferStatus: Equatable {
   }
 }
 
+/// Czy cykl backupu NADAL dziala - mierzone data ostatniej UDANEJ kopii.
+///
+/// Do 23.09.2026 interfejs nie zadawal tego pytania ani razu: `grep -rn
+/// "BackupHealth" Sources/CloudMachineApp/` nie dawal ani jednego trafienia.
+/// Panel liczyl zdrowie wylacznie ze stanu URZADZEN - montowanie, obraz, cel
+/// Time Machine, kolejka - czyli ze stanu CHWILOWEGO. Awaria opisana
+/// w naglowku `BackupHealth` jako najgrozniejsza wyglada dokladnie odwrotnie:
+/// wszystko zamontowane, obraz podpiety, kolejka pusta, a Time Machine od
+/// dwoch dni nie dokonczyl kopii. Panel swiecil wtedy "Sprawny / Gotowe".
+struct BackupCycleStatus: Equatable {
+  /// Czy udalo sie w ogole odczytac preferencje Time Machine.
+  ///
+  /// Domyslnie `false` i to jest wazniejsze, niz wyglada - tak samo jak przy
+  /// `queueKnown`: swiezo utworzony stan nie jest pomiarem, a brak Pelnego
+  /// dostepu do dysku (najczestsza przyczyna nieczytelnego pliku preferencji)
+  /// nie moze uchodzic za brak problemu.
+  var known: Bool = false
+  /// Data ostatniej ZAKONCZONEJ kopii. `nil` = nie ma ani jednej.
+  var lastSuccess: Date?
+  /// Gotowe zdania z `BackupHealth.Report` - do pokazania bez tlumaczenia.
+  var problems: [String] = []
+  /// Kiedy ostatnio pytalismy (czujka chodzi rzadziej niz odswiezanie panelu).
+  var checkedAt: Date?
+
+  func age(now: Date = Date()) -> TimeInterval? {
+    lastSuccess.map { now.timeIntervalSince($0) }
+  }
+
+  /// Czy ostatnia UDANA kopia jest dostatecznie swieza.
+  ///
+  /// Brak odczytu i brak kopii daja `false` - jedno i drugie znaczy, ze nikt
+  /// nie potwierdzil, ze backup dziala, a zielony znaczek jest wlasnie takim
+  /// potwierdzeniem.
+  func isFresh(now: Date = Date(), maxAgeHours: Double = BackupHealth.maxAgeHours) -> Bool {
+    guard known, let age = age(now: now) else { return false }
+    return age <= maxAgeHours * 3600
+  }
+
+  /// Wiek slowami, do wiersza w panelu.
+  func ageText(now: Date = Date()) -> String {
+    guard known else { return "nie sprawdzono" }
+    guard let age = age(now: now) else { return "ani jednej" }
+    return "\(BackupHealth.formatAge(age)) temu"
+  }
+}
+
 struct LastRunResult: Equatable {
   var succeeded: Bool
   var message: String
@@ -88,6 +137,9 @@ final class AppStatus: ObservableObject {
   @Published var dependencyState: DependencyState = .unknown
   @Published var remoteConfigured: Bool = false
   @Published var buffer = BufferStatus()
+  /// Odpowiedz na pytanie "kiedy ostatnio powstala KOPIA" - jedyna miara,
+  /// ktora rosnie wylacznie przy sukcesie.
+  @Published var backupCycle = BackupCycleStatus()
   @Published var timeMachineState: TimeMachineState = .unknown
   @Published var backupProgress: BackupProgressInfo?
   @Published var lastAction: LastRunResult?
@@ -116,6 +168,14 @@ final class AppStatus: ObservableObject {
     let upload = buffer.uploadState
     if !upload.isNominal { return upload.headline }
     if backupProgress != nil { return "Backup w toku" }
+    // Stan urzadzen moze byc nienaganny, a kopii moze nie byc od dwoch dni.
+    // To zdanie musi paść PRZED "Gotowe", bo inaczej naglowek zaprzecza
+    // znaczkowi obok (healthy = false, a napis "Gotowe").
+    if !backupCycle.isFresh() {
+      guard backupCycle.known else { return "Nie wiadomo, kiedy powstała ostatnia kopia" }
+      guard let age = backupCycle.age() else { return "Nie ma ani jednej ukończonej kopii" }
+      return "Brak ukończonej kopii od \(BackupHealth.formatAge(age))"
+    }
     if upload.isMovingData { return upload.headline }
     return "Gotowe"
   }
@@ -126,9 +186,16 @@ final class AppStatus: ObservableObject {
   /// pokazywal zielony znaczek i "Gotowe", podczas gdy czesc pasm obrazu nigdy
   /// nie doleciala na Dysk - a taka kopia moze sie nie otworzyc. Zepsute
   /// wygladalo dokladnie tak samo jak sprawne.
+  ///
+  /// UWAGA DRUGA, z 23.09.2026: `backupCycle` MUSI tu byc z tego samego
+  /// powodu. Wszystkie pozostale warunki opisuja stan URZADZEN w tej chwili
+  /// i kazdy z nich moze byc spelniony, gdy od dwoch dni nie powstala zadna
+  /// kopia. Zielony znaczek ma znaczyc "dane sa bezpieczne", a to wynika
+  /// wylacznie z tego, ze kopia POWSTALA - nie z tego, ze dysk jest podpiety.
   var healthy: Bool {
     guard case .ready = dependencyState, remoteConfigured, buffer.mounted, buffer.imageAttached,
-      case .registered = timeMachineState, buffer.uploadState.isNominal
+      case .registered = timeMachineState, buffer.uploadState.isNominal,
+      backupCycle.isFresh()
     else { return false }
     return true
   }

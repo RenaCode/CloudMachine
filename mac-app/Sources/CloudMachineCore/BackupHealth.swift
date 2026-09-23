@@ -19,6 +19,14 @@ import Foundation
 /// `tmutil latestbackup` montuje migawke na wolumenie lezacym na Google Drive
 /// i przy chorym montowaniu potrafi wisiec w nieprzerywalnym I/O. Czujka, ktora
 /// zawiesza sie dokladnie wtedy, gdy ma zaalarmowac, jest gorsza niz jej brak.
+///
+/// To zdanie bylo do 23.09.2026 deklaracja, a nie faktem: `currentReport()`
+/// wola `tmutil destinationinfo` (po cel Time Machine), a ten odczyt siega
+/// na montowanie i BEZ LIMITU CZASU wisial w nieprzerywalnym I/O dokladnie
+/// tak, jak `latestbackup`, przed ktorym ten komentarz ostrzega. Od tej daty
+/// kazde wywolanie tmutil ma twardy limit (`TimeMachineStatus.commandTimeout`),
+/// a brak odpowiedzi jest zglaszany jako AWARIA - nie jako "cel przestawiony"
+/// i nie jako cisza.
 public enum BackupHealth {
 
   public static let preferencesPath = "/Library/Preferences/com.apple.TimeMachine.plist"
@@ -47,12 +55,23 @@ public enum BackupHealth {
     public var problems: [Problem]
     public var lastSuccess: Date?
     public var lastAttempt: Date?
+    /// Czy licznik udanych kopii w ogole dalo sie ODCZYTAC.
+    ///
+    /// Bez tego pola `lastSuccess == nil` znaczylo dwie zupelnie rozne rzeczy:
+    /// "Time Machine nie zrobil ani jednej kopii" i "nie mamy dostepu do
+    /// pliku, wiec nic nie wiemy". Kto czyta ten raport (np. panel GUI), musi
+    /// je rozroznic, zeby nie pokazac braku wiedzy jako faktu.
+    public var preferencesReadable: Bool
     public var healthy: Bool { problems.isEmpty }
 
-    public init(problems: [Problem], lastSuccess: Date?, lastAttempt: Date?) {
+    public init(
+      problems: [Problem], lastSuccess: Date?, lastAttempt: Date?,
+      preferencesReadable: Bool = true
+    ) {
       self.problems = problems
       self.lastSuccess = lastSuccess
       self.lastAttempt = lastAttempt
+      self.preferencesReadable = preferencesReadable
     }
   }
 
@@ -92,9 +111,9 @@ public enum BackupHealth {
     lastAttempt: Date?,
     result: Int?,
     now: Date,
-    mounted: Bool,
-    attached: Bool,
-    destinationRegistered: Bool,
+    mounted: Bool?,
+    attached: Bool?,
+    destinationRegistered: Bool?,
     erroredFiles: Int,
     outOfSpace: Bool,
     queueReadable: Bool,
@@ -107,32 +126,82 @@ public enum BackupHealth {
 
     // Kolejnosc od przyczyny do skutku: jesli montowanie lezy, wiek kopii
     // i tak bedzie rosl, ale to montowanie trzeba naprawic.
-    if !mounted {
+    //
+    // `mounted` i `attached` sa TROJSTANOWE z tego samego powodu, co
+    // `destinationRegistered` nizej: odczyt tablicy montowan moze sie nie
+    // udac, a wtedy nie wiemy ani ze jest, ani ze nie ma. Zlanie tego
+    // w `Bool` konczylo sie dwojako i oba sposoby byly zle - `?? false`
+    // dawalo alarm o odmontowanym Dysku, ktory moze byc zamontowany,
+    // a `!= .detached` dawalo CISZE o obrazie, o ktorym nie wiemy nic.
+    switch mounted {
+    case .some(true):
+      break
+    case .some(false):
       problems.append(
         Problem(
           summary: "Montowanie Google Drive nie dziala",
           detail: "Bez niego obraz backupu jest nieosiagalny i Time Machine nie ma gdzie pisac."))
+    case .none:
+      problems.append(
+        Problem(
+          summary: "Nie wiadomo, czy montowanie Google Drive dziala",
+          detail:
+            "Nie udalo sie odczytac tablicy montowan. To nie znaczy, ze Dysk jest odmontowany - znaczy, ze nikt tego nie sprawdzil. Bez tej odpowiedzi nie da sie stwierdzic, czy kopie maja gdzie powstawac."
+        ))
     }
-    if !attached {
+
+    switch attached {
+    case .some(true):
+      if let errno = imageDeadErrno {
+        // Podpiety, ale martwy - stan, ktory do 22 wrz 2026 nie istnial dla
+        // zadnego czujnika i przez to trwal 15 godzin. Patrz `ImageProbe`.
+        problems.append(
+          Problem(
+            summary: "Obraz backupu jest podpiety, ale MARTWY (errno \(errno))",
+            detail:
+              "Urzadzenie obrazu przestalo oddawac dane - Time Machine widzi to jako odlaczony dysk. "
+              + "Naprawa: cloudmachine-agent attach-image (odpina na sile i podpina na nowo)."))
+      }
+    case .some(false):
       problems.append(
         Problem(
           summary: "Obraz backupu nie jest podpiety",
           detail: "Time Machine nie widzi celu \(BackupImageService.targetPath.path)."))
-    } else if let errno = imageDeadErrno {
-      // Podpiety, ale martwy - stan, ktory do 22 wrz 2026 nie istnial dla
-      // zadnego czujnika i przez to trwal 15 godzin. Patrz `ImageProbe`.
+    case .none:
+      // TA cisza. Do 23.09.2026 wolajacy przekazywal tu `attachment !=
+      // .detached`, wiec nowy przypadek `.unknown` ("tablicy montowan nie
+      // udalo sie odczytac") wpadal na `true` - czyli "podpiety". Czujka,
+      // ktorej JEDYNYM zadaniem jest nie twierdzic rzeczy, ktorych nie wie,
+      // milczala o stanie, ktorego nie znala. Komunikat musi byc INNY niz
+      // przy realnym odpieciu: "nie jest podpiety" wysyla czlowieka do
+      // podpinania obrazu, ktory moze byc podpiety poprawnie.
       problems.append(
         Problem(
-          summary: "Obraz backupu jest podpiety, ale MARTWY (errno \(errno))",
+          summary: "Nie wiadomo, czy obraz backupu jest podpiety",
           detail:
-            "Urzadzenie obrazu przestalo oddawac dane - Time Machine widzi to jako odlaczony dysk. "
-            + "Naprawa: cloudmachine-agent attach-image (odpina na sile i podpina na nowo)."))
+            "Nie udalo sie odczytac tablicy montowan, wiec stan obrazu \(BackupImageService.targetPath.path) jest NIEZNANY. Nie podpinaj go na oslepe - najpierw sprawdz, czy `mount` w ogole odpowiada (przy martwym montowaniu FUSE-T potrafi wisiec)."
+        ))
     }
-    if !destinationRegistered {
+    // `nil` to NIE to samo co `false`. Od 23.09.2026 `tmutil` ma limit czasu
+    // (patrz `TimeMachineStatus.commandTimeout`), wiec przy martwym montowaniu
+    // czujka wraca z brakiem odpowiedzi zamiast wisiec. Brak odpowiedzi jest
+    // AWARIA - ale inna niz przestawiony cel, i musi brzmiec inaczej, zeby nie
+    // wyslac czlowieka do przestawiania czegos, co jest ustawione dobrze.
+    switch destinationRegistered {
+    case .some(true):
+      break
+    case .some(false):
       problems.append(
         Problem(
           summary: "Time Machine nie wskazuje na CloudMachine",
           detail: "Cel backupu zostal przestawiony albo wyrejestrowany - kopie nie powstaja."))
+    case .none:
+      problems.append(
+        Problem(
+          summary: "tmutil nie odpowiada - nie wiadomo, gdzie idzie backup",
+          detail:
+            "Odczyt celu Time Machine nie wrocil w \(Int(TimeMachineStatus.commandTimeout)) s. Tak zachowuje sie tmutil zablokowany na martwym montowaniu Google Drive. Naprawa: cloudmachine-agent attach-image, a gdy to nie pomoze - restart agenta gdrive-buffer."
+        ))
     }
 
     // TO jest licznik, ktory rosnie wylacznie przy sukcesie.
@@ -190,7 +259,10 @@ public enum BackupHealth {
           summary: "Bufor pelny samymi niewyslanymi danymi",
           detail: "rclone nie ma juz czego usunac z bufora - wysylka nie nadaza albo stoi."))
     }
-    if !queueReadable && mounted {
+    // `mounted == true`, nie `mounted != false`: gdy montowania nie ma ALBO
+    // nie wiadomo, czy jest, mowia o tym juz twardsze komunikaty wyzej, a
+    // drugi komunikat o tym samym tylko rozmywa ten pierwszy.
+    if !queueReadable && mounted == true {
       problems.append(
         Problem(
           summary: "Interfejs sterujacy rclone nie odpowiada",
@@ -259,7 +331,7 @@ public enum BackupHealth {
             detail:
               "\(preferencesFile) jest nieczytelny - najczesciej brak Pelnego dostepu do dysku. Bez tego pliku NIE WIADOMO, kiedy ostatnio powstala kopia, wiec traktujemy to jak awarie, a nie jak brak problemu."
           )
-        ], lastSuccess: nil, lastAttempt: nil)
+        ], lastSuccess: nil, lastAttempt: nil, preferencesReadable: false)
     }
 
     let (lastSuccess, lastAttempt, result) = dates(
@@ -269,16 +341,44 @@ public enum BackupHealth {
     let attachment = BackupImageService.attachment
     var deadErrno: Int32?
     if case .dead(let errno) = attachment { deadErrno = errno }
-    let registered =
-      await TimeMachineStatus.currentDestinationMountPoint() == BackupImageService.targetPath.path
 
-    return evaluate(
+    // Trzy stany, tak samo jak przy celu Time Machine nizej.
+    //
+    // Wyliczamy je z `attachment`, a nie drugim wywolaniem
+    // `BackupImageService.attachedState()` - ten sam odczyt tablicy montowan
+    // dal juz `deadErrno` powyzej, a dwa osobne odczyty moglyby sie
+    // rozjechac i dac raport opisujacy dwie rozne chwile.
+    let attached: Bool?
+    switch attachment {
+    // `.dead` to nadal PODPIETY obraz - tylko martwy, i to osobny problem
+    // zglaszany przez `imageDeadErrno`.
+    case .attached, .dead: attached = true
+    case .detached: attached = false
+    case .unknown: attached = nil
+    }
+    // Trzy stany, nie dwa: `noAnswer` (zawieszony tmutil) nie ma prawa
+    // udawac "cel przestawiony" - patrz `evaluate`.
+    let registered: Bool?
+    switch await TimeMachineStatus.destinationReading() {
+    case .mountPoint(let path): registered = (path == BackupImageService.targetPath.path)
+    case .none: registered = false
+    case .noAnswer: registered = nil
+    }
+
+    // Pomiar wolnego miejsca moze sie NIE UDAC (statfs zwraca blad) i wtedy
+    // `freeGB()` oddaje `nil`, a nie zmyslone zero - patrz komentarz przy niej.
+    let localFree = BufferGuardService.freeGB()
+
+    var report = evaluate(
       lastSuccess: lastSuccess,
       lastAttempt: lastAttempt,
       result: result,
       now: now,
-      mounted: DriveBufferService.isMounted,
-      attached: attachment != .detached,
+      // `mountedState()`, a NIE `isMounted` - to drugie jest
+      // `mountedState() ?? false`, czyli zamienia "nie wiem" w "nie dziala"
+      // i kaze czlowiekowi naprawiac montowanie, ktore moze byc sprawne.
+      mounted: DriveBufferService.mountedState(),
+      attached: attached,
       destinationRegistered: registered,
       erroredFiles: stats?.erroredFiles ?? 0,
       outOfSpace: stats?.outOfSpace ?? false,
@@ -287,16 +387,44 @@ public enum BackupHealth {
       // nie odpowiada, mowia o tym juz twardsze sygnaly powyzej, a drugi
       // komunikat o tym samym tylko rozmywa ten pierwszy.
       driveFreeBytes: (await DriveBufferService.remoteQuota())?.free,
-      localFreeGB: BufferGuardService.freeGB(),
+      localFreeGB: localFree,
       imageDeadErrno: deadErrno,
       maxAgeHours: maxAgeHours)
+
+    report.problems.append(contentsOf: unmeasuredLocalDiskProblems(localFreeGB: localFree))
+    return report
+  }
+
+  /// Problem zglaszany, gdy pomiaru wolnego miejsca NIE DA SIE wykonac.
+  ///
+  /// `evaluate` traktuje `localFreeGB: nil` jako "nie pytano" (taki jest jego
+  /// kontrakt od poczatku i opiera sie na nim kilkanascie testow), ale
+  /// `currentReport` WIE, ze pytalo i nie wyszlo. To osobna awaria: dozorca
+  /// bufora podejmuje decyzje o wstrzymaniu Time Machine wlasnie na tej
+  /// liczbie, wiec gdy jej nie ma, nie chroni juz dysku przed zapelnieniem.
+  ///
+  /// Wydzielone z `currentReport()` WYLACZNIE po to, zeby dalo sie sprawdzic
+  /// testem: `currentReport()` dotyka rclone, tmutil i hdiutil, wiec ta galaz
+  /// bylaby inaczej niesprawdzalna - a galaz "nie wiem", ktorej nikt nie
+  /// sprawdzil, to dokladnie ten rodzaj martwego kodu, o ktory pytal przeglad
+  /// (kompilator ostrzegal wczesniej, ze `Int` porownywany do `nil` zawsze
+  /// daje falsz, czyli ze galaz jest martwa).
+  static func unmeasuredLocalDiskProblems(localFreeGB: Int?) -> [Problem] {
+    guard localFreeGB == nil else { return [] }
+    return [
+      Problem(
+        summary: "Nie da sie zmierzyc wolnego miejsca na dysku Maca",
+        detail:
+          "statfs('/System/Volumes/Data') zwrocil blad. Dozorca bufora nie wstrzyma wtedy Time Machine przed zapelnieniem dysku, bo nie zna liczby, na ktorej opiera ta decyzje."
+      )
+    ]
   }
 
   // MARK: - Formatowanie
 
   /// Wiek slowami. Minuty ponizej dwoch godzin - inaczej przy niskim progu
   /// komunikat brzmi "Brak udanej kopii od 0 h", co nie znaczy nic.
-  static func formatAge(_ seconds: TimeInterval) -> String {
+  public static func formatAge(_ seconds: TimeInterval) -> String {
     let hours = Int(seconds / 3600)
     if hours < 2 { return "\(Int(seconds / 60)) min" }
     if hours < 48 { return "\(hours) h" }

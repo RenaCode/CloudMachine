@@ -1,3 +1,4 @@
+import CloudMachineCore
 import XCTest
 
 @testable import CloudMachineApp
@@ -24,7 +25,18 @@ final class AppStatusHealthTests: XCTestCase {
     // Musi byc jawne: `BufferStatus` zaczyna od "kolejki nie odczytano", zeby
     // swiezy, niesprawdzony stan nie uchodzil za pusta kolejke.
     buffer.queueKnown = true
+    buffer.freeDiskGB = 400
     status.buffer = buffer
+    // ZMIANA 23.09.2026: "wszystko podpiete" przestalo wystarczac do zielonego
+    // znaczka. Punkt odniesienia musi teraz zawierac takze fakt, ze kopia
+    // FAKTYCZNIE powstala - bo dokladnie tego brakowalo w awarii, dla ktorej
+    // `BackupHealth` w ogole powstal. Wczesniej ten helper opisywal stan
+    // urzadzen i milczal o tym, czy backup sie udal; test "zdrowy stan jest
+    // zdrowy" przechodzil wiec takze dla Maca, ktory nie zrobil kopii od
+    // dwoch dni.
+    status.backupCycle = BackupCycleStatus(
+      known: true, lastSuccess: Date().addingTimeInterval(-1800), problems: [],
+      checkedAt: Date())
     return status
   }
 
@@ -116,5 +128,53 @@ final class AppStatusHealthTests: XCTestCase {
     status.buffer.uploadsQueued = 12
     XCTAssertTrue(status.healthy)
     XCTAssertEqual(status.headline, "Wysyłanie na Google Drive — 12 w kolejce")
+  }
+
+  // MARK: - Wiek ostatniej UDANEJ kopii
+
+  /// TA awaria. Montowanie stoi, obraz podpiety, kolejka pusta, cel Time
+  /// Machine ustawiony - a ostatnia ZAKONCZONA kopia ma dwa dni. Panel
+  /// pokazywal wtedy "Sprawny / Gotowe", bo nie pytal o to ani razu:
+  /// `grep -rn "BackupHealth" Sources/CloudMachineApp/` nie dawal trafien.
+  func testStaraKopiaOdbieraZielonyZnaczek() {
+    let status = zdrowy()
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-48 * 3600)
+    XCTAssertFalse(
+      status.healthy,
+      "Wszystkie urzadzenia moga byc sprawne, a kopii moze nie byc od dwoch dni.")
+    XCTAssertEqual(status.headline, "Brak ukończonej kopii od 2 dni")
+  }
+
+  /// Granica progu. Tuz pod nia jest jeszcze dobrze, tuz nad nia juz nie -
+  /// bez tego testu "naprawa" ustawiajaca prog na 100 lat przeszlaby cicho.
+  func testProgWiekuKopiiDzialaWObieStrony() {
+    let tuzPrzed = zdrowy()
+    tuzPrzed.backupCycle.lastSuccess = Date().addingTimeInterval(
+      -(BackupHealth.maxAgeHours * 3600 - 60))
+    XCTAssertTrue(tuzPrzed.healthy)
+
+    let tuzPo = zdrowy()
+    tuzPo.backupCycle.lastSuccess = Date().addingTimeInterval(
+      -(BackupHealth.maxAgeHours * 3600 + 60))
+    XCTAssertFalse(tuzPo.healthy)
+  }
+
+  /// Nieodczytany licznik kopii to NIE to samo, co kopia sprzed chwili.
+  /// Domyslny `BackupCycleStatus` ma `known == false` wlasnie po to, zeby
+  /// panel nie swiecil na zielono, zanim ktokolwiek o cokolwiek zapytal.
+  func testNieodczytanyLicznikKopiiOdbieraZielonyZnaczek() {
+    let status = zdrowy()
+    status.backupCycle = BackupCycleStatus()
+    XCTAssertFalse(status.healthy)
+    XCTAssertEqual(status.headline, "Nie wiadomo, kiedy powstała ostatnia kopia")
+  }
+
+  /// Odczytano preferencje i nie ma w nich ANI JEDNEJ udanej kopii - co jest
+  /// czyms innym niz "nie udalo sie odczytac" i musi brzmiec inaczej.
+  func testBrakJakiejkolwiekKopiiOdbieraZielonyZnaczek() {
+    let status = zdrowy()
+    status.backupCycle = BackupCycleStatus(known: true, lastSuccess: nil, checkedAt: Date())
+    XCTAssertFalse(status.healthy)
+    XCTAssertEqual(status.headline, "Nie ma ani jednej ukończonej kopii")
   }
 }

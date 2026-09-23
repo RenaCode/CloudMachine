@@ -17,6 +17,16 @@ final class CloudMachineController: ObservableObject {
   private var lastBytesDone: Double?
   private var lastBytesSampledAt: Date?
 
+  /// Co ile odswiezamy odpowiedz na pytanie "kiedy ostatnio powstala kopia".
+  ///
+  /// Rzadziej niz reszta panelu (10 s) i celowo: `BackupHealth.currentReport()`
+  /// czyta plik preferencji Time Machine, pyta rclone o pojemnosc Dysku
+  /// i tmutil o cel backupu - to sekundy pracy, nie mikrosekundy. Cykl
+  /// backupu jest godzinowy, wiec odpowiedz sprzed pieciu minut jest tak samo
+  /// dobra jak sprzed pieciu sekund.
+  private static let backupCycleInterval: TimeInterval = 300
+  private var backupCycleCheckedAt: Date?
+
   // MARK: - Cykl odswiezania
 
   func startAutoRefresh(interval: TimeInterval = 10) {
@@ -40,7 +50,36 @@ final class CloudMachineController: ObservableObject {
     await refreshBuffer()
     await refreshTimeMachine()
     await refreshProgress()
+    await refreshBackupCycle()
     status.lastRefresh = Date()
+  }
+
+  /// Wiek ostatniej UDANEJ kopii.
+  ///
+  /// Panel nie zadawal tego pytania ani razu (patrz `BackupCycleStatus`),
+  /// wiec awaria "wszystko podpiete, a kopii nie ma od dwoch dni" wygladala
+  /// w nim dokladnie tak samo jak sprawny system. Zrodlo jest to samo, z
+  /// ktorego korzysta czujka `backup-health` - jedno zrodlo prawdy, zeby
+  /// panel i czujka nie mogly twierdzic czegos innego o tym samym.
+  private func refreshBackupCycle(force: Bool = false) async {
+    if !force, let at = backupCycleCheckedAt,
+      Date().timeIntervalSince(at) < Self.backupCycleInterval
+    {
+      return
+    }
+    backupCycleCheckedAt = Date()
+
+    let report = await BackupHealth.currentReport()
+    var cycle = BackupCycleStatus()
+    // "Odczytano" znaczy tu: plik preferencji dalo sie przeczytac. Gdy sie
+    // nie da (najczesciej brak Pelnego dostepu do dysku), `currentReport`
+    // zglasza to jako problem i NIE podaje zadnej daty - wtedy `known`
+    // zostaje `false`, a nie udaje, ze kopii po prostu nie ma.
+    cycle.known = report.preferencesReadable
+    cycle.lastSuccess = report.lastSuccess
+    cycle.problems = report.problems.map(\.summary)
+    cycle.checkedAt = Date()
+    status.backupCycle = cycle
   }
 
   // MARK: - Poszczegolne odczyty

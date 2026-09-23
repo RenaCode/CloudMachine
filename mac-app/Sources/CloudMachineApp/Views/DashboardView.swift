@@ -200,7 +200,12 @@ struct DashboardView: View {
       StatCard(
         title: "Rozmiar Bufora",
         value: "\(controller.status.buffer.sizeGB) GB",
-        subtitle: "Wolne na dysku: \(controller.status.buffer.freeDiskGB) GB",
+        // Brak pomiaru ma wygladac inaczej niz liczba - patrz
+        // `BufferGuardService.freeGB()`. Samo wstawienie opcjonalnej wartosci
+        // do tekstu dalo "Wolne na dysku: Optional(427) GB" i kompilator
+        // zglaszal to TYLKO jako ostrzezenie, wiec zaden test by tego nie zlapal.
+        subtitle:
+          "Wolne na dysku: \(controller.status.buffer.freeDiskGB.map { "\($0) GB" } ?? "nie zmierzono")",
         systemImage: "internaldrive.fill",
         iconColor: RenaCodeTheme.colorCyan
       )
@@ -445,10 +450,24 @@ struct DashboardView: View {
 
         Divider().background(RenaCodeTheme.borderGlass)
 
+        // Brak pomiaru MUSI wygladac inaczej niz "0 GB" - patrz
+        // `BufferGuardService.freeGB()`. Nieudany statfs to awaria dozorcy
+        // bufora, a nie informacja o pustym dysku.
         row(
           "Wolne miejsce na lokalnym wolumenie",
-          "\(controller.status.buffer.freeDiskGB) GB",
-          ok: controller.status.buffer.freeDiskGB > 80
+          controller.status.buffer.freeDiskGB.map { "\($0) GB" } ?? "nie zmierzono",
+          ok: (controller.status.buffer.freeDiskGB ?? 0) > 80
+        )
+
+        Divider().background(RenaCodeTheme.borderGlass)
+
+        // Jedyny wiersz, ktory odpowiada na pytanie "czy kopia POWSTALA".
+        // Wszystkie pozostale opisuja stan urzadzen i moga byc zielone, gdy
+        // Time Machine od dwoch dni nie dokonczyl backupu.
+        row(
+          "Ostatnia ukończona kopia",
+          controller.status.backupCycle.ageText(),
+          ok: controller.status.backupCycle.isFresh()
         )
 
         Divider().background(RenaCodeTheme.borderGlass)
