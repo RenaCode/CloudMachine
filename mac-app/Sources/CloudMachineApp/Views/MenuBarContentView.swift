@@ -100,12 +100,14 @@ struct MenuBarContentView: View {
             .foregroundStyle(RenaCodeTheme.textMuted)
           Spacer()
           Text(
-            controller.status.buffer.draining
-              ? "\(controller.status.buffer.uploadsQueued) plików" : "nic"
+            !controller.status.buffer.queueKnown
+              ? "?"
+              : (controller.status.buffer.draining
+                ? "\(controller.status.buffer.uploadsQueued) plików" : "nic")
           )
           .font(.system(size: 12, weight: .semibold, design: .monospaced))
           .foregroundStyle(
-            controller.status.buffer.draining
+            !controller.status.buffer.queueKnown || controller.status.buffer.draining
               ? RenaCodeTheme.colorWarning : RenaCodeTheme.textMain)
         }
 

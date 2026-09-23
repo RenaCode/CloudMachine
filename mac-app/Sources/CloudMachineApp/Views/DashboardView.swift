@@ -200,21 +200,34 @@ struct DashboardView: View {
       StatCard(
         title: "Rozmiar Bufora",
         value: "\(controller.status.buffer.sizeGB) GB",
-        subtitle: "Wolne na dysku: \(controller.status.buffer.freeDiskGB) GB",
+        // Brak pomiaru ma wygladac inaczej niz liczba - patrz
+        // `BufferGuardService.freeGB()`. Samo wstawienie opcjonalnej wartosci
+        // do tekstu dalo "Wolne na dysku: Optional(427) GB" i kompilator
+        // zglaszal to TYLKO jako ostrzezenie, wiec zaden test by tego nie zlapal.
+        subtitle:
+          "Wolne na dysku: \(controller.status.buffer.freeDiskGB.map { "\($0) GB" } ?? "nie zmierzono")",
         systemImage: "internaldrive.fill",
         iconColor: RenaCodeTheme.colorCyan
       )
 
       StatCard(
         title: "Kolejka Wysyłki",
-        value: controller.status.buffer.draining
-          ? "\(controller.status.buffer.uploadsQueued) w kolejce" : "Brak zaległości",
-        subtitle: controller.status.buffer.draining
-          ? "\(controller.status.buffer.uploadsInProgress) transferów w toku"
-          : "Wszystko w chmurze",
+        // Bez odczytu kolejki ta karta nie ma prawa powiedziec "Brak
+        // zaleglosci" - zera sa wtedy brakiem pomiaru, nie wynikiem.
+        value: !controller.status.buffer.queueKnown
+          ? "—"
+          : (controller.status.buffer.draining
+            ? "\(controller.status.buffer.uploadsQueued) w kolejce" : "Brak zaległości"),
+        subtitle: !controller.status.buffer.queueKnown
+          ? "rclone nie odpowiedział"
+          : (controller.status.buffer.draining
+            ? "\(controller.status.buffer.uploadsInProgress) transferów w toku"
+            : "Wszystko w chmurze"),
         systemImage: "icloud.and.arrow.up.fill",
-        iconColor: controller.status.buffer.draining
-          ? RenaCodeTheme.colorWarning : RenaCodeTheme.colorSuccess
+        iconColor: !controller.status.buffer.queueKnown
+          ? RenaCodeTheme.colorWarning
+          : (controller.status.buffer.draining
+            ? RenaCodeTheme.colorWarning : RenaCodeTheme.colorSuccess)
       )
 
       StatCard(
@@ -437,20 +450,36 @@ struct DashboardView: View {
 
         Divider().background(RenaCodeTheme.borderGlass)
 
+        // Brak pomiaru MUSI wygladac inaczej niz "0 GB" - patrz
+        // `BufferGuardService.freeGB()`. Nieudany statfs to awaria dozorcy
+        // bufora, a nie informacja o pustym dysku.
         row(
           "Wolne miejsce na lokalnym wolumenie",
-          "\(controller.status.buffer.freeDiskGB) GB",
-          ok: controller.status.buffer.freeDiskGB > 80
+          controller.status.buffer.freeDiskGB.map { "\($0) GB" } ?? "nie zmierzono",
+          ok: (controller.status.buffer.freeDiskGB ?? 0) > 80
+        )
+
+        Divider().background(RenaCodeTheme.borderGlass)
+
+        // Jedyny wiersz, ktory odpowiada na pytanie "czy kopia POWSTALA".
+        // Wszystkie pozostale opisuja stan urzadzen i moga byc zielone, gdy
+        // Time Machine od dwoch dni nie dokonczyl backupu.
+        row(
+          "Ostatnia ukończona kopia",
+          controller.status.backupCycle.ageText(),
+          ok: controller.status.backupCycle.isFresh()
         )
 
         Divider().background(RenaCodeTheme.borderGlass)
 
         row(
           "Kolejka synchronizacji z chmurą",
-          controller.status.buffer.draining
-            ? "\(controller.status.buffer.uploadsInProgress) w toku, \(controller.status.buffer.uploadsQueued) w kolejce"
-            : "Wszystko wysłane",
-          ok: controller.status.buffer.erroredFiles == 0
+          !controller.status.buffer.queueKnown
+            ? "nie odczytano"
+            : (controller.status.buffer.draining
+              ? "\(controller.status.buffer.uploadsInProgress) w toku, \(controller.status.buffer.uploadsQueued) w kolejce"
+              : "Wszystko wysłane"),
+          ok: controller.status.buffer.queueKnown && controller.status.buffer.erroredFiles == 0
         )
 
         if controller.status.buffer.erroredFiles > 0 {
@@ -693,11 +722,9 @@ struct DashboardView: View {
     return RenaCodeTheme.colorSuccess
   }
 
-  private func uploadBadge(_ state: UploadState) -> String {
-    if state.needsAttention { return "WYMAGA REAKCJI" }
-    if !state.isNominal { return "MINIE SAMO — NIC NIE RÓB" }
-    return "W PORZĄDKU"
-  }
+  /// Etykieta idzie prosto z `UploadState`. Skladanie jej tutaj z dwoch bool-i
+  /// ograniczalo interfejs do trzech wariantow, a stanow jest wiecej.
+  private func uploadBadge(_ state: UploadState) -> String { state.badge }
 
   private func uploadIcon(_ state: UploadState) -> String {
     switch state {
@@ -708,6 +735,7 @@ struct DashboardView: View {
     case .dailyQuotaExhausted: return "hourglass"
     case .flowing: return "arrow.up.circle.fill"
     case .upToDate: return "checkmark.icloud.fill"
+    case .queueUnknown: return "questionmark.circle.fill"
     }
   }
 

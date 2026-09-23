@@ -62,23 +62,59 @@ public enum DriveBufferService {
 
   // MARK: - Stan
 
-  public static var isMounted: Bool {
-    // `mount` jest zrodlem prawdy - samo istnienie katalogu nic nie znaczy,
-    // bo punkt montowania zostaje na dysku po odmontowaniu.
-    guard let out = try? shellMountTable() else { return false }
-    return out.contains(" on \(mountPoint.path) ")
+  /// Punkty montowania prosto z tablicy jadra. `nil` = tablicy NIE UDALO SIE
+  /// odczytac, co jest czyms innym niz "nic nie jest zamontowane".
+  ///
+  /// DLACZEGO NIE `/sbin/mount`
+  ///
+  /// Do 23 wrzesnia 2026 bylo tu uruchomienie `/sbin/mount` z
+  /// `readDataToEndOfFile()` + `waitUntilExit()` BEZ limitu czasu. Przy martwym
+  /// montowaniu FUSE-T (incydent ENXIO z 22.09) taki odczyt potrafi wejsc w
+  /// nieprzerywalne I/O i nie wrocic - a czyta stad `isMounted`, czyli czujka
+  /// `backup-health` ORAZ petla odswiezania GUI chodzaca co 10 sekund.
+  /// Zawieszenie wieszalo wiec i podglad, i nadzor, na tej samej awarii,
+  /// ktora oba maja wykryc.
+  ///
+  /// Nalozenie limitu czasu (jak w `TimeMachineStatus.commandTimeout`)
+  /// usuneloby zawieszenie, ale kazdy taki limit jest tu czystym kosztem:
+  /// przy odswiezaniu co 10 s wywolania zaczelyby sie nakladac, a odpowiedz
+  /// i tak by nie przyszla. `getmntinfo(MNT_NOWAIT)` usuwa problem u zrodla -
+  /// czyta tablice montowan z pamieci jadra i NIE odpytuje zadnego systemu
+  /// plikow (od tego jest `MNT_WAIT`, ktore wlasnie umialoby zawisnac).
+  /// Nie ma tu procesu, potoku ani wejscia/wyjscia, wiec nie ma czego
+  /// ograniczac limitem. Zmierzone na tej maszynie: 19 montowan w 0,0002 s.
+  ///
+  /// Przy okazji znika parsowanie tekstu: `f_mntonname` to sciezka wprost,
+  /// zamiast szukania `" on <sciezka> "` w wydruku.
+  public static func mountPoints() -> [String]? {
+    var raw: UnsafeMutablePointer<statfs>?
+    let count = getmntinfo(&raw, MNT_NOWAIT)
+    guard count > 0, let raw else { return nil }
+    return (0..<Int(count)).map { index in
+      withUnsafePointer(to: raw[index].f_mntonname) {
+        $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+      }
+    }
   }
 
-  private static func shellMountTable() throws -> String {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/sbin/mount")
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    try process.run()
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    return String(data: data, encoding: .utf8) ?? ""
+  /// Czy bufor jest zamontowany. `nil` = NIE WIADOMO.
+  ///
+  /// Rozroznienie jest tu istotne, bo na tej odpowiedzi stoi decyzja o
+  /// podpieciu i o utworzeniu obrazu - a "nie wiem" udajace "nie zamontowane"
+  /// to ten sam rodzaj cichej awarii, ktory w tym pliku zamyka juz
+  /// `UploadState.queueUnknown` po stronie kolejki.
+  public static func mountedState() -> Bool? {
+    guard let points = mountPoints() else { return nil }
+    // Tablica montowan jest zrodlem prawdy - samo istnienie katalogu nic nie
+    // znaczy, bo punkt montowania zostaje na dysku po odmontowaniu.
+    return points.contains(mountPoint.path)
   }
+
+  /// Skrot dla miejsc, w ktorych brak odczytu i "nie zamontowane" znacza to
+  /// samo - czyli tam, gdzie i tak czekamy na montowanie albo tylko je
+  /// wypisujemy. Wszedzie, gdzie z odpowiedzi wynika DECYZJA, uzywaj
+  /// `mountedState()`.
+  public static var isMounted: Bool { mountedState() ?? false }
 
   // MARK: - Uruchomienie
 
@@ -159,7 +195,23 @@ public enum DriveBufferService {
     /// trzyma, wiec nie ma czego usunac. Mocniejszy sygnal niz jakikolwiek
     /// prog, bo pochodzi od tego, kto naprawde wie.
     public var outOfSpace: Bool
-    public var isQuiet: Bool { uploadsInProgress == 0 && uploadsQueued == 0 }
+
+    /// rclone nic TERAZ nie robi. To warunek STABILNOSCI `hdiutil` na
+    /// montowaniu FUSE-T (patrz `retryingFlakyMount`) i nic wiecej - w
+    /// szczegolnosci NIE jest dowodem, ze kopia doleciala na Dysk.
+    public var isIdle: Bool { uploadsInProgress == 0 && uploadsQueued == 0 }
+
+    /// Nic nie czeka I nic nie zostalo po drodze porzucone.
+    ///
+    /// Do 23 wrzesnia 2026 to pytanie mialo tylko jedna odpowiedz - te, ktora
+    /// dzis nazywa sie `isIdle` - i to ona szla do komunikatu odpiecia oraz do
+    /// `safeToRebootNow()`. Pasmo, ktore rclone porzucil, wypada z kolejki
+    /// dokladnie tak samo jak pasmo wyslane: `uploadsQueued` wraca do zera,
+    /// a slad zostaje wylacznie w `erroredFiles`. Skutek: "Odpiete, wszystko
+    /// wyslane na Google Drive" i "Restart bez pytania: TAK" przy danych
+    /// istniejacych tylko lokalnie - podczas gdy `UploadState` z tych samych
+    /// licznikow wyprowadzal juz `.failedFiles(...)` i "WYMAGA REAKCJI".
+    public var isQuiet: Bool { isIdle && erroredFiles == 0 }
   }
 
   /// Odczytuje stan kolejki przez interfejs sterujacy rclone.
@@ -167,29 +219,78 @@ public enum DriveBufferService {
   /// UWAGA: `--rc-no-auth` to flaga SERWERA. Klient `rclone rc` jej nie
   /// przyjmuje i konczy sie bledem "unknown flag" - kosztowalo to juz jedno
   /// ciche zepsucie podgladu stanu.
+  ///
+  /// Limit czasu 60 s, a nie 30 s: 23.09.2026 to samo wywolanie trwalo
+  /// **36,7 s** przy zapchanym buforze (kolejne 0,03 s - wiec sporadycznie, pod
+  /// obciazeniem). Przy 30 s konczylo sie `nil`, a `nil` szedl dalej jako
+  /// komplet zer i interfejs oglaszal "Wszystko wyslane" przy 386 pasmach w
+  /// kolejce. Samo podniesienie limitu tego nie naprawia - od tego jest
+  /// `UploadState.queueUnknown` - ale sprawia, ze pytanie zwykle dostaje
+  /// odpowiedz.
+  ///
+  /// Wyzej nie warto. Petla odswiezania interfejsu chodzi co 10 s i czeka na
+  /// ten odczyt, a `drive-status` pyta dwa razy (drugi raz przez
+  /// `safeToRebootNow`). Przy martwym rclone kazda sekunda limitu to sekunda
+  /// zamrozonego okna, a odpowiedz i tak nie przyjdzie.
   public static func queueStats() async -> QueueStats? {
     guard
       let result = try? await CMTooling.runRclone(
-        ["rc", "--url", rcAddress, "vfs/stats"], timeout: 30),
-      result.succeeded,
-      let data = result.stdout.data(using: .utf8),
-      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        ["rc", "--url", rcAddress, "vfs/stats"], timeout: 60),
+      result.succeeded
+    else { return nil }
+    return parseQueueStats(result.stdout)
+  }
+
+  /// Czysta wersja parsowania odpowiedzi `vfs/stats`. `nil` znaczy "nie wiem",
+  /// nigdy "same zera".
+  ///
+  /// Wydzielone, zeby dalo sie to sprawdzic testem - dotad parsowanie siedzialo
+  /// w funkcji async wolajacej rclone i nie bylo do niego dostepu z zadnej
+  /// strony poza uruchomieniem calego bufora.
+  ///
+  /// Dwie rzeczy, ktore tu byly i musialy zniknac:
+  ///
+  /// 1. `(json["diskCache"] as? [String: Any]) ?? json` - odpowiedz BEZ sekcji
+  ///    `diskCache` (rclone zbudowane bez cache dysku, inna wersja interfejsu,
+  ///    obcieta odpowiedz) wpadala na `json`, gdzie zadnego z licznikow nie ma.
+  /// 2. `number(_:in:)` oddajace 0 dla brakujacego klucza.
+  ///
+  /// Razem dawaly `QueueStats` z samymi zerami zamiast `nil`, czyli
+  /// `queueKnown == true` i znow plansza "Wszystko wyslane na Google Drive".
+  /// To ten sam wzorzec, ktory naprawiono wyzej przez `UploadState.queueUnknown`,
+  /// tyle ze przesuniety o jeden krok - do parsowania.
+  static func parseQueueStats(_ raw: String) -> QueueStats? {
+    guard
+      let data = raw.data(using: .utf8),
+      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      // vfs/stats zwraca liczniki zagniezdzone w sekcji "diskCache". Jej brak
+      // to brak odpowiedzi na zadane pytanie, a nie odpowiedz "zero".
+      let disk = json["diskCache"] as? [String: Any]
     else { return nil }
 
-    func number(_ key: String, in dict: [String: Any]) -> Int {
-      if let v = dict[key] as? Int { return v }
-      if let v = dict[key] as? NSNumber { return v.intValue }
-      return 0
+    func number(_ key: String) -> Int? {
+      if let v = disk[key] as? Int { return v }
+      if let v = disk[key] as? NSNumber { return v.intValue }
+      return nil
     }
 
-    // vfs/stats zwraca liczniki zagniezdzone w sekcji "diskCache".
-    let disk = (json["diskCache"] as? [String: Any]) ?? json
+    guard
+      let inProgress = number("uploadsInProgress"),
+      let queued = number("uploadsQueued"),
+      let files = number("files"),
+      let errored = number("erroredFiles"),
+      let bytesUsed = number("bytesUsed")
+    else { return nil }
+
     return QueueStats(
-      uploadsInProgress: number("uploadsInProgress", in: disk),
-      uploadsQueued: number("uploadsQueued", in: disk),
-      files: number("files", in: disk),
-      erroredFiles: number("erroredFiles", in: disk),
-      bytesUsed: UInt64(max(0, number("bytesUsed", in: disk))),
+      uploadsInProgress: inProgress,
+      uploadsQueued: queued,
+      files: files,
+      erroredFiles: errored,
+      bytesUsed: UInt64(max(0, bytesUsed)),
+      // Jedyne pole, ktorego brak wolno nadrobic domyslna wartoscia: to flaga,
+      // a nie licznik - starsze rclone jej nie wystawia, a jej brak nie da sie
+      // pomylic z "bufor pelny".
       outOfSpace: (disk["outOfSpace"] as? Bool) ?? false
     )
   }
@@ -223,16 +324,33 @@ public enum DriveBufferService {
     return (used, total, free)
   }
 
-  /// Czeka, az wysylka ucichnie. Operacje `hdiutil` na montowaniu FUSE-T sa
-  /// stabilne tylko przy pustej kolejce - patrz `BackupImageService`.
+  /// Czeka, az rclone przestanie cokolwiek wysylac. Operacje `hdiutil` na
+  /// montowaniu FUSE-T sa stabilne tylko przy pustej kolejce - patrz
+  /// `BackupImageService.retryingFlakyMount`.
+  ///
+  /// Warunkiem jest `isIdle`, a NIE `isQuiet`: pasma porzucone przez rclone
+  /// zostaja w `erroredFiles` do konca zycia procesu, wiec czekanie na
+  /// `isQuiet` nigdy by sie nie doczekalo i kazde podpiecie placilo by pelny
+  /// limit czasu za nic.
+  ///
+  /// Zwraca odczyt kolejki z chwili uciszenia - `nil`, gdy nie ucichla w czasie
+  /// albo gdy rclone nie odpowiedzial. Wolajacy dostaje go po to, zeby moc
+  /// sprawdzic `erroredFiles` bez zadawania rclone tego samego pytania drugi
+  /// raz (kosztuje do 60 s - patrz `queueStats`).
   @discardableResult
-  public static func waitUntilQuiet(timeout: TimeInterval = 180) async -> Bool {
+  public static func statsWhenIdle(timeout: TimeInterval = 180) async -> QueueStats? {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
-      if let stats = await queueStats(), stats.isQuiet { return true }
+      if let stats = await queueStats(), stats.isIdle { return stats }
       try? await Task.sleep(nanoseconds: 2_000_000_000)
     }
-    return false
+    return nil
+  }
+
+  /// Jak `statsWhenIdle`, gdy wolajacego interesuje wylacznie "doczekalem sie".
+  @discardableResult
+  public static func waitUntilIdle(timeout: TimeInterval = 180) async -> Bool {
+    await statsWhenIdle(timeout: timeout) != nil
   }
 
   /// Przesuwa termin wysylki wszystkich czekajacych pozycji na "teraz".
@@ -248,24 +366,36 @@ public enum DriveBufferService {
   /// Wolac PO tym, jak zapisy z odpiecia zdazyly trafic do kolejki - pozycje
   /// dolozone pozniej nie zostana ruszone.
   ///
-  /// Zwraca liczbe pozycji, ktorym przesunieto termin.
+  /// Zwraca liczbe pozycji, ktorym przesunieto termin, albo `nil`, gdy rclone
+  /// nie odpowiedzial na pytanie o kolejke.
+  ///
+  /// `nil` i `0` to DWIE ROZNE RZECZY i dlatego typ jest opcjonalny. Do 23
+  /// wrzesnia 2026 obie sytuacje - "kolejka byla pusta" i "nie dostalismy
+  /// odpowiedzi" - wychodzily stad jako `0`, wiec `detach` milczal w logu
+  /// dokladnie w tym przypadku, w ktorym terminow NIE przesunieto i drenaz
+  /// mogl potrwac cale `writeBackSeconds` (dziesiec minut) zamiast chwili.
+  ///
+  /// Limit na samo listowanie kolejki podniesiony z 30 s do 60 s: ten sam plik
+  /// dokumentuje pomiar **36,7 s** dla LZEJSZEGO `vfs/stats` przy zapchanym
+  /// buforze (patrz `queueStats`), a `vfs/queue` wypisuje wtedy setki pozycji.
+  /// Przy 30 s odpowiedz nie zdazala przyjsc dokladnie wtedy, gdy przesuniecie
+  /// terminow bylo najbardziej potrzebne.
+  ///
+  /// Limit pojedynczego `queue-set-expiry` zostaje na 30 s CELOWO: tamto jedno
+  /// wywolanie decyduje o calej funkcji, a to jest jedno z setek i jego strata
+  /// kosztuje jedna pozycje. Przy kilkuset pozycjach sufit 60 s na sztuke
+  /// zamienilby odpiecie w operacje bez gornego ograniczenia czasu.
   @discardableResult
-  public static func expireQueuedUploads() async -> Int {
+  public static func expireQueuedUploads() async -> Int? {
     guard
       let result = try? await CMTooling.runRclone(
-        ["rc", "--url", rcAddress, "vfs/queue"], timeout: 30),
+        ["rc", "--url", rcAddress, "vfs/queue"], timeout: 60),
       result.succeeded,
-      let data = result.stdout.data(using: .utf8),
-      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-      let queue = json["queue"] as? [[String: Any]]
-    else { return 0 }
+      let ids = parseQueueIDs(result.stdout)
+    else { return nil }
 
     var moved = 0
-    for item in queue {
-      // Pozycji juz wysylanej nie da sie przyspieszyc - rclone to ignoruje,
-      // wiec nie marnujemy na nia wywolania.
-      if (item["uploading"] as? Bool) == true { continue }
-      guard let id = (item["id"] as? NSNumber)?.intValue else { continue }
+    for id in ids {
       // Duza liczba ujemna zamiast zera - tak opisuje to samo rclone.
       let response = try? await CMTooling.runRclone(
         ["rc", "--url", rcAddress, "vfs/queue-set-expiry", "id=\(id)", "expiry=-1000000000"],
@@ -273,6 +403,24 @@ public enum DriveBufferService {
       if response?.succeeded == true { moved += 1 }
     }
     return moved
+  }
+
+  /// Czysta wersja: numery pozycji z odpowiedzi `vfs/queue`, ktorym da sie
+  /// przesunac termin. `nil` = odpowiedzi nie da sie odczytac, `[]` = kolejka
+  /// jest pusta. Wydzielone, zeby to rozroznienie dalo sie sprawdzic testem.
+  static func parseQueueIDs(_ raw: String) -> [Int]? {
+    guard
+      let data = raw.data(using: .utf8),
+      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let queue = json["queue"] as? [[String: Any]]
+    else { return nil }
+
+    return queue.compactMap { item in
+      // Pozycji juz wysylanej nie da sie przyspieszyc - rclone to ignoruje,
+      // wiec nie marnujemy na nia wywolania.
+      if (item["uploading"] as? Bool) == true { return nil }
+      return (item["id"] as? NSNumber)?.intValue
+    }
   }
 
   /// Rozmiar bufora w bajtach - z obchodu katalogu.

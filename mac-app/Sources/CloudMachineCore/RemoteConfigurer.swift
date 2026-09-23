@@ -121,13 +121,32 @@ public enum RemoteConfigurer {
     // potrzebuje katalog z pasmami jednego obrazu, tym bardziej ze montowanie
     // chodzi z `--drive-use-trash=false`, wiec kasowanie nie ma kosza, z
     // ktorego dalo by sie cokolwiek cofnac.
+    //
+    // Binarka: TA SAMA, ktorej uzywa reszta systemu (`~/.cloudmachine/bin/
+    // rclone`), a nie `/usr/bin/env rclone`. Do 23.09.2026 `connect` szlo
+    // przez `env`, czyli w rclone z Homebrew - podczas gdy `isConfigured`
+    // w tym samym pliku i cale montowanie ida przez `CMTooling.runRclone`.
+    // Konsekwencje byly dwie i obie ciche: bez Homebrew udokumentowana
+    // sciezka instalacji (`install-rclone`, potem `configure-remote`) konczyla
+    // sie kodem 127 i komunikatem bez przyczyny, a Z Homebrew konfiguracje
+    // zapisywala INNA binarka niz ta, ktorej system potem uzywa.
+    //
+    // `authorize` woly przez `ProcessRunner.run` wprost na sciezce
+    // zarzadzanej binarki, bo `CMTooling.runRclone` nie przyjmuje `env`,
+    // a klucze OAuth MUSZA isc srodowiskiem (patrz komentarz wyzej) i
+    // `CMTooling.swift` nie nalezy do zakresu tej poprawki.
     guard
       let authResult = try? await ProcessRunner.run(
-        "/usr/bin/env", ["rclone", "authorize", "drive", "--drive-scope", "drive.file"],
+        CMTooling.managedRclonePath.path,
+        ["authorize", "drive", "--drive-scope", "drive.file"],
         env: authEnv, timeout: 300),
       authResult.succeeded
     else {
-      return CMActionResult(succeeded: false, message: "rclone authorize nie powiodlo sie.")
+      return CMActionResult(
+        succeeded: false,
+        message:
+          "rclone authorize nie powiodlo sie (\(CMTooling.managedRclonePath.path)). Jesli tej binarki nie ma, zacznij od: cloudmachine-agent install-rclone."
+      )
     }
     guard let token = extractToken(from: authResult.stdout) else {
       return CMActionResult(
@@ -141,11 +160,15 @@ public enum RemoteConfigurer {
       createArgs += ["client_id=\(clientID)", "client_secret=\(clientSecret)"]
     }
     createArgs.append("token=\(token)")
-    let createResult = try? await ProcessRunner.runRclone(createArgs)
+    // Znowu ta sama binarka co montowanie: gdyby `config create` poszlo przez
+    // Homebrew, zapisalby wpis w konfiguracji, ktorej moze nie czytac binarka
+    // uzywana przez system - a wtedy `isConfigured` mowi "nie ma remote'a"
+    // zaraz po udanym "polaczono".
+    let createResult = try? await CMTooling.runRclone(createArgs, timeout: 60)
     guard createResult?.succeeded == true else {
       return CMActionResult(succeeded: false, message: "rclone config create nie powiodlo sie.")
     }
-    let mkdirResult = try? await ProcessRunner.runRclone(["mkdir", remotePath])
+    let mkdirResult = try? await CMTooling.runRclone(["mkdir", remotePath], timeout: 120)
     guard mkdirResult?.succeeded == true else {
       // ZWRACAMY BLAD, nie "sukces": remote istnieje, ale bez tego folderu nie
       // mamy potwierdzenia, ze zapis na to konto faktycznie dziala - a kolejny

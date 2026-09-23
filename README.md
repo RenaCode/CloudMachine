@@ -161,6 +161,14 @@ The `Wysylka:` line is the same verdict the app window shows, computed in one
 place so the two can never disagree. When it is not nominal it prints a second
 line saying why, and whether it clears on its own.
 
+It has three kinds of answer, not two. Besides "fine" and "broken" there is
+**"unknown"** — printed when rclone does not answer the question about its
+queue. That third state exists because of a specific lie: the queue read used
+to time out, the caller substituted zeros for the missing numbers, and both the
+CLI and the app then announced *Wszystko wysłane na Google Drive* while 386
+bands sat unsent. A verdict computed from numbers nobody measured is worse than
+no verdict, so now it says so.
+
 Five launchd agents keep it alive, all running code from inside the app:
 
 | Agent | Job |

@@ -14,12 +14,32 @@ public final class CMLock {
     lockDir = CMPaths.logDir.appendingPathComponent("\(name).lock.d")
   }
 
+  /// Wylacznie dla testu: blokada w katalogu, ktory test sam sprzata. Bez tego
+  /// kazdy test blokady zostawialby katalogi w prawdziwym `~/Library/Logs/
+  /// CloudMachine`, czyli tam, gdzie dzialajaca instalacja trzyma blokady
+  /// produkcyjne - test umialby zablokowac agenta.
+  init(directory: URL) {
+    lockDir = directory
+  }
+
   /// Probuje przejac blokade. Zwraca `false`, jesli inny zywy proces juz ja trzyma.
   public func acquire() -> Bool {
     if (try? FileManager.default.createDirectory(at: lockDir, withIntermediateDirectories: false))
       != nil
     {
-      writePid()
+      // Weryfikacja odczytem jest tu potrzebna z DOKLADNIE tego samego powodu,
+      // co na sciezce przejecia nizej - do 23 wrzesnia 2026 byla tylko tam.
+      // `writePid()` polyka blad zapisu (`try?`), a proces ubity miedzy
+      // `createDirectory` a zapisem zostawia katalog blokady BEZ pliku `pid`.
+      // Konkurent czyta wtedy pusty katalog, nie znajduje PID-a, uznaje
+      // blokade za osierocona i ja przejmuje - podczas gdy my juz zwrocilismy
+      // `true` i dzialamy w przekonaniu o wylacznosci. Dwoch wlascicieli tej
+      // samej blokady "image" to rownolegly `detach` i `attach` na tym samym
+      // obrazie, czyli dokladnie to, przed czym blokada ma chronic.
+      guard writeAndVerifyPid() else {
+        try? FileManager.default.removeItem(at: lockDir)
+        return false
+      }
       acquired = true
       return true
     }
@@ -40,25 +60,34 @@ public final class CMLock {
     else {
       return false
     }
+    guard writeAndVerifyPid() else { return false }
+    acquired = true
+    return true
+  }
+
+  /// Zapisuje wlasny PID i POTWIERDZA go odczytem. `false` znaczy "nie umiem
+  /// udowodnic, ze blokada jest moja" - a to musi konczyc sie rezygnacja,
+  /// nie optymizmem.
+  ///
+  /// WAZNE: `removeItem` + `createDirectory` na sciezce przejecia NIE jest
+  /// atomowe - dwa procesy przejmujace ta sama osierocona blokade w
+  /// nakladajacym sie oknie moga obie odczytac "martwy PID", obie usunac
+  /// i utworzyc katalog na nowo, obie zapisac swoj PID - i obie zwrocic
+  /// `true`. Odczytujemy wlasnie zapisany plik z powrotem: jesli inny proces
+  /// zdazyl go nadpisac swoim PID-em pomiedzy zapisem a tym odczytem, wiemy,
+  /// ze przegralismy wyscig, i wycofujemy sie zamiast dzialac w falszywym
+  /// przekonaniu o wylacznosci. Nie eliminuje to calkowicie okna (obie strony
+  /// moga jeszcze przejsciowo "wygrac" tuz przed ta weryfikacja), ale
+  /// gwarantuje, ze co najmniej jedna z nich to wykryje i cofnie.
+  private func writeAndVerifyPid() -> Bool {
     writePid()
-    // WAZNE: `removeItem` + `createDirectory` powyzej NIE jest atomowe -
-    // dwa procesy przejmujace ta sama osierocona blokade w nakladajacym
-    // sie oknie moga obie odczytac "martwy PID", obie usunac i utworzyc
-    // katalog na nowo, obie zapisac swoj PID - i obie zwrocic `true`.
-    // Odczytujemy wlasnie zapisany plik z powrotem: jesli inny proces
-    // zdazyl go nadpisac swoim PID-em pomiedzy naszym `writePid()` a tym
-    // odczytem, wiemy, ze przegralismy wyscig, i wycofujemy sie zamiast
-    // dzialac w falszywym przekonaniu o wylacznosci. Nie eliminuje to
-    // calkowicie okna (obie strony moga jeszcze przejsciowo "wygrac" tuz
-    // przed ta weryfikacja), ale gwarantuje, ze co najmniej jedna z nich
-    // to wykryje i cofnie.
     guard
-      let verifyContent = try? String(contentsOf: pidFile, encoding: .utf8),
+      let verifyContent = try? String(
+        contentsOf: lockDir.appendingPathComponent("pid"), encoding: .utf8),
       Self.parsePid(from: verifyContent) == getpid()
     else {
       return false
     }
-    acquired = true
     return true
   }
 
@@ -224,6 +253,12 @@ public final class CMLock {
 /// Wykonuje `body` pod blokada `name`, zwalniajac ja automatycznie na wyjsciu
 /// (rowniez przy rzuconym bledzie) - odpowiednik `cm_acquire_lock` + `trap EXIT`.
 /// Zwraca `nil` bez wywolania `body`, jesli inna zywa instancja juz trzyma blokade.
+///
+/// `nil` znaczy **"nic sie nie wydarzylo"** i wolajacy MUSI to odroznic od
+/// wyniku `body`. Zapis w rodzaju `(await withCMLock("image") { ... }) ?? true`
+/// albo `!= nil ? ... : ...` zamieniajacy brak wykonania w sukces jest bledem:
+/// `attach`, ktore nie doszlo do skutku, zameldowaloby "Podpiete", a
+/// `detach`, ktore sie nie wykonalo - "wszystko wyslane".
 @discardableResult
 public func withCMLock<T>(_ name: String, _ body: () throws -> T) rethrows -> T? {
   let lock = CMLock(name: name)

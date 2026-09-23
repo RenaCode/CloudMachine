@@ -46,9 +46,48 @@ final class ImageProbeTests: XCTestCase {
     XCTAssertEqual(verdict, .nothingToProbe)
   }
 
-  func testNieczytelneListowanieToBrakProbki() {
+  // MARK: - Listowanie tez umie pasc
+
+  /// ZMIANA wzgledem poprzedniej wersji tego testu, ktora nazywala sie
+  /// `testNieczytelneListowanieToBrakProbki` i sprawdzala, ze KAZDY blad
+  /// listowania daje `.nothingToProbe`. Kodowala stan, ktory okazal sie
+  /// dziura: `BackupImageService.attachment` mapuje `.nothingToProbe` na
+  /// `.attached`, wiec martwy obraz uchodzil za zywy, a agent `gdrive-attach`
+  /// nie podpinal go przez godziny. Rozstrzyga teraz ZRODLO bledu, nie sam
+  /// fakt bledu: blad bez rozpoznanego errno urzadzenia nadal nie dowodzi
+  /// niczego o wolumenie i zostaje `.nothingToProbe`.
+  func testListowanieZBledemBezErrnoUrzadzeniaToBrakProbki() {
     struct Boom: Error {}
     let verdict = ImageProbe.probe(regularFiles: { throw Boom() }, readFirstByte: { _ in nil })
+    XCTAssertEqual(verdict, .nothingToProbe)
+  }
+
+  /// Po wygasnieciu `--dir-cache-time 5m` listowanie przestaje chodzic z cache
+  /// jadra i pada tym samym ENXIO, co odczyt. Wtedy jest juz dowodem smierci.
+  func testENXIONaListowaniuZnaczyMartwy() {
+    let verdict = ImageProbe.probe(
+      regularFiles: { throw POSIXError(.ENXIO) }, readFirstByte: { _ in nil })
+    XCTAssertEqual(verdict, .dead(errno: ENXIO))
+  }
+
+  /// Tak wyglada ten sam blad, gdy rzuca go Foundation: `contentsOfDirectory`
+  /// opakowuje errno w `NSCocoaErrorDomain` i chowa oryginal pod
+  /// `NSUnderlyingErrorKey`. Sonda musi rozpoznac obie postacie, bo zywa
+  /// sciezka (`regularFiles(in:)`) chodzi wlasnie przez Foundation.
+  func testENXIOOpakowaneDoNSErrorTezZnaczyMartwy() {
+    let underlying = NSError(domain: NSPOSIXErrorDomain, code: Int(ENXIO))
+    let cocoa = NSError(
+      domain: NSCocoaErrorDomain, code: 256,
+      userInfo: [NSUnderlyingErrorKey: underlying])
+    let verdict = ImageProbe.probe(
+      regularFiles: { throw cocoa }, readFirstByte: { _ in nil })
+    XCTAssertEqual(verdict, .dead(errno: ENXIO))
+  }
+
+  /// Brak uprawnien do katalogu to wlasciwosc katalogu, nie awaria wolumenu.
+  func testEACCESNaListowaniuToBrakProbki() {
+    let verdict = ImageProbe.probe(
+      regularFiles: { throw POSIXError(.EACCES) }, readFirstByte: { _ in nil })
     XCTAssertEqual(verdict, .nothingToProbe)
   }
 
