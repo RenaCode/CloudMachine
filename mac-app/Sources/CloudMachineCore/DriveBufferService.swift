@@ -540,16 +540,38 @@ public enum DriveBufferService {
     return String(decoding: data, as: UTF8.self)
   }
 
+  /// Locale, ktorym czytamy znaczniki czasu z logu rclone.
+  ///
+  /// `en_US_POSIX`, a NIE `Locale.current`. `DateFormatter` z ustalonym
+  /// `dateFormat` i domyslnym locale bierze z tego locale kalendarz: na
+  /// maszynie z kalendarzem buddyjskim (`th_TH`) "2026" znaczy rok buddyjski,
+  /// czyli gregorianski 1483, a przy kalendarzu perskim albo hidzri wychodzi
+  /// jeszcze inna data. Znacznik parsuje sie wtedy BEZ BLEDU i wypada 543 lata
+  /// za wczesnie, wiec `stamp < cutoff` konczy petle na pierwszej linii,
+  /// `errors` zostaje zerem i `uploadStalled()` melduje "nie ma zatoru"
+  /// dokladnie wtedy, gdy zator trwa - a dozorca bufora na tej podstawie nie
+  /// wstrzymuje Time Machine.
+  ///
+  /// Ta sama klasa bledu, co `LC_ALL=C` wymuszane w `CMLock` (patrz tam opis
+  /// realnego incydentu): tekst maszynowy czyta sie ustawieniami maszyny, nie
+  /// czlowieka.
+  public static let rcloneLogLocale = Locale(identifier: "en_US_POSIX")
+
   /// Czysta wersja rozpoznania zatoru - liczy sukcesy i bledy w oknie.
   ///
   /// Sukcesem jest linia `... : Copied (...)`, bledem `Received upload limit
   /// error`. Oba pochodza z tego samego logu i tego samego zdarzenia, wiec
   /// stosunek nie wymaga zadnej kalibracji miedzy maszynami.
+  ///
+  /// `locale` istnieje wylacznie po to, zeby test mogl wstrzyknac ZNANY ZLY
+  /// kalendarz - patrz `rcloneLogLocale`. Kod produkcyjny go nie podaje.
   public static func logShowsUploadStalled(
     _ text: String, now: Date, within minutes: Int,
-    minErrors: Int = 300, maxSuccessRatio: Double = 0.1
+    minErrors: Int = 300, maxSuccessRatio: Double = 0.1,
+    locale: Locale = DriveBufferService.rcloneLogLocale
   ) -> Bool {
     let formatter = DateFormatter()
+    formatter.locale = locale
     formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
     formatter.timeZone = TimeZone.current
     let cutoff = now.addingTimeInterval(-Double(minutes) * 60)
@@ -580,9 +602,14 @@ public enum DriveBufferService {
   /// backup wpadlby w cykl pauza-wznowienie-pauza.
   ///
   /// Czysta wersja, zeby dalo sie ja sprawdzic testem bez pliku i bez zegara.
-  public static func logMentionsUploadLimit(_ text: String, now: Date, within minutes: Int) -> Bool
-  {
+  ///
+  /// `locale` jak w `logShowsUploadStalled` - tylko dla testu.
+  public static func logMentionsUploadLimit(
+    _ text: String, now: Date, within minutes: Int,
+    locale: Locale = DriveBufferService.rcloneLogLocale
+  ) -> Bool {
     let formatter = DateFormatter()
+    formatter.locale = locale
     formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
     formatter.timeZone = TimeZone.current
     let cutoff = now.addingTimeInterval(-Double(minutes) * 60)

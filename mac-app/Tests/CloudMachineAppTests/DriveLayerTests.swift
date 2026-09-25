@@ -129,6 +129,12 @@ final class DriveLayerTests: XCTestCase {
 final class DailyQuotaDetectionTests: XCTestCase {
   private let formatter: DateFormatter = {
     let f = DateFormatter()
+    // Probka udaje log rclone, wiec musi wygladac tak samo na kazdej maszynie.
+    // Literal, a NIE `DriveBufferService.rcloneLogLocale`: generator probki nie
+    // moze zalezec od stalej, ktorej poprawnosc wlasnie sprawdzamy - inaczej
+    // podmiana tej stalej przestawilaby generator razem z parserem i test
+    // przechodzilby w obu stanach.
+    f.locale = Locale(identifier: "en_US_POSIX")
     f.dateFormat = "yyyy/MM/dd HH:mm:ss"
     return f
   }()
@@ -171,6 +177,29 @@ final class DailyQuotaDetectionTests: XCTestCase {
     XCTAssertFalse(DriveBufferService.logMentionsUploadLimit(log, now: now, within: 30))
   }
 
+  // MARK: - Ustalenie 15a: kalendarz czlowieka nie moze uciszac parsera
+
+  /// ZNANY ZLY KALENDARZ - taki, jaki `Locale.current` oddaje na tajskim Macu.
+  ///
+  /// `DateFormatter` z ustalonym `dateFormat` bierze kalendarz z locale, wiec
+  /// "2026/09/25" parsuje sie BEZ BLEDU jako rok buddyjski 2026, czyli
+  /// gregorianski 1483. Data wypada 543 lata przed oknem, `stamp < cutoff`
+  /// konczy petle na pierwszej linii i realny limit dysku przestaje istniec.
+  func testKalendarzBuddyjskiKasowalWykrycieLimitu() {
+    let now = Date()
+    let log = line(
+      1,
+      "googleapi: Error 403: The user has exceeded their Drive storage quota, storageQuotaExceeded",
+      now: now)
+    XCTAssertFalse(
+      DriveBufferService.logMentionsUploadLimit(
+        log, now: now, within: 30, locale: Locale(identifier: "th_TH@calendar=buddhist")),
+      "to jest opis USTERKI, nie oczekiwanie - naprawa siedzi w domyslnym locale")
+    XCTAssertTrue(
+      DriveBufferService.logMentionsUploadLimit(log, now: now, within: 30),
+      "domyslny parser musi czytac ten sam log niezaleznie od ustawien czlowieka")
+  }
+
   func testEmptyLogIsNotAQuotaError() {
     XCTAssertFalse(DriveBufferService.logMentionsUploadLimit("", now: Date(), within: 30))
   }
@@ -184,6 +213,12 @@ final class DailyQuotaDetectionTests: XCTestCase {
 final class UploadStallDetectionTests: XCTestCase {
   private let formatter: DateFormatter = {
     let f = DateFormatter()
+    // Probka udaje log rclone, wiec musi wygladac tak samo na kazdej maszynie.
+    // Literal, a NIE `DriveBufferService.rcloneLogLocale`: generator probki nie
+    // moze zalezec od stalej, ktorej poprawnosc wlasnie sprawdzamy - inaczej
+    // podmiana tej stalej przestawilaby generator razem z parserem i test
+    // przechodzilby w obu stanach.
+    f.locale = Locale(identifier: "en_US_POSIX")
     f.dateFormat = "yyyy/MM/dd HH:mm:ss"
     return f
   }()
@@ -259,6 +294,31 @@ final class UploadStallDetectionTests: XCTestCase {
   /// bez dolnego progu liczby bledow stosunek 0/0 dalby falszywy alarm.
   func testSilenceIsNotAStall() {
     XCTAssertFalse(DriveBufferService.logShowsUploadStalled("", now: Date(), within: 30))
+  }
+
+  // MARK: - Ustalenie 15a: kalendarz czlowieka nie moze uciszac zatoru
+
+  /// Ten sam zator, ktory `testRealStallIsDetected` wykrywa, znikal bez sladu
+  /// na maszynie z kalendarzem niegregorianskim: wszystkie linie wypadaly poza
+  /// okno, `errors` zostawalo zerem i `uploadStalled()` meldowal "nie ma
+  /// zatoru" - a dozorca bufora na tej podstawie NIE wstrzymuje Time Machine.
+  func testKalendarzBuddyjskiKasowalWykrycieZatoru() {
+    let now = Date()
+    let log = sample(errors: 5467, successes: 59, minutesAgo: 5, now: now)
+    XCTAssertFalse(
+      DriveBufferService.logShowsUploadStalled(
+        log, now: now, within: 30, locale: Locale(identifier: "th_TH@calendar=buddhist")),
+      "to jest opis USTERKI, nie oczekiwanie")
+    XCTAssertTrue(
+      DriveBufferService.logShowsUploadStalled(log, now: now, within: 30),
+      "domyslnie parsujemy ustalonym en_US_POSIX, wiec zator zostaje zatorem")
+  }
+
+  /// Sama stala - zeby "naprawa" polegajaca na cofnieciu jej do
+  /// `Locale.current` nie przeszla niezauwazona na maszynie, ktora akurat ma
+  /// kalendarz gregorianski (czyli na tej).
+  func testParserLoguJestPinowanyNaPosix() {
+    XCTAssertEqual(DriveBufferService.rcloneLogLocale.identifier, "en_US_POSIX")
   }
 
   /// Odroczenie wysylki musi isc do rclone z jednej stalej - inaczej zmiana
