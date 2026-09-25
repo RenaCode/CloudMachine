@@ -366,14 +366,20 @@ public enum DriveBufferService {
   /// Wolac PO tym, jak zapisy z odpiecia zdazyly trafic do kolejki - pozycje
   /// dolozone pozniej nie zostana ruszone.
   ///
-  /// Zwraca liczbe pozycji, ktorym przesunieto termin, albo `nil`, gdy rclone
-  /// nie odpowiedzial na pytanie o kolejke.
+  /// Zwraca `ExpiryOutcome` - ile pozycji ZASTALISMY i ilu udalo sie przesunac
+  /// termin - albo `nil`, gdy rclone nie odpowiedzial na pytanie o kolejke.
   ///
   /// `nil` i `0` to DWIE ROZNE RZECZY i dlatego typ jest opcjonalny. Do 23
   /// wrzesnia 2026 obie sytuacje - "kolejka byla pusta" i "nie dostalismy
   /// odpowiedzi" - wychodzily stad jako `0`, wiec `detach` milczal w logu
   /// dokladnie w tym przypadku, w ktorym terminow NIE przesunieto i drenaz
   /// mogl potrwac cale `writeBackSeconds` (dziesiec minut) zamiast chwili.
+  ///
+  /// Sama liczba przesunietych pozycji nie wystarcza, bo TRZECI przypadek
+  /// wyglada jak pierwszy: gdy kolejka ma pozycje, ale kazde
+  /// `vfs/queue-set-expiry` padnie, "przesunieto 0" bylo nieodroznialne od
+  /// "nie bylo czego przesuwac". Dlatego `queued` i `moved` sa osobno - patrz
+  /// `BackupImageService.expiryLogLine`.
   ///
   /// Limit na samo listowanie kolejki podniesiony z 30 s do 60 s: ten sam plik
   /// dokumentuje pomiar **36,7 s** dla LZEJSZEGO `vfs/stats` przy zapchanym
@@ -385,8 +391,24 @@ public enum DriveBufferService {
   /// wywolanie decyduje o calej funkcji, a to jest jedno z setek i jego strata
   /// kosztuje jedna pozycje. Przy kilkuset pozycjach sufit 60 s na sztuke
   /// zamienilby odpiecie w operacje bez gornego ograniczenia czasu.
+  /// Ile pozycji do przyspieszenia bylo w kolejce i ilu FAKTYCZNIE przesunieto
+  /// termin. Dwa pola, nie jedno, bo "zero" znaczy cos innego w zaleznosci od
+  /// tego, ile bylo prob - patrz `expireQueuedUploads`.
+  public struct ExpiryOutcome: Sendable, Equatable {
+    /// Pozycje zastane w kolejce, ktore dalo sie przyspieszyc (bez tych juz
+    /// wysylanych - patrz `parseQueueIDs`).
+    public var queued: Int
+    /// Ile z nich rclone potwierdzil.
+    public var moved: Int
+
+    public init(queued: Int, moved: Int) {
+      self.queued = queued
+      self.moved = moved
+    }
+  }
+
   @discardableResult
-  public static func expireQueuedUploads() async -> Int? {
+  public static func expireQueuedUploads() async -> ExpiryOutcome? {
     guard
       let result = try? await CMTooling.runRclone(
         ["rc", "--url", rcAddress, "vfs/queue"], timeout: 60),
@@ -402,7 +424,7 @@ public enum DriveBufferService {
         timeout: 30)
       if response?.succeeded == true { moved += 1 }
     }
-    return moved
+    return ExpiryOutcome(queued: ids.count, moved: moved)
   }
 
   /// Czysta wersja: numery pozycji z odpowiedzi `vfs/queue`, ktorym da sie
@@ -518,16 +540,38 @@ public enum DriveBufferService {
     return String(decoding: data, as: UTF8.self)
   }
 
+  /// Locale, ktorym czytamy znaczniki czasu z logu rclone.
+  ///
+  /// `en_US_POSIX`, a NIE `Locale.current`. `DateFormatter` z ustalonym
+  /// `dateFormat` i domyslnym locale bierze z tego locale kalendarz: na
+  /// maszynie z kalendarzem buddyjskim (`th_TH`) "2026" znaczy rok buddyjski,
+  /// czyli gregorianski 1483, a przy kalendarzu perskim albo hidzri wychodzi
+  /// jeszcze inna data. Znacznik parsuje sie wtedy BEZ BLEDU i wypada 543 lata
+  /// za wczesnie, wiec `stamp < cutoff` konczy petle na pierwszej linii,
+  /// `errors` zostaje zerem i `uploadStalled()` melduje "nie ma zatoru"
+  /// dokladnie wtedy, gdy zator trwa - a dozorca bufora na tej podstawie nie
+  /// wstrzymuje Time Machine.
+  ///
+  /// Ta sama klasa bledu, co `LC_ALL=C` wymuszane w `CMLock` (patrz tam opis
+  /// realnego incydentu): tekst maszynowy czyta sie ustawieniami maszyny, nie
+  /// czlowieka.
+  public static let rcloneLogLocale = Locale(identifier: "en_US_POSIX")
+
   /// Czysta wersja rozpoznania zatoru - liczy sukcesy i bledy w oknie.
   ///
   /// Sukcesem jest linia `... : Copied (...)`, bledem `Received upload limit
   /// error`. Oba pochodza z tego samego logu i tego samego zdarzenia, wiec
   /// stosunek nie wymaga zadnej kalibracji miedzy maszynami.
+  ///
+  /// `locale` istnieje wylacznie po to, zeby test mogl wstrzyknac ZNANY ZLY
+  /// kalendarz - patrz `rcloneLogLocale`. Kod produkcyjny go nie podaje.
   public static func logShowsUploadStalled(
     _ text: String, now: Date, within minutes: Int,
-    minErrors: Int = 300, maxSuccessRatio: Double = 0.1
+    minErrors: Int = 300, maxSuccessRatio: Double = 0.1,
+    locale: Locale = DriveBufferService.rcloneLogLocale
   ) -> Bool {
     let formatter = DateFormatter()
+    formatter.locale = locale
     formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
     formatter.timeZone = TimeZone.current
     let cutoff = now.addingTimeInterval(-Double(minutes) * 60)
@@ -558,9 +602,14 @@ public enum DriveBufferService {
   /// backup wpadlby w cykl pauza-wznowienie-pauza.
   ///
   /// Czysta wersja, zeby dalo sie ja sprawdzic testem bez pliku i bez zegara.
-  public static func logMentionsUploadLimit(_ text: String, now: Date, within minutes: Int) -> Bool
-  {
+  ///
+  /// `locale` jak w `logShowsUploadStalled` - tylko dla testu.
+  public static func logMentionsUploadLimit(
+    _ text: String, now: Date, within minutes: Int,
+    locale: Locale = DriveBufferService.rcloneLogLocale
+  ) -> Bool {
     let formatter = DateFormatter()
+    formatter.locale = locale
     formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
     formatter.timeZone = TimeZone.current
     let cutoff = now.addingTimeInterval(-Double(minutes) * 60)

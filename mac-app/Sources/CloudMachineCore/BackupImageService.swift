@@ -567,18 +567,45 @@ public enum BackupImageService {
     // Bez tego drenaz trwalby tyle, co `writeBackSeconds` (dziesiec minut),
     // czyli dluzej niz ponizszy limit czasu - i odpiecie zglaszaloby
     // niepowodzenie za kazdym razem.
-    switch await DriveBufferService.expireQueuedUploads() {
-    case .none:
-      // Brak odpowiedzi to NIE pusta kolejka - patrz `expireQueuedUploads`.
-      CMLogger.log(
-        "Odpiecie: rclone nie odpowiedzial na pytanie o kolejke - terminow wysylki NIE"
-          + " przesunieto, drenaz moze trwac do \(DriveBufferService.writeBackSeconds / 60) min")
-    case .some(0):
-      CMLogger.log("Odpiecie: kolejka pusta - nie bylo czego przyspieszac")
-    case .some(let forced):
-      CMLogger.log("Odpiecie: wymuszono wysylke \(forced) pozycji z kolejki")
-    }
+    CMLogger.log(expiryLogLine(await DriveBufferService.expireQueuedUploads()))
     return detachVerdict(settled: await DriveBufferService.statsWhenIdle(timeout: 600))
+  }
+
+  /// Co odpiecie wpisuje do logu po probie przyspieszenia kolejki.
+  ///
+  /// TRZY rozne rzeczy wygladaly tu jak dwie. "Nie dostalismy odpowiedzi" od
+  /// "kolejka byla pusta" odroznilismy 23.09.2026, ale trzeci przypadek -
+  /// kolejka PELNA, a kazde `vfs/queue-set-expiry` padlo - nadal wychodzil
+  /// z `expireQueuedUploads` jako `0` i log meldowal "kolejka pusta".
+  /// Zmierzony stan tej maszyny w chwili audytu: 462 pozycje w kolejce.
+  ///
+  /// Tryb awarii jest ciezszy niz sama nieprawda w logu: czlowiek czyta te
+  /// linie dokladnie wtedy, gdy decyduje, czy wolno skasowac bufor. "Kolejka
+  /// pusta" czyta sie jako "nic nie czeka na wyslanie", a znaczylo
+  /// "czekaja 462 pozycje i zadnej nie udalo sie ruszyc".
+  ///
+  /// Wydzielone i CZYSTE, zeby te trzy przypadki dalo sie sprawdzic testem bez
+  /// rclone. Funkcja jest wylacznie opisem: o czekaniu na drenaz i o werdykcie
+  /// decyduje `detachLocked`/`detachVerdict` i ta poprawka ich nie dotyka.
+  static func expiryLogLine(_ outcome: DriveBufferService.ExpiryOutcome?) -> String {
+    let drenaz = "drenaz moze trwac do \(DriveBufferService.writeBackSeconds / 60) min"
+    guard let outcome else {
+      // Brak odpowiedzi to NIE pusta kolejka - patrz `expireQueuedUploads`.
+      return "Odpiecie: rclone nie odpowiedzial na pytanie o kolejke - terminow wysylki NIE"
+        + " przesunieto, \(drenaz)"
+    }
+    if outcome.queued == 0 {
+      return "Odpiecie: kolejka pusta - nie bylo czego przyspieszac"
+    }
+    if outcome.moved == 0 {
+      return "Odpiecie: UWAGA - kolejka ma \(outcome.queued) pozycji i ANI JEDNEJ nie udalo sie"
+        + " przyspieszyc (rclone odrzucil kazde vfs/queue-set-expiry), \(drenaz)"
+    }
+    if outcome.moved < outcome.queued {
+      return "Odpiecie: wymuszono wysylke \(outcome.moved) z \(outcome.queued) pozycji kolejki -"
+        + " pozostalym \(outcome.queued - outcome.moved) NIE przesunieto terminu, \(drenaz)"
+    }
+    return "Odpiecie: wymuszono wysylke \(outcome.moved) pozycji z kolejki"
   }
 
   /// Czysta wersja werdyktu o odpieciu - `settled` to odczyt kolejki z chwili,

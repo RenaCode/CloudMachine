@@ -90,8 +90,12 @@ final class CloudMachineController: ObservableObject {
       readiness.ready ? .ready : .missing(readiness.missing, readiness.remedies)
     status.remoteConfigured = await RemoteConfigurer.isConfigured(
       remoteName: DriveBufferService.remoteName)
-    status.hasFullDiskAccess = FileManager.default.isReadableFile(
-      atPath: NSHomeDirectory() + "/Library/Application Support/com.apple.TCC")
+    // REALNY odczyt tego pliku, o ktory naprawde chodzi - patrz
+    // `BackupHealth.preferencesReadable`. Wczesniej bylo tu
+    // `isReadableFile` (czyli `access(R_OK)`) na KATALOGU
+    // `~/Library/Application Support/com.apple.TCC`: zla sciezka i sprawdzenie,
+    // ktore pod TCC niczego nie dowodzi.
+    status.hasFullDiskAccess = BackupHealth.preferencesReadable()
   }
 
   /// Stan wlasnych poswiadczen OAuth. Sprawdzamy TYLKO istnienie wpisu -
