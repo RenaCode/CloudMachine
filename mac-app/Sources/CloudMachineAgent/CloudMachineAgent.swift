@@ -37,10 +37,26 @@ struct CloudMachineAgent: AsyncParsableCommand {
 /// "config uszkodzony" zamiast powtarzania tego w kazdym pliku.
 enum CLIContext {
   static func load() async -> (config: MachinesConfig, machineKey: String) {
-    let (config, corruption) = ConfigStore.loadOrInitialize()
-    if let corruption {
+    let outcome = ConfigStore.loadOrInitialize()
+    // PRZERYWAMY, nie ostrzegamy. Wczesniej ten sam komunikat - "oryginal
+    // zachowany na dysku z kopia zapasowa obok" - szedl takze wtedy, gdy
+    // `backupCorruptFile()` zwrocilo `nil`, czyli gdy zadnej kopii nie bylo.
+    // Praca na pustej konfiguracji konczy sie nadpisaniem jedynego egzemplarza
+    // przy pierwszym zapisie, a tego juz nie da sie cofnac.
+    guard let config = outcome.config else {
       CMLogger.log(
-        "BLAD: plik konfiguracyjny jest uszkodzony (\(corruption.localizedDescription)) - uzywam pustej konfiguracji w pamieci, oryginal zachowany na dysku z kopia zapasowa obok."
+        """
+        PRZERWANO: plik konfiguracyjny \(CMPaths.configPath.path) jest uszkodzony \
+        (\(outcome.corruption?.localizedDescription ?? "nieznany blad")) i NIE UDALO SIE \
+        odlozyc jego kopii. Z pusta konfiguracja w pamieci pierwszy zapis nadpisalby \
+        jedyny egzemplarz. Skopiuj ten plik gdzie indziej, napraw go albo usun - \
+        i uruchom polecenie ponownie.
+        """)
+      exit(1)
+    }
+    if case .corruptButBackedUp(_, let backup, let error) = outcome {
+      CMLogger.log(
+        "BLAD: plik konfiguracyjny jest uszkodzony (\(error.localizedDescription)) - uzywam pustej konfiguracji w pamieci, oryginal skopiowany do \(backup.path)."
       )
     }
     let key = await MachineIdentity.currentKey()
