@@ -48,9 +48,28 @@ public enum HealthAlert {
   /// Zglasza problemy, jesli sa NOWE albo jesli minal czas przypomnienia.
   /// Zwraca `true`, gdy faktycznie cos zgloszono I DORECZONO.
   ///
-  /// `stateFile` i `deliver` sa podmienialne, zeby dalo sie sprawdzic testem
-  /// CALA sciezke - z odmowa doreczenia wlacznie - bez pisania do prawdziwego
-  /// katalogu uzytkownika i bez wyswietlania komukolwiek powiadomien.
+  /// `stateFile`, `deliver` i `log` sa podmienialne, zeby dalo sie sprawdzic
+  /// testem CALA sciezke - z odmowa doreczenia wlacznie - bez pisania do
+  /// prawdziwego katalogu uzytkownika, bez wyswietlania komukolwiek
+  /// powiadomien i bez dopisywania zmyslonych awarii do produkcyjnego logu.
+  ///
+  /// `log` jest wstrzykiwalny z dokladnie tego samego powodu, co
+  /// `BufferGuardService.Probes.log`. Dopoki nie byl, kazdy przebieg
+  /// `swift test` dopisywal swoje wymyslone "AWARIA BACKUPU" do prawdziwego
+  /// `cloudmachine.log` - zmierzone 25.09.2026: 117 linii zawierajacych
+  /// slowo "szczegoly", ktore istnieje wylacznie w
+  /// `HealthAlertTests.raport(_:)`, wszystkie z jednego dnia. Ten log jest
+  /// JEDYNYM sladem po awariach backupu i przestal pozwalac odroznic
+  /// zdarzenia, ktore sie staly, od tych, ktore ktos tylko przetestowal -
+  /// a po awarii czyta sie go wlasnie po to, zeby ustalic, co sie stalo.
+  ///
+  /// Odrzucone: globalne przekierowanie `CMLogger` na plik tymczasowy w
+  /// `setUp` testu. To wspolny stan procesu, wiec przy testach biegnacych
+  /// rownolegle uciszalby rowniez te, ktore maja pisac, a wlaczony przez
+  /// pomylke w kodzie produkcyjnym uciszylby produkcje - czyli zamienilby
+  /// halas w logu na cisze w logu, co jest zamiana na gorsze. Domyslna
+  /// wartosc tego parametru idzie do prawdziwego logu i zaden kod
+  /// produkcyjny jej nie podaje.
   @discardableResult
   public static func report(
     _ report: BackupHealth.Report,
@@ -58,7 +77,8 @@ public enum HealthAlert {
     stateFile: URL = HealthAlert.stateFile,
     deliver: @Sendable (String, String) async -> Bool = {
       await notify(title: $0, message: $1)
-    }
+    },
+    log: @Sendable (String) -> Void = { CMLogger.log($0) }
   ) async -> Bool {
     guard let first = report.problems.first else {
       // Wyzdrowienie kasuje stan, zeby nastepna awaria zglosila sie od razu,
@@ -72,7 +92,7 @@ public enum HealthAlert {
     if !shouldAlert(identity: identity, now: now, stateFile: stateFile) { return false }
 
     let body = report.problems.map { "\($0.summary): \($0.detail)" }.joined(separator: "\n")
-    CMLogger.log("AWARIA BACKUPU: \(body)")
+    log("AWARIA BACKUPU: \(body)")
     let delivered = await deliver("CloudMachine: backup nie dziala", first.summary)
 
     // Stan zapisujemy ZAWSZE, ale z informacja, czy powiadomienie doszlo.
@@ -83,7 +103,7 @@ public enum HealthAlert {
     // Alarm ginal po cichu - czyli nadzor ginal razem z nadzorowanym, przed
     // czym ostrzega naglowek tego pliku.
     if !delivered {
-      CMLogger.log(
+      log(
         "NIE UDALO SIE pokazac powiadomienia o awarii backupu. Tresc poszla do logu powyzej; sprobuje ponownie przy nastepnym sprawdzeniu."
       )
     }
