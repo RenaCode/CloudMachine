@@ -212,6 +212,22 @@ public enum DriveBufferService {
     /// istniejacych tylko lokalnie - podczas gdy `UploadState` z tych samych
     /// licznikow wyprowadzal juz `.failedFiles(...)` i "WYMAGA REAKCJI".
     public var isQuiet: Bool { isIdle && erroredFiles == 0 }
+
+    /// Ile pozycji CZEKA na wyslanie: kolejka plus to, co wlasnie leci.
+    ///
+    /// To jest ta wielkosc, z ktorej dozorca bufora wyprowadza swoja miare
+    /// (patrz `BufferGuardService.backlogGB`) - a NIE `bytesUsed`. Rozmiar
+    /// cache'a przy `--vfs-cache-max-size 100G` i `--vfs-cache-max-age 9999h`
+    /// stoi pod limitem stale (w dzienniku 281 pomiarow, minimum 99 GB), bo
+    /// rclone trzyma tam takze to, co dawno wyslal. Zaleglosc niewyslana jest
+    /// jedyna z tych dwoch liczb, ktora odpowiada na pytanie "czy wysylka
+    /// nadaza".
+    ///
+    /// `uploadsInProgress` wchodzi do sumy, bo pozycja w trakcie wysylki tez
+    /// jeszcze nie jest na Dysku i tez zajmuje bufor. Przy `--transfers 8` to
+    /// najwyzej osiem pozycji, ale pusta kolejka z osmioma transferami w toku
+    /// nie jest zerowa zaleglosci.
+    public var unsentItems: Int { uploadsQueued + uploadsInProgress }
   }
 
   /// Odczytuje stan kolejki przez interfejs sterujacy rclone.
@@ -423,18 +439,36 @@ public enum DriveBufferService {
     }
   }
 
-  /// Rozmiar bufora w bajtach - z obchodu katalogu.
+  /// MIEJSCE ZAJETE NA DYSKU przez katalog bufora. `nil` = NIE ZMIERZONO.
   ///
-  /// Uzywane TYLKO awaryjnie, gdy interfejs sterujacy rclone nie odpowiada.
-  /// Normalnie liczbe podaje samo rclone (`QueueStats.bytesUsed`): obchod
-  /// katalogu to 6504 wywolania stat, a przy odswiezaniu co 10 sekund
+  /// Normalnie rozmiar cache'a podaje samo rclone (`QueueStats.bytesUsed`):
+  /// obchod katalogu to 6504 wywolania stat, a przy odswiezaniu co 10 sekund
   /// niepotrzebne obciazenie dysku, na ktory akurat leci backup.
-  public static func cacheSizeBytesByWalk() -> UInt64 {
+  ///
+  /// UWAGA: to NIE jest zapas dla miary, na ktorej dozorca podejmuje decyzje,
+  /// i nie wolno go tam podstawiac. Dwa powody, oba zmierzone:
+  ///
+  /// 1. Ta funkcja liczy MIEJSCE ZAJETE NA DYSKU (`totalFileAllocatedSize`),
+  ///    czyli wielkosc NIEPOROWNYWALNA z limitem `--vfs-cache-max-size` -
+  ///    potrafi go przekroczyc. Stad "bufor 155 GB" przy limicie 100 GB
+  ///    w jedynej linii PAUZA w calym dzienniku (23.09.2026 03:34). Godzine
+  ///    pozniej czujka zapisala "Interfejs sterujacy rclone nie odpowiada":
+  ///    brak odpowiedzi zamieniono na liczbe z INNEJ miary, i ta liczba
+  ///    uruchomila nieodwracalna pauze.
+  /// 2. Gdy obchod padnie (odmowa praw, znikniete `~/.cloudmachine`), wynik
+  ///    `0` wyglada jak PUSTY bufor, czyli jak spelniony warunek wznowienia
+  ///    Time Machine wstrzymanego dlatego, ze bufor byl pelny. Dokladnie ten
+  ///    wzorzec zamknal `BufferGuardService.freeGB()` dla `statfs` - stad
+  ///    tutaj `nil`, a nie zero.
+  ///
+  /// Zostaje wiec do JEDNEGO: powiedzenia czlowiekowi, ile miejsca na dysku
+  /// zajmuje cache. Zadna decyzja tego nie czyta.
+  public static func cacheSizeBytesByWalk() -> UInt64? {
     guard
       let enumerator = FileManager.default.enumerator(
         at: cacheDir, includingPropertiesForKeys: [.totalFileAllocatedSizeKey],
         options: [.skipsHiddenFiles])
-    else { return 0 }
+    else { return nil }
     var total: UInt64 = 0
     for case let url as URL in enumerator {
       let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey])
@@ -468,10 +502,29 @@ public enum DriveBufferService {
   /// Chwilowa przepustnica (`userRateLimitExceeded`) nadal NIE jest tu lapana -
   /// patrz `logMentionsUploadLimit`. To ona kiedys wstrzymala backup po
   /// 109 GiB i to jej dotyczyla ostroznosc, nie stanu montowania.
-  public static func hitStorageQuota() -> Bool {
-    guard let text = recentLog(bytes: 256 * 1024) else { return false }
+  ///
+  /// `nil` = LOGU NIE DA SIE PRZECZYTAC, co jest czyms innym niz "nie ma
+  /// sladu limitu". Wczesniej oba przypadki wychodzily stad jako `false`,
+  /// czyli jako odpowiedz "nie ma problemu" na pytanie, na ktore nie bylo
+  /// odpowiedzi - a dozorca nie wstrzymuje wtedy backupu na brak miejsca na
+  /// Dysku. To nie jest teoretyczne: log rclone ma prawa `-rw-r-----`,
+  /// a przy starcie jest przenoszony na `.1` (patrz `rotateLogIfLarge`).
+  public static func hitStorageQuotaState(logFile: URL? = nil) -> Bool? {
+    guard let text = recentLog(bytes: 256 * 1024, from: logFile ?? Self.logFile) else {
+      return nil
+    }
     return logMentionsUploadLimit(text, now: Date(), within: 30)
   }
+
+  /// Wersja DO POKAZANIA CZLOWIEKOWI, gdzie trzeciego stanu nie ma gdzie
+  /// wstawic (`BufferStatus.driveFull`, `UploadState.from`).
+  ///
+  /// ZADNA DECYZJA nie ma prawa jej uzywac: `?? false` to dokladnie to
+  /// podstawienie, ktore opisuje komentarz wyzej. Dozorca bufora czyta
+  /// `hitStorageQuotaState()` i sam rozstrzyga, co zrobic z "nie wiem".
+  /// Trzeci stan w interfejsie wymaga zmiany `BufferStatus` i
+  /// `CloudMachineController` - to osobna zmiana, poza ta galezia.
+  public static func hitStorageQuota() -> Bool { hitStorageQuotaState() ?? false }
 
   /// Czy wysylka faktycznie STOI - rozpoznane po zachowaniu, nie po tresci.
   ///
@@ -490,13 +543,25 @@ public enum DriveBufferService {
   ///
   /// `minErrors` chroni przed cisza: w oknie bez ruchu jest zero bledow
   /// i zero sukcesow, a to nie jest zator.
-  public static func uploadStalled() -> Bool {
+  ///
+  /// `nil` = LOGU NIE DA SIE PRZECZYTAC. Rozroznienie jest tu grozniejsze niz
+  /// przy samym pomiarze: `false` szedl dalej do `reportUploadStall`, ktore
+  /// USUWALO znacznik zatoru i zapisywalo "Wysylka na Google Drive ruszyla
+  /// z powrotem" - twierdzenie o zdarzeniu, ktorego nikt nie sprawdzil, na
+  /// podstawie pliku, ktorego nikt nie przeczytal.
+  public static func uploadStalledState(logFile: URL? = nil) -> Bool? {
     // Wieksze okno niz przy tescie tekstowym: w trakcie zatoru log rosnie
     // o okolo 90 KB na minute, wiec 256 KB pokazaloby tylko ostatnie trzy
     // minuty i stosunek liczylby sie z probki bez ani jednego sukcesu.
-    guard let text = recentLog(bytes: 4 * 1024 * 1024) else { return false }
+    guard let text = recentLog(bytes: 4 * 1024 * 1024, from: logFile ?? Self.logFile) else {
+      return nil
+    }
     return logShowsUploadStalled(text, now: Date(), within: 30)
   }
+
+  /// Wersja do pokazania czlowiekowi - patrz `hitStorageQuota()`, ten sam
+  /// powod i to samo ostrzezenie: zadna decyzja nie czyta tej wersji.
+  public static func uploadStalled() -> Bool { uploadStalledState() ?? false }
 
   /// Zbiorcza odpowiedz "wysylka na Dysk nie idzie" - do pokazania
   /// uzytkownikowi. Dozorca bufora NIE uzywa tej funkcji, bo dla niego roznica
@@ -506,9 +571,16 @@ public enum DriveBufferService {
     hitStorageQuota() || uploadStalled()
   }
 
-  /// Ogon logu rclone jako tekst. Zwraca `nil`, gdy logu nie ma.
-  private static func recentLog(bytes: UInt64) -> String? {
-    guard let handle = try? FileHandle(forReadingFrom: logFile) else { return nil }
+  /// Ogon logu rclone jako tekst. `nil` = pliku NIE DA SIE PRZECZYTAC: nie ma
+  /// go, nie ma do niego prawa albo odczyt padl.
+  ///
+  /// Wolajacy MUSI oddac to `nil` dalej jako "nie wiem". Brak wpisow o limicie
+  /// i brak dostepu do logu to dwie rozne rzeczy, a tylko pierwsza znaczy "nie
+  /// ma problemu". Plik bierzemy z parametru, zeby oba pytania zadawane temu
+  /// logowi dalo sie sprawdzic testem na wlasnym pliku - bez `~/.cloudmachine`
+  /// i bez zgadywania praw.
+  private static func recentLog(bytes: UInt64, from file: URL) -> String? {
+    guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
     defer { try? handle.close() }
     let size = (try? handle.seekToEnd()) ?? 0
     try? handle.seek(toOffset: size > bytes ? size - bytes : 0)

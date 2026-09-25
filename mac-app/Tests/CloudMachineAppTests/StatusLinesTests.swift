@@ -77,4 +77,35 @@ final class StatusLinesTests: XCTestCase {
       tekst.contains(BackupHealth.stamp(kiedy)),
       "bez daty nie wiadomo, czy alarm jest swiezy, czy sprzed tygodnia")
   }
+
+  // MARK: - Cache a zaleglosc: DWIE rozne wielkosci
+
+  /// Jeden wiersz "Bufor: 103 GB z 100G" odpowiadal na pytanie, na ktore nie
+  /// umial odpowiedziec: czy wysylka nadaza. Cache stoi pod limitem stale,
+  /// a o zaleglosci mowi dopiero drugi wiersz - dlatego sa dwa.
+  func testCacheIZaleglocSaOsobnymiWierszami() {
+    XCTAssertEqual(StatusLines.cacheSize(103, limitGB: 100), "103 GB z 100G")
+    XCTAssertEqual(StatusLines.backlog(14, items: 462), "~14 GB (462 pozycji)")
+  }
+
+  /// "~" nie jest ozdoba: gigabajty zaleglosci sa SZACOWANE z liczby pozycji,
+  /// a liczba pozycji jest pomiarem. Wiersz podajacy szacunek jako pomiar
+  /// ukrywa, jak mocna jest podstawa decyzji o wstrzymaniu backupu.
+  func testZaleglocJestOznaczonaJakoSzacunekIPodajePomiar() {
+    let linia = StatusLines.backlog(14, items: 462)
+    XCTAssertTrue(linia.hasPrefix("~"), "dostalem: \(linia)")
+    XCTAssertTrue(linia.contains("462"), "dostalem: \(linia)")
+  }
+
+  /// Brak odpowiedzi rclone nie moze wygladac na zero ani na "Optional(0)".
+  func testBrakOdpowiedziRcloneJestNazwanyWObuWierszach() {
+    let cache = StatusLines.cacheSize(nil, limitGB: 100)
+    XCTAssertTrue(cache.contains("NIE ZMIERZONO"), "dostalem: \(cache)")
+    XCTAssertFalse(cache.contains("0 GB"), "dostalem: \(cache)")
+
+    let zaleglosc = StatusLines.backlog(nil, items: nil)
+    XCTAssertTrue(zaleglosc.contains("NIE WIADOMO"), "dostalem: \(zaleglosc)")
+    XCTAssertFalse(zaleglosc.contains("Optional"), "dostalem: \(zaleglosc)")
+    XCTAssertFalse(zaleglosc.contains("~0"), "dostalem: \(zaleglosc)")
+  }
 }

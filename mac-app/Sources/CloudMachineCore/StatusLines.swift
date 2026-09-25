@@ -39,6 +39,37 @@ public enum StatusLines {
     return "\(gb) GB"
   }
 
+  /// Wiersz "Cache na dysku".
+  ///
+  /// Osobny od wiersza o zaleglosci i to jest tu rzecz najwazniejsza: przez
+  /// caly wrzesien 2026 jeden wiersz "Bufor: 103 GB z 100G" mial odpowiadac
+  /// na dwa pytania - ile miejsca zajmuje cache i ile zostalo do wyslania.
+  /// Na drugie nie odpowiadal, bo cache przy `--vfs-cache-max-age 9999h` stoi
+  /// pod limitem stale (281 pomiarow, minimum 99 GB). Dozorca bufora podejmowal
+  /// na tej liczbie decyzje o wstrzymaniu Time Machine - stad ta zmiana.
+  public static func cacheSize(_ gb: Int?, limitGB: Int) -> String {
+    guard let gb else {
+      return
+        "NIE ZMIERZONO - rclone nie odpowiedzial, a obchod katalogu bufora sie nie udal"
+    }
+    return "\(gb) GB z \(limitGB)G"
+  }
+
+  /// Wiersz "Do wyslania" - ZALEGLOSC NIEWYSLANA, czyli ta wielkosc, na ktorej
+  /// dozorca bufora decyduje o pauzie i wznowieniu.
+  ///
+  /// Liczba pozycji jest POMIAREM, gigabajty sa SZACUNKIEM z tej liczby (patrz
+  /// `BufferGuardService.backlogGB`) - dlatego stoi przy nich "~" i dlatego
+  /// pokazujemy oba. Wiersz, ktory podaje sam szacunek jako liczbe, ukrywa, jak
+  /// mocna jest podstawa decyzji o wstrzymaniu backupu.
+  public static func backlog(_ gb: Int?, items: Int?) -> String {
+    guard let gb, let items else {
+      return
+        "NIE WIADOMO - interfejs sterujacy rclone nie odpowiedzial (dozorca bufora nie wstrzyma ani nie wznowi Time Machine na tej podstawie)"
+    }
+    return "~\(gb) GB (\(items) pozycji)"
+  }
+
   /// Wiersze o powiadomieniu, ktorego NIE udalo sie doreczyc.
   ///
   /// `HealthAlert.notify` zwraca od niedawna `Bool`, a `HealthAlert.report`

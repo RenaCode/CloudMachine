@@ -161,7 +161,8 @@ struct VerifyImage: AsyncParsableCommand {
 struct BufferGuard: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "buffer-guard",
-    abstract: "Wstrzymuje Time Machine, gdy bufor rosnie szybciej, niz idzie wysylka.")
+    abstract:
+      "Wstrzymuje Time Machine, gdy zaleglosc niewyslana rosnie szybciej, niz idzie wysylka.")
 
   // Domyslne progi bierzemy Z `Thresholds`, ktore wylicza je z rozmiaru
   // bufora - NIE wpisujemy ich tu po raz drugi z palca.
@@ -174,10 +175,13 @@ struct BufferGuard: AsyncParsableCommand {
   // dotykajac sciezki, ktora naprawde dziala. Po zmianie `cacheSizeGB` progi
   // rozjechalyby sie po cichu: dozorca albo wstrzymywalby backup bez przerwy,
   // albo nie wstrzymalby go nigdy.
-  @Option(name: .long, help: "Powyzej tylu GB bufora wstrzymujemy Time Machine.")
+  // Progi odnosza sie do ZALEGLOSCI NIEWYSLANEJ, nie do rozmiaru cache'a -
+  // stara miara stala pod limitem stale, wiec prog wznowienia byl nieosiagalny
+  // (jedna PAUZA i zero WZNOWIEN w calym dzienniku). Patrz `Thresholds.init`.
+  @Option(name: .long, help: "Powyzej tylu GB zaleglosci niewyslanej wstrzymujemy Time Machine.")
   var highGB: Int = BufferGuardService.Thresholds().highGB
 
-  @Option(name: .long, help: "Ponizej tylu GB bufora wznawiamy.")
+  @Option(name: .long, help: "Ponizej tylu GB zaleglosci niewyslanej wznawiamy.")
   var lowGB: Int = BufferGuardService.Thresholds().lowGB
 
   @Option(name: .long, help: "Ponizej tylu GB wolnych na dysku wstrzymujemy niezaleznie od bufora.")
@@ -190,7 +194,8 @@ struct BufferGuard: AsyncParsableCommand {
     let guardService = BufferGuardService(
       thresholds: .init(highGB: highGB, lowGB: lowGB, minFreeGB: minFreeGB))
     CMLogger.log(
-      "Dozorca bufora: prog \(highGB) GB / wznowienie \(lowGB) GB / min. wolnego \(minFreeGB) GB")
+      "Dozorca bufora: pauza powyzej \(highGB) GB zaleglosci / wznowienie ponizej \(lowGB) GB / min. wolnego na dysku \(minFreeGB) GB"
+    )
 
     // Bez konca: dozorca ma przezyc kazdy backup, nie tylko pierwszy.
     while true {
@@ -298,14 +303,28 @@ struct DriveStatus: AsyncParsableCommand {
     let mounted = DriveBufferService.mountedState()
     print("Montowanie Drive: \(StatusLines.mounted(mounted))")
     print("Obraz podpiety:   \(BackupImageService.describe(BackupImageService.attachment))")
-    print("Bufor:            \(BufferGuardService.bufferGB()) GB z \(DriveBufferService.cacheSize)")
+
+    // Kolejke czytamy PRZED wierszami o buforze, bo obydwa z niej korzystaja.
+    // Drugie pytanie do rclone kosztowaloby do 60 s przy zapchanym buforze
+    // (patrz `DriveBufferService.queueStats`).
+    let queueStats = await DriveBufferService.queueStats()
+
+    // Dwa wiersze, bo to DWIE ROZNE wielkosci. Jeden wiersz "Bufor: 103 GB
+    // z 100G" wygladal na odpowiedz na pytanie "czy wysylka nadaza", a nia nie
+    // byl: rozmiar cache'a stoi pod limitem stale. Dozorca bufora podejmowal
+    // na tej liczbie decyzje i dlatego nie wznowil backupu ani razu.
+    print(
+      "Cache na dysku:   \(StatusLines.cacheSize(BufferGuardService.cacheSizeGB(stats: queueStats), limitGB: DriveBufferService.cacheSizeGB))"
+    )
+    print(
+      "Do wyslania:      \(StatusLines.backlog(BufferGuardService.backlogGB(stats: queueStats), items: queueStats?.unsentItems))"
+    )
     // NIE `\(BufferGuardService.freeGB()) GB` - to zwraca `Int?`, odkad brak
     // pomiaru przestal udawac zero, a interpolacja opcjonalnej wartosci
     // wypisywala `Wolne na dysku: Optional(427) GB`. Kompilator mowil o tym
     // tylko ostrzezeniem, wiec nie zatrzymalo to ani builda, ani testow.
     print("Wolne na dysku:   \(StatusLines.freeDisk(BufferGuardService.freeGB()))")
 
-    let queueStats = await DriveBufferService.queueStats()
     if let stats = queueStats {
       print(
         "Kolejka wysylki:  \(stats.uploadsInProgress) w toku, \(stats.uploadsQueued) w kolejce, \(stats.erroredFiles) bledow"

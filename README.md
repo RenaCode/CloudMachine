@@ -145,7 +145,8 @@ cloudmachine-agent drive-status
 Narzedzia:        OK
 Montowanie Drive: OK
 Obraz podpiety:   OK  (/Volumes/CloudMachine)
-Bufor:            103 GB z 100G
+Cache na dysku:   103 GB z 100G
+Do wyslania:      ~14 GB (462 pozycji)
 Wolne na dysku:   288 GB
 Kolejka wysylki:  0 w toku, 0 w kolejce, 0 bledow
 Restart bez pytania: TAK - kolejka pusta
@@ -334,8 +335,38 @@ licence from its authors.
 what it has already uploaded, so when everything is queued the buffer keeps
 growing and can fill the disk. Time Machine writes at SSD speed, rclone uploads
 at link speed, and the difference accumulates. The guard pauses Time Machine
-above a threshold and resumes when the queue catches up, trading speed for
-finishing at all.
+when the backlog grows past a threshold and resumes when the upload catches up,
+trading speed for finishing at all.
+
+What it measures is the **unsent backlog**, not the size of the cache. Those are
+not the same number and the difference cost the guard its whole purpose: with
+`--vfs-cache-max-age 9999h` the cache sits at its limit permanently (281
+measurements here, never below 99 GB), so a resume threshold expressed in cache
+size was unreachable. The journal shows it exactly: one PAUZA line ever, and not
+a single WZNOWIENIE. The backlog is the part of the cache rclone *cannot* evict,
+so it is also the number that decides whether the limit can hold at all — the
+guard pauses above 50 GB of backlog and resumes below 10 GB, both derived from
+the 100 GB cache size rather than written down twice. The backlog in gigabytes
+is an *estimate*: rclone reports how many items are queued, not how many bytes,
+and every item here is a fixed 32 MiB sparsebundle band, so the guard multiplies
+and says so with a `~` wherever it prints the number.
+
+**Pausing is not one command.** `tmutil stopbackup` cancels the backup that is
+running and does not touch the schedule, so macOS starts another one an hour
+later. The guard therefore re-issues the stop on every 30-second tick for as
+long as the pause lasts, rather than once when it enters the paused state — that
+bug kept the state for 53 hours while the actual write pause lasted one backup.
+`tmutil disable` would hold by itself, and is deliberately not used: the guard
+keeps its state in memory and runs under `KeepAlive`, so a crash between
+disabling and resuming would leave Time Machine switched off with nobody to
+switch it back on.
+
+Disk protection does not depend on any of the above. The free-space threshold
+and rclone's own "out of space" are checked in **every** state, including while
+paused — previously they lived in the running branch only, so one pause switched
+off the protection this process exists for. And nothing here treats a missing
+answer as good news: if rclone's control interface does not reply, the backlog is
+*unknown*, which neither pauses nor resumes, and says so in the log once.
 
 ---
 
