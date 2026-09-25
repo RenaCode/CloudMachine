@@ -213,7 +213,9 @@ final class HealthAlertTests: XCTestCase {
   /// inaczej alarm zapala sie raz i gasnie na zawsze.
   func testPoOkresiePrzypomnieniaTaSamaAwariaWraca() {
     let start = Date(timeIntervalSince1970: 1_758_000_000)
-    zapisz(identity: HealthAlert.identity(of: raport(["Brak udanej kopii od 3 h"]).problems), at: start)
+    zapisz(
+      identity: HealthAlert.identity(of: raport(["Brak udanej kopii od 3 h"]).problems),
+      at: start)
 
     let odcisk = HealthAlert.identity(of: raport(["Brak udanej kopii od 15 h"]).problems)
     XCTAssertFalse(
@@ -231,7 +233,9 @@ final class HealthAlertTests: XCTestCase {
   /// 12 godzin przeszlaby niezauwazona.
   func testNowyProblemAlarmujeOdRazu() {
     let start = Date(timeIntervalSince1970: 1_758_000_000)
-    zapisz(identity: HealthAlert.identity(of: raport(["Brak udanej kopii od 3 h"]).problems), at: start)
+    zapisz(
+      identity: HealthAlert.identity(of: raport(["Brak udanej kopii od 3 h"]).problems),
+      at: start)
 
     let dwaProblemy = HealthAlert.identity(
       of: raport(["Brak udanej kopii od 4 h", "Obraz backupu nie jest podpiety"]).problems)

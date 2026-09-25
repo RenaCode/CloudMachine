@@ -194,14 +194,18 @@ public enum HealthAlert {
   public static func notify(title: String, message: String) async -> Bool {
     let script =
       "display notification \(appleScriptLiteral(message)) with title \(appleScriptLiteral(title))"
-    guard let result = try? await ProcessRunner.run("/usr/bin/osascript", ["-e", script], timeout: 30)
+    guard
+      let result = try? await ProcessRunner.run(
+        "/usr/bin/osascript", ["-e", script], timeout: 30)
     else {
       CMLogger.log("osascript nie odpowiedzial w limicie czasu - powiadomienie nie poszlo.")
       return false
     }
     if !result.succeeded {
       let text = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
-      CMLogger.log("osascript zwrocil kod \(result.exitCode): \(text.isEmpty ? "(bez komunikatu)" : text)")
+      CMLogger.log(
+        "osascript zwrocil kod \(result.exitCode): "
+          + (text.isEmpty ? "(bez komunikatu)" : text))
     }
     return result.succeeded
   }

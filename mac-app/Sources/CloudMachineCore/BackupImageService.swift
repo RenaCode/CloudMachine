@@ -389,7 +389,8 @@ public enum BackupImageService {
     }
     if stderr.lowercased().contains("directory not found") { return .absent }
     let reason = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-    return .unknown(reason.isEmpty ? "rclone lsf zakonczylo sie bledem" : String(reason.suffix(200)))
+    return .unknown(
+      reason.isEmpty ? "rclone lsf zakonczylo sie bledem" : String(reason.suffix(200)))
   }
 
   /// `rclone lsf --dirs-only` konczy nazwy katalogow ukosnikiem, ale nie
