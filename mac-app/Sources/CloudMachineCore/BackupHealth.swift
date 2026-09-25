@@ -307,6 +307,29 @@ public enum BackupHealth {
 
   // MARK: - Odczyt na zywo
 
+  /// Czy plik, z ktorego czytamy historie kopii, DA SIE PRZECZYTAC.
+  ///
+  /// To jest jednoczesnie jedyna uczciwa odpowiedz na pytanie "czy mamy Pelny
+  /// dostep do dysku": TCC nie ma interfejsu do zapytania o uprawnienie, wiec
+  /// sprawdza sie je PROBUJAC.
+  ///
+  /// Interfejs robil to do 25.09.2026 przez
+  /// `FileManager.isReadableFile(atPath:)` na
+  /// `~/Library/Application Support/com.apple.TCC`. Dwa bledy w jednej linii:
+  /// to KATALOG, a nie plik z historia kopii, a `isReadableFile` sprowadza sie
+  /// do `access(R_OK)`, ktory patrzy tylko na prawa POSIX i o TCC nie wie nic.
+  /// Odpowiedz wychodzila wiec twierdzaca niezaleznie od stanu uprawnien -
+  /// a panel mowil "dostep jest" w chwili, w ktorej czujka nie mogla odczytac
+  /// ani jednej daty kopii. Czlowiek szukal potem awarii wszedzie poza
+  /// miejscem, w ktorym siedziala.
+  ///
+  /// `preferencesFile` podmienialny z tego samego powodu, co w `currentReport`.
+  public static func preferencesReadable(
+    preferencesFile: String = BackupHealth.preferencesPath
+  ) -> Bool {
+    (try? Data(contentsOf: URL(fileURLWithPath: preferencesFile))) != nil
+  }
+
   /// `preferencesFile` da sie podmienic, zeby dalo sie PRZEJSC CALA sciezke
   /// czujki na znanej zlej probce - odczyt pliku, parsowanie, wybor celu,
   /// ocena, zgloszenie, kod wyjscia - bez psucia dzialajacego backupu. Test

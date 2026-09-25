@@ -238,4 +238,46 @@ final class BackupHealthTests: XCTestCase {
   func testNowaLiniaNieRozwalaPowiadomienia() {
     XCTAssertFalse(HealthAlert.appleScriptLiteral("a\nb").contains("\n"))
   }
+
+  // MARK: - Ustalenie 15c: Pelny dostep do dysku sprawdza sie PROBUJAC
+
+  /// ZNANA ZLA PROBKA: katalog. `FileManager.isReadableFile(atPath:)` -
+  /// czyli `access(R_OK)` - mowi o katalogu "czytelny", a odczytac go jako plik
+  /// nie da sie wcale. Interfejs pytal dokladnie tak i dokladnie o katalog
+  /// (`~/Library/Application Support/com.apple.TCC`), wiec odpowiadal "Pelny
+  /// dostep jest" niezaleznie od stanu uprawnien - w tym w chwili, w ktorej
+  /// czujka nie mogla odczytac ani jednej daty kopii.
+  ///
+  /// Do TCC nie ma pytania, jest tylko proba. Ten test porownuje oba sposoby na
+  /// tej samej sciezce.
+  func testKatalogNieDowodziCzytelnosciPliku() throws {
+    let katalog = FileManager.default.temporaryDirectory
+      .appendingPathComponent("cm-fda-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: katalog, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: katalog) }
+
+    XCTAssertTrue(
+      FileManager.default.isReadableFile(atPath: katalog.path),
+      "access(R_OK) na katalogu mowi 'czytelny' - i to bylo cale dawne sprawdzenie")
+    XCTAssertFalse(
+      BackupHealth.preferencesReadable(preferencesFile: katalog.path),
+      "realny odczyt musi powiedziec NIE - katalog nie jest plistem z historia kopii")
+  }
+
+  /// Plik, ktorego nie ma, to brak dostepu do jego tresci - a nie milczenie.
+  func testBrakPlikuToBrakDostepu() {
+    XCTAssertFalse(
+      BackupHealth.preferencesReadable(
+        preferencesFile: "/nie-ma-takiej-sciezki/com.apple.TimeMachine.plist"))
+  }
+
+  /// I odwrotny blad: czytelny plik MUSI wychodzic jako czytelny, inaczej panel
+  /// straszylby brakiem uprawnien na sprawnej maszynie.
+  func testCzytelnyPlikWychodziJakoCzytelny() throws {
+    let plik = FileManager.default.temporaryDirectory
+      .appendingPathComponent("cm-fda-\(UUID().uuidString).plist")
+    try Data("cokolwiek".utf8).write(to: plik)
+    defer { try? FileManager.default.removeItem(at: plik) }
+    XCTAssertTrue(BackupHealth.preferencesReadable(preferencesFile: plik.path))
+  }
 }
