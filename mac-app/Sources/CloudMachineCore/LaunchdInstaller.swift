@@ -142,32 +142,141 @@ public enum LaunchdInstaller {
         succeeded: false, message: "Nie udalo sie wylistowac szablonow w \(templatesDir.path).")
     }
 
-    var installedLabels: [String] = []
-    for template in templates.filter({ $0.pathExtension == "template" }) {
-      let destName = template.deletingPathExtension().lastPathComponent
-      let destURL = launchAgentsDir.appendingPathComponent(destName)
+    return installVerdict(
+      await installAgents(
+        templates: templates, into: launchAgentsDir, agentBin: agentBin, logDir: CMPaths.logDir))
+  }
 
-      guard var content = try? String(contentsOf: template, encoding: .utf8) else { continue }
-      content = content.replacingOccurrences(of: "__CM_AGENT_BIN__", with: agentBin.path)
-      content = content.replacingOccurrences(of: "__CM_LOG_DIR__", with: CMPaths.logDir.path)
-      try? content.write(to: destURL, atomically: true, encoding: .utf8)
-      CMLogger.log("Wygenerowano \(destURL.path)")
-
-      let label = destURL.deletingPathExtension().lastPathComponent
-      _ = try? await ProcessRunner.run("/bin/launchctl", ["unload", destURL.path])
-      let loadResult = try? await ProcessRunner.run("/bin/launchctl", ["load", "-w", destURL.path])
-      if loadResult?.succeeded == true {
-        installedLabels.append(label)
-        CMLogger.log("Zaladowano \(label) przez launchctl")
-      }
+  /// Co weszlo i co NIE weszlo - z powodem, po jednym na agenta.
+  ///
+  /// Do 25.09.2026 zbieralismy tylko `installedLabels`, a porazki nie zostawialy
+  /// sladu w wyniku: nieczytelny szablon szedl przez `continue`, nieudany zapis
+  /// przez `try?`, a nieudany `launchctl load` po prostu nie dopisywal etykiety.
+  struct InstallOutcome: Equatable {
+    struct Failure: Equatable {
+      var label: String
+      var reason: String
     }
 
-    guard !installedLabels.isEmpty else {
+    var installed: [String] = []
+    var failed: [Failure] = []
+  }
+
+  /// Generuje `.plist` z szablonow i przeladowuje agentow, ZBIERAJAC porazki.
+  ///
+  /// Czytanie szablonu, zapis i przeladowanie sa podmienialne, bo inaczej nie da
+  /// sie wstrzyknac ZNANEJ ZLEJ probki - nieczytelnego szablonu, zapisu bez
+  /// uprawnien, `launchctl` odmawiajacego zaladowania - a wlasnie w obsludze
+  /// tych trzech przypadkow siedziala usterka. Test podstawia je zamiast pisac
+  /// do prawdziwego `~/Library/LaunchAgents` i przeladowywac agentow tej
+  /// maszyny, czyli zamiast rozbierac dzialajacy backup, zeby sprawdzic
+  /// komunikat o bledzie.
+  static func installAgents(
+    templates: [URL],
+    into destinationDir: URL,
+    agentBin: URL,
+    logDir: URL,
+    read: @Sendable (URL) throws -> String = { try String(contentsOf: $0, encoding: .utf8) },
+    write: @Sendable (String, URL) throws -> Void = {
+      try $0.write(to: $1, atomically: true, encoding: .utf8)
+    },
+    reload: @Sendable (URL) async -> Bool = { await launchctlReload($0) },
+    log: @Sendable (String) -> Void = { CMLogger.log($0) }
+  ) async -> InstallOutcome {
+    var outcome = InstallOutcome()
+    for template in templates.filter({ $0.pathExtension == "template" }) {
+      let destURL = destinationDir.appendingPathComponent(
+        template.deletingPathExtension().lastPathComponent)
+      let label = destURL.deletingPathExtension().lastPathComponent
+
+      let szablon: String
+      do {
+        szablon = try read(template)
+      } catch {
+        // Wczesniej: `guard ... else { continue }`. Szablon, ktorego nie dalo
+        // sie przeczytac, wypadal z instalacji BEZ SLADU - ani w logu, ani
+        // w wyniku - a `buffer-guard` jest jedyna ochrona dysku na tej maszynie.
+        let powod = "nie dalo sie odczytac szablonu \(template.lastPathComponent)"
+        outcome.failed.append(.init(label: label, reason: powod))
+        log("NIE zainstalowano \(label): \(powod)")
+        continue
+      }
+
+      var content = szablon.replacingOccurrences(of: "__CM_AGENT_BIN__", with: agentBin.path)
+      content = content.replacingOccurrences(of: "__CM_LOG_DIR__", with: logDir.path)
+      do {
+        try write(content, destURL)
+      } catch {
+        // `continue` jest tu ISTOTNY, nie porzadkowy. Wczesniej zapis szedl
+        // przez `try?` i po nieudanym zapisie lecialo `launchctl load` na
+        // STARYM pliku .plist, ktory nadal lezy w ~/Library/LaunchAgents.
+        // `launchctl` konczyl sie kodem 0, agent ladowal na wynikowej liscie
+        // i instalacja meldowala sukces - przy launchd chodzacym na
+        // poprzedniej wersji, byc moze wskazujacej na binarke, ktorej juz nie
+        // ma. Sukces jest wtedy gorszy od porazki, bo nikt nie szuka.
+        let powod = "nie udalo sie zapisac \(destURL.path) (brak miejsca albo uprawnien)"
+        outcome.failed.append(.init(label: label, reason: powod))
+        log("NIE zainstalowano \(label): \(powod) - NIE przeladowuje, zeby nie zaliczyc starego")
+        continue
+      }
+      log("Wygenerowano \(destURL.path)")
+
+      if await reload(destURL) {
+        outcome.installed.append(label)
+        log("Zaladowano \(label) przez launchctl")
+      } else {
+        let powod = "launchctl load odmowil zaladowania \(destURL.lastPathComponent)"
+        outcome.failed.append(.init(label: label, reason: powod))
+        log("NIE zaladowano \(label): \(powod)")
+      }
+    }
+    return outcome
+  }
+
+  /// Werdykt calej instalacji - czysty, zeby dal sie sprawdzic testem.
+  ///
+  /// JEDEN udany agent wystarczal do `succeeded: true` i do komunikatu
+  /// "Zainstalowano agentow: ...", ktory wymienial wylacznie te udane.
+  /// Zaobserwowany skutek: `buffer-guard` nie ladowal sie, instalator meldowal
+  /// sukces, jedyna ochrona dysku nie dzialala i nikt o tym nie wiedzial - a
+  /// brakujacej nazwy na liscie nie widzi nikt, kto nie zna listy z pamieci.
+  ///
+  /// Ten sam powod, co przy `stableAgentBinaryPath`: instalacja niepelna jest
+  /// gorsza niz brak instalacji, bo wyglada na udana.
+  static func installVerdict(_ outcome: InstallOutcome) -> CMActionResult {
+    guard outcome.failed.isEmpty else {
+      let lista = outcome.failed.map { "  - \($0.label): \($0.reason)" }.joined(separator: "\n")
+      let weszly =
+        outcome.installed.isEmpty
+        ? "Nie zaladowano ANI JEDNEGO agenta."
+        : "Weszly tylko: \(outcome.installed.joined(separator: ", "))."
+      return CMActionResult(
+        succeeded: false,
+        message: """
+          Instalacja agentow NIEPELNA - nie weszlo \(outcome.failed.count) \
+          z \(outcome.failed.count + outcome.installed.count):
+          \(lista)
+          \(weszly)
+          Kazdy brakujacy agent to funkcja, ktora przestala dzialac po cichu \
+          (buffer-guard pilnuje dysku, backup-health zglasza awarie). Napraw \
+          powod i powtorz instalacje.
+          """)
+    }
+    guard !outcome.installed.isEmpty else {
       return CMActionResult(
         succeeded: false, message: "Nie udalo sie zaladowac zadnego agenta launchd.")
     }
     return CMActionResult(
-      succeeded: true, message: "Zainstalowano agentow: \(installedLabels.joined(separator: ", "))")
+      succeeded: true,
+      message: "Zainstalowano agentow: \(outcome.installed.joined(separator: ", "))")
+  }
+
+  /// Przeladowanie jednego agenta: `unload` (moze nie byc zaladowany - dlatego
+  /// wynik ignorujemy), potem `load -w`. `true` tylko gdy `load` sie UDAL.
+  private static func launchctlReload(_ plist: URL) async -> Bool {
+    _ = try? await ProcessRunner.run("/bin/launchctl", ["unload", plist.path])
+    let loaded = try? await ProcessRunner.run("/bin/launchctl", ["load", "-w", plist.path])
+    return loaded?.succeeded == true
   }
 
   /// Rzucane, gdy nie da sie odlozyc binarki w stabilnym miejscu. Wolajacy ma
