@@ -472,6 +472,18 @@ struct DashboardView: View {
 
         Divider().background(RenaCodeTheme.borderGlass)
 
+        // Kto pilnuje czujki. Wiersz wyzej mowi, czy kopia powstala; ten mowi,
+        // czy ktokolwiek to jeszcze SPRAWDZA. Czujka chodzi bez KeepAlive, wiec
+        // wyladowana albo zawieszona nie daje objawu poza cisza - patrz
+        // `WatchdogHeartbeat`.
+        row(
+          "Ostatni przebieg czujki backupu",
+          controller.status.watchdog.map { StatusLines.watchdogRun($0) } ?? "nie sprawdzono",
+          ok: controller.status.watchdogRunning
+        )
+
+        Divider().background(RenaCodeTheme.borderGlass)
+
         row(
           "Kolejka synchronizacji z chmurą",
           !controller.status.buffer.queueKnown

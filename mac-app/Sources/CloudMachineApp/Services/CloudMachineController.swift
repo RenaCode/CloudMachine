@@ -51,6 +51,10 @@ final class CloudMachineController: ObservableObject {
     await refreshTimeMachine()
     await refreshProgress()
     await refreshBackupCycle()
+    // Tani odczyt jednego malego pliku - czujka zostawia w nim date KAZDEGO
+    // przebiegu. Patrz `WatchdogHeartbeat`: bez tego jedynym objawem
+    // wyladowanej czujki jest cisza, a cisza jest tu stanem normalnym.
+    status.watchdog = WatchdogHeartbeat.current()
     status.lastRefresh = Date()
   }
 

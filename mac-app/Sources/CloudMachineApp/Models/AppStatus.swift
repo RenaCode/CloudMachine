@@ -171,6 +171,19 @@ final class AppStatus: ObservableObject {
   /// ktora rosnie wylacznie przy sukcesie.
   @Published var backupCycle = BackupCycleStatus()
   @Published var timeMachineState: TimeMachineState = .unknown
+  /// Kiedy czujka `backup-health` ostatnio PRZEBIEGLA. `nil` = panel jeszcze
+  /// nie pytal (nie: "nie przebiegla nigdy" - to osobny stan `.never`).
+  ///
+  /// Panel pokazuje to z tego samego powodu, dla ktorego pokazuje wiek ostatniej
+  /// kopii: czujka chodzi z `StartInterval 1800` i bez `KeepAlive`, wiec
+  /// wyladowana albo zawieszona nie daje zadnego objawu poza cisza - a cisza
+  /// jest tu stanem normalnym.
+  ///
+  /// CELOWO nie wchodzi do `healthy`: swiezosc kopii panel liczy SAM, z tego
+  /// samego pliku preferencji, z ktorego liczy ja czujka. Martwa czujka nie
+  /// znaczy wiec, ze backup nie dziala - znaczy, ze nikt o awarii nie donosi,
+  /// a to inna awaria i ma swoj wlasny, czerwony wiersz.
+  @Published var watchdog: WatchdogHeartbeat.Freshness?
   @Published var backupProgress: BackupProgressInfo?
   @Published var lastAction: LastRunResult?
   @Published var hasFullDiskAccess: Bool = false
@@ -181,6 +194,14 @@ final class AppStatus: ObservableObject {
   /// zamrozony widok wyglada dokladnie jak awaria - a to dwie rozne rzeczy
   /// i uzytkownik musi je odroznic bez zagladania do logow.
   @Published var lastRefresh: Date?
+
+  /// Czy czujka backupu CHODZI. `false` takze wtedy, gdy panel jeszcze nie
+  /// pytal - niesprawdzone nie ma prawa swiecic na zielono, tak samo jak
+  /// `queueKnown` i `BackupCycleStatus.known`.
+  var watchdogRunning: Bool {
+    if case .fresh = watchdog { return true }
+    return false
+  }
 
   /// Jednozdaniowa odpowiedz na pytanie "czy moje dane sa bezpieczne".
   var headline: String {
