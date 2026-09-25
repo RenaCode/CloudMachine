@@ -14,7 +14,37 @@ enum TimeMachineState: Equatable {
   case unknown
   /// Time Machine nie wskazuje na nasz obraz - backupu realnie nie ma.
   case notRegistered
+  /// `tmutil` NIE ODPOWIEDZIAL w limicie czasu, wiec o celu nie wiemy nic.
+  ///
+  /// Osobny stan z tego samego powodu, co `TimeMachineStatus.DestinationReading.noAnswer`
+  /// i `BufferStatus.queueKnown`: brak odpowiedzi nie ma prawa udawac wyniku.
+  /// Panel wyswietlal tu do 25.09.2026 "Time Machine nie wskazuje na
+  /// CloudMachine" - zdanie prawdziwie brzmiace i falszywe, ktore wysyla
+  /// czlowieka rejestrowac cel na nowo, podczas gdy cel jest caly, a zawiesil
+  /// sie odczyt (`tmutil destinationinfo` siega na montowanie na Google Drive).
+  case noAnswer
   case registered(mountPoint: String)
+}
+
+extension TimeMachineState {
+  /// Przeklada odpowiedz `tmutil` na stan panelu.
+  ///
+  /// Wydzielone z `CloudMachineController.refreshTimeMachine()` i czyste,
+  /// zeby dalo sie testem pokazac, ze TRZY odpowiedzi daja TRZY stany.
+  /// Wczesniej kontroler pytal `currentDestinationMountPoint()`, ktora zwraca
+  /// `nil` i przy braku celu, i przy braku odpowiedzi - obie sciezki
+  /// konczyly sie wiec tym samym `.notRegistered`. Czujka `backup-health`
+  /// rozrozniala je od 23.09.2026 (`destinationReading()`), panel nie.
+  static func from(_ reading: TimeMachineStatus.DestinationReading, target: String)
+    -> TimeMachineState
+  {
+    switch reading {
+    case .mountPoint(let path):
+      return path == target ? .registered(mountPoint: path) : .notRegistered
+    case .none: return .notRegistered
+    case .noAnswer: return .noAnswer
+    }
+  }
 }
 
 /// Stan bufora miedzy Time Machine a Google Drive.
@@ -161,6 +191,13 @@ final class AppStatus: ObservableObject {
     if !buffer.mounted { return "Bufor nie dziala" }
     if !buffer.imageAttached { return "Obraz backupu niepodpiety" }
     if case .notRegistered = timeMachineState { return "Time Machine nie wskazuje na CloudMachine" }
+    // Brak odpowiedzi tmutil MUSI brzmiec inaczej niz przestawiony cel: to
+    // pierwsze zdanie, ktore czlowiek czyta, i ono decyduje, co zrobi.
+    // "Nie wskazuje" kaze rejestrowac cel na nowo - czynnosc zbedna i myszlaca,
+    // gdy cel jest caly, a zawiesil sie odczyt.
+    if case .noAnswer = timeMachineState {
+      return "NIE WIADOMO, czy Time Machine wskazuje na CloudMachine - tmutil nie odpowiedzial"
+    }
     // O wysylce mowi JEDNO zrodlo - inaczej pasek menu i karta stanu potrafily
     // twierdzic co innego. Pliki, ktorych rclone nie wyslal, istnieja WYLACZNIE
     // na tym Macu, czyli dokladnie tam, gdzie backup nie ma prawa byc jedyna

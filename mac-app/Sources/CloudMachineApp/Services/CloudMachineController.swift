@@ -149,16 +149,23 @@ final class CloudMachineController: ObservableObject {
     status.buffer = buffer
   }
 
+  /// `destinationReading()`, a NIE `currentDestinationMountPoint()`.
+  ///
+  /// Ta druga zwraca `nil` zarowno przy braku celu, jak i przy braku
+  /// odpowiedzi tmutil, wiec panel pokazywal "Time Machine nie wskazuje na
+  /// CloudMachine" takze wtedy, gdy o celu nie wiedzial NIC. Kierunek pomylki
+  /// byl bezpieczny (falszywy alarm zamiast falszywego spokoju), ale komunikat
+  /// wysylal czlowieka rejestrowac cel, ktory jest caly. Rozroznienie istnieje
+  /// w `DestinationReading` od 23.09.2026 i czujka `backup-health` juz z niego
+  /// korzysta - panel jest ostatnim miejscem, ktore te dwie rzeczy zlewalo.
+  ///
+  /// Cel moze tez istniec i wskazywac gdzie indziej - wtedy backupu na Drive
+  /// nie ma, mimo ze Time Machine wyglada na skonfigurowany; to nadal
+  /// `.notRegistered`.
   private func refreshTimeMachine() async {
-    guard let mountPoint = await TimeMachineStatus.currentDestinationMountPoint() else {
-      status.timeMachineState = .notRegistered
-      return
-    }
-    // Cel moze istniec, ale wskazywac gdzie indziej - wtedy backupu na Drive
-    // nie ma, mimo ze Time Machine wyglada na skonfigurowany.
-    status.timeMachineState =
-      mountPoint == BackupImageService.targetPath.path
-      ? .registered(mountPoint: mountPoint) : .notRegistered
+    status.timeMachineState = TimeMachineState.from(
+      await TimeMachineStatus.destinationReading(),
+      target: BackupImageService.targetPath.path)
   }
 
   private func refreshProgress() async {
