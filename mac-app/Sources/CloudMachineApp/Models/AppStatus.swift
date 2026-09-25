@@ -14,7 +14,37 @@ enum TimeMachineState: Equatable {
   case unknown
   /// Time Machine nie wskazuje na nasz obraz - backupu realnie nie ma.
   case notRegistered
+  /// `tmutil` NIE ODPOWIEDZIAL w limicie czasu, wiec o celu nie wiemy nic.
+  ///
+  /// Osobny stan z tego samego powodu, co `TimeMachineStatus.DestinationReading.noAnswer`
+  /// i `BufferStatus.queueKnown`: brak odpowiedzi nie ma prawa udawac wyniku.
+  /// Panel wyswietlal tu do 25.09.2026 "Time Machine nie wskazuje na
+  /// CloudMachine" - zdanie prawdziwie brzmiace i falszywe, ktore wysyla
+  /// czlowieka rejestrowac cel na nowo, podczas gdy cel jest caly, a zawiesil
+  /// sie odczyt (`tmutil destinationinfo` siega na montowanie na Google Drive).
+  case noAnswer
   case registered(mountPoint: String)
+}
+
+extension TimeMachineState {
+  /// Przeklada odpowiedz `tmutil` na stan panelu.
+  ///
+  /// Wydzielone z `CloudMachineController.refreshTimeMachine()` i czyste,
+  /// zeby dalo sie testem pokazac, ze TRZY odpowiedzi daja TRZY stany.
+  /// Wczesniej kontroler pytal `currentDestinationMountPoint()`, ktora zwraca
+  /// `nil` i przy braku celu, i przy braku odpowiedzi - obie sciezki
+  /// konczyly sie wiec tym samym `.notRegistered`. Czujka `backup-health`
+  /// rozrozniala je od 23.09.2026 (`destinationReading()`), panel nie.
+  static func from(_ reading: TimeMachineStatus.DestinationReading, target: String)
+    -> TimeMachineState
+  {
+    switch reading {
+    case .mountPoint(let path):
+      return path == target ? .registered(mountPoint: path) : .notRegistered
+    case .none: return .notRegistered
+    case .noAnswer: return .noAnswer
+    }
+  }
 }
 
 /// Stan bufora miedzy Time Machine a Google Drive.
@@ -141,6 +171,19 @@ final class AppStatus: ObservableObject {
   /// ktora rosnie wylacznie przy sukcesie.
   @Published var backupCycle = BackupCycleStatus()
   @Published var timeMachineState: TimeMachineState = .unknown
+  /// Kiedy czujka `backup-health` ostatnio PRZEBIEGLA. `nil` = panel jeszcze
+  /// nie pytal (nie: "nie przebiegla nigdy" - to osobny stan `.never`).
+  ///
+  /// Panel pokazuje to z tego samego powodu, dla ktorego pokazuje wiek ostatniej
+  /// kopii: czujka chodzi z `StartInterval 1800` i bez `KeepAlive`, wiec
+  /// wyladowana albo zawieszona nie daje zadnego objawu poza cisza - a cisza
+  /// jest tu stanem normalnym.
+  ///
+  /// CELOWO nie wchodzi do `healthy`: swiezosc kopii panel liczy SAM, z tego
+  /// samego pliku preferencji, z ktorego liczy ja czujka. Martwa czujka nie
+  /// znaczy wiec, ze backup nie dziala - znaczy, ze nikt o awarii nie donosi,
+  /// a to inna awaria i ma swoj wlasny, czerwony wiersz.
+  @Published var watchdog: WatchdogHeartbeat.Freshness?
   @Published var backupProgress: BackupProgressInfo?
   @Published var lastAction: LastRunResult?
   @Published var hasFullDiskAccess: Bool = false
@@ -152,6 +195,14 @@ final class AppStatus: ObservableObject {
   /// i uzytkownik musi je odroznic bez zagladania do logow.
   @Published var lastRefresh: Date?
 
+  /// Czy czujka backupu CHODZI. `false` takze wtedy, gdy panel jeszcze nie
+  /// pytal - niesprawdzone nie ma prawa swiecic na zielono, tak samo jak
+  /// `queueKnown` i `BackupCycleStatus.known`.
+  var watchdogRunning: Bool {
+    if case .fresh = watchdog { return true }
+    return false
+  }
+
   /// Jednozdaniowa odpowiedz na pytanie "czy moje dane sa bezpieczne".
   var headline: String {
     if case .missing(let what, _) = dependencyState {
@@ -161,6 +212,13 @@ final class AppStatus: ObservableObject {
     if !buffer.mounted { return "Bufor nie dziala" }
     if !buffer.imageAttached { return "Obraz backupu niepodpiety" }
     if case .notRegistered = timeMachineState { return "Time Machine nie wskazuje na CloudMachine" }
+    // Brak odpowiedzi tmutil MUSI brzmiec inaczej niz przestawiony cel: to
+    // pierwsze zdanie, ktore czlowiek czyta, i ono decyduje, co zrobi.
+    // "Nie wskazuje" kaze rejestrowac cel na nowo - czynnosc zbedna i myszlaca,
+    // gdy cel jest caly, a zawiesil sie odczyt.
+    if case .noAnswer = timeMachineState {
+      return "NIE WIADOMO, czy Time Machine wskazuje na CloudMachine - tmutil nie odpowiedzial"
+    }
     // O wysylce mowi JEDNO zrodlo - inaczej pasek menu i karta stanu potrafily
     // twierdzic co innego. Pliki, ktorych rclone nie wyslal, istnieja WYLACZNIE
     // na tym Macu, czyli dokladnie tam, gdzie backup nie ma prawa byc jedyna

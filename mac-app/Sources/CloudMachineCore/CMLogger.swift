@@ -13,7 +13,7 @@ public enum CMLogger {
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
     let line = "[\(formatter.string(from: Date()))] \(message)\n"
-    print(line, terminator: "")
+    emitToStandardOutput(line)
     append(line, to: CMPaths.combinedLogFile)
     // WAZNE: `rotateIfLarge` istnialo wczesniej w kodzie, ale nigdzie nie
     // bylo wywolywane - `cloudmachine.log` rosl bez ograniczen (dokladnie
@@ -21,6 +21,53 @@ public enum CMLogger {
     // przy niej). Sprawdzenie rozmiaru pliku to tani `stat`, wiec robimy to
     // przy kazdym wpisie zamiast polegac na pamieci, zeby to gdzies wywolac.
     rotateIfLarge(CMPaths.combinedLogFile)
+  }
+
+  /// Wypisuje tekst na stdout i NATYCHMIAST oproznia bufor stdio.
+  ///
+  /// Bez `fflush` linia zostawala w buforze biblioteki C, dopoki nie uzbieralo
+  /// sie 16 KiB. Pod launchd stdout jest PLIKIEM
+  /// (`StandardOutPath: __CM_LOG_DIR__/launchd-*.out.log`), a dla pliku stdio
+  /// wybiera buforowanie BLOKOWE - inaczej niz dla terminala, gdzie buforuje
+  /// liniami i problem nie istnieje. Dlatego nie dalo sie tego zobaczyc,
+  /// uruchamiajac to samo polecenie z reki.
+  ///
+  /// Zmierzone 25.09.2026: `~/Library/Logs/CloudMachine/launchd-buffer-guard.out.log`
+  /// mial DOKLADNIE 16384 bajty, date 2026-09-20 i ostatnia linie urwana w pol
+  /// slowa, podczas gdy proces `buffer-guard` zyl od 2026-09-25 i normalnie
+  /// logowal do `cloudmachine.log`. Plik, do ktorego czlowiek zaglada NAJPIERW
+  /// (bo tak go kieruje nazwa), byl o piec dni z tylu i konczyl sie w polowie
+  /// zdania - czyli wygladal jak proces, ktory umarl piatego dnia.
+  ///
+  /// Gryzie to wylacznie procesy DLUGOWIECZNE i dlatego tak dlugo zostawalo
+  /// niewidoczne: `buffer-guard` to `while true` + `KeepAlive`, wiec nigdy nie
+  /// dochodzi do oproznienia bufora przy wyjsciu. Krotkie podkomendy
+  /// (`attach-image`, `backup-health`) koncza sie po kazdym tiku, a `exit(3)`
+  /// oproznia bufor za nie - dlatego `launchd-backup-health.out.log` byl
+  /// aktualny tego samego dnia, w ktorym `launchd-buffer-guard.out.log` stal
+  /// od pieciu.
+  ///
+  /// Dlaczego `fflush` tutaj, a nie `setvbuf(stdout, nil, _IOLBF, 0)` przy
+  /// starcie agenta:
+  ///
+  /// - `setvbuf` trzeba zawolac w KAZDYM punkcie wejscia (agent CLI, GUI,
+  ///   harnessy POC) i przed pierwszym zapisem na stdout. Zapomniany w jednym
+  ///   z nich daje dokladnie te awarie z powrotem, a jej objawem znow jest
+  ///   plik, ktory wyglada na kompletny. Gwarancja nalezy do ZAPISU, nie do
+  ///   konfiguracji, ktora ktos musi pamietac wlaczyc.
+  /// - `setvbuf` po pierwszym I/O na strumieniu jest nieokreslony, wiec
+  ///   "ustawimy to gdzies na starcie" jest w praktyce warunkiem na kolejnosc
+  ///   inicjalizacji - a to sie cicho psuje przy przestawianiu kodu.
+  /// - Koszt jest zaniedbywalny: dziennik ma wpisy w tempie zdarzen (sekundy,
+  ///   nie mikrosekundy), a ten sam wpis i tak leci juz `write(2)` do
+  ///   `cloudmachine.log` obok.
+  ///
+  /// To NIE zalatwia buforowania zwyklych `print(...)` z podkomend CLI - te
+  /// pisza wprost. Zalatwia dziennik, czyli to, co pod launchd jest jedynym
+  /// sladem po dzialaniu agenta.
+  static func emitToStandardOutput(_ text: String) {
+    print(text, terminator: "")
+    fflush(stdout)
   }
 
   private static func append(_ text: String, to url: URL) {
@@ -77,7 +124,7 @@ public enum CMLogger {
       let notice =
         "[\(formatter.string(from: Date()))] Przycieto \(url.lastPathComponent)"
         + " (bylo \(size) bajtow, zachowano ostatnie \(keepLines) linii).\n"
-      print(notice, terminator: "")
+      emitToStandardOutput(notice)
       appendLocked(notice, to: url)
       return true
     } catch {

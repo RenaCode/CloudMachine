@@ -75,7 +75,14 @@ struct PullPlugCommand: AsyncParsableCommand {
       at: image, sizeGB: 10, volumeName: "PlugPOC", bandMB: bandMB)
 
     var failed = 0
+    // Rundy, ktore NIC NIE ZMIERZYLY: zapis sie nie zaczal, skonczyl sie przed
+    // wyrwaniem podlogi albo obrazu nie dalo sie sprawdzic. Bez tego licznika
+    // przebieg bez ani jednego pomiaru konczyl sie zdaniem "Obraz przezyl
+    // kazde wyrwanie podlogi".
+    var unmeasured = 0
+    var executed = 0
     for round in 1...rounds {
+      executed += 1
       print("")
       print("--- runda \(round) ---")
       try await POC.attach(image, mountpoint: target)
@@ -90,8 +97,19 @@ struct PullPlugCommand: AsyncParsableCommand {
 
       print("Wyrywam podloge (odpinam zastepnik montowania)")
       await POC.detachQuietly(mountPoint.path, force: true)
-      if await writer.value == false {
-        print("  zapis przerwany, zgodnie z oczekiwaniem")
+      // "Nie zaczalem pisac" NIE jest "zapis przerwany". Pierwsze znaczy, ze
+      // runda nie miala czego przerywac, czyli nie zmierzyla niczego.
+      switch await writer.value {
+      case .neverStarted(let powod):
+        print("  ZAPIS NIGDY NIE WYSTARTOWAL: \(powod)")
+        print("  runda NIC NIE MIERZY - nie bylo czego przerywac")
+        unmeasured += 1
+      case .interrupted(let megabytes):
+        print("  zapis przerwany po \(megabytes) MB, zgodnie z oczekiwaniem")
+      case .completed(let megabytes):
+        print("  UWAGA: zapis \(megabytes) MB skonczyl sie PRZED wyrwaniem podlogi")
+        print("  runda NIC NIE MIERZY - podloga zniknela juz po zapisie")
+        unmeasured += 1
       }
       await POC.detachQuietly(target.path, force: true)
 
@@ -122,15 +140,27 @@ struct PullPlugCommand: AsyncParsableCommand {
       }
 
       let log = runRoot.appendingPathComponent("fsck-\(round).log")
-      if await checkImage(device: device, writingTo: log, repair: false) {
+      switch await checkImage(device: device, writingTo: log, repair: false) {
+      case .consistent:
         print("  WYNIK: spojny")
-      } else {
+      case .notChecked(let powod):
+        // NIE "stracony": nie mamy ani jednego wyniku. Na podstawie tego zdania
+        // odtwarza sie backup od zera, wiec nie ma prawa go mowic zgadywanie.
+        print("  WYNIK: NIE UDALO SIE SPRAWDZIC (\(powod))")
+        print("  spojnosc obrazu POZOSTAJE NIESPRAWDZONA - runda nic nie mierzy")
+        unmeasured += 1
+      case .inconsistent:
         print("  WYNIK: niespojny - probuje naprawic")
-        if await checkImage(device: device, writingTo: log, repair: true, append: true) {
+        switch await checkImage(device: device, writingTo: log, repair: true, append: true) {
+        case .consistent:
           print("  naprawa udana - backup do uratowania")
-        } else {
+        case .inconsistent:
           print("  naprawa nieudana - backup stracony (log: \(log.path))")
           failed += 1
+        case .notChecked(let powod):
+          print("  naprawy NIE UDALO SIE uruchomic (\(powod))")
+          print("  nie wiadomo, czy backup da sie uratowac (log: \(log.path))")
+          unmeasured += 1
         }
       }
       await POC.detachQuietly(device, force: true)
@@ -139,11 +169,11 @@ struct PullPlugCommand: AsyncParsableCommand {
 
     print("")
     print("===================================")
-    print("Rund: \(rounds)   nieodwracalnych strat: \(failed)")
-    print(
-      failed == 0
-        ? "Obraz przezyl kazde wyrwanie podlogi."
-        : "UWAGA: architektura gubi backup przy utracie warstwy chmurowej.")
+    for line in Self.summary(
+      requestedRounds: rounds, executedRounds: executed, lost: failed, unmeasured: unmeasured)
+    {
+      print(line)
+    }
   }
 
   /// Podpina kopie bez montowania i zwraca urzadzenie z kontenerem APFS.
@@ -165,18 +195,98 @@ struct PullPlugCommand: AsyncParsableCommand {
   /// od realnej niespojnosci, a to tutaj jest cala mierzona wielkosc.
   private func checkImage(
     device: String, writingTo log: URL, repair: Bool, append: Bool = false
-  ) async -> Bool {
+  ) async -> ImageCheck {
     let result = try? await ProcessRunner.run(
       Self.fsck, [repair ? "-y" : "-n", device], timeout: nil)
     let text = (result?.stdout ?? "") + (result?.stderr ?? "")
     let previous = append ? ((try? String(contentsOf: log, encoding: .utf8)) ?? "") : ""
     try? (previous + text).write(to: log, atomically: true, encoding: .utf8)
-    return result?.succeeded == true
+    return Self.classify(fsck: result)
+  }
+
+  /// "Nie udalo sie sprawdzic" to NIE to samo co "niespojny".
+  ///
+  /// Ten sam wzorzec, co w `BackupImageService.verifyLocked()`: `fsck_apfs`
+  /// nieuruchomiony (brak binarki, ubity proces, wyrwane urzadzenie) dawal
+  /// `false` dokladnie tak samo jak `fsck_apfs`, ktory znalazl uszkodzenie -
+  /// harness meldowal wtedy "backup stracony" i liczyl nieodwracalna strate,
+  /// nie majac ani jednego wyniku. Falszywy alarm o utracie calej kopii jest
+  /// tu grozniejszy niz brak odpowiedzi, bo na jego podstawie odtwarza sie
+  /// backup od zera.
+  static func classify(fsck result: ProcessResult?) -> ImageCheck {
+    guard let result else {
+      return .notChecked("fsck_apfs nie dal sie uruchomic albo nie zwrocil wyniku")
+    }
+    return result.succeeded ? .consistent : .inconsistent
+  }
+
+  /// Ostatnie zdanie przebiegu - jedyne, ktore ktokolwiek zapamieta.
+  ///
+  /// Czyste i wydzielone, bo to tutaj byla usterka: dopoki liczyly sie tylko
+  /// straty, przebieg BEZ ANI JEDNEGO pomiaru konczyl sie zdaniem "Obraz
+  /// przezyl kazde wyrwanie podlogi". Harness nie ma prawa orzekac, ze cos
+  /// przezylo, jesli nie wie, czy to cos w ogole probowal zabic.
+  static func summary(requestedRounds: Int, executedRounds: Int, lost: Int, unmeasured: Int)
+    -> [String]
+  {
+    var lines = [
+      "Rundy: \(requestedRounds) zamowione, \(executedRounds) wykonane   "
+        + "nieodwracalnych strat: \(lost)   rund bez pomiaru: \(unmeasured)"
+    ]
+    if executedRounds == 0 {
+      lines.append("PRZEBIEG NIC NIE ZMIERZYL: nie wykonano ani jednej rundy.")
+      return lines
+    }
+    if lost > 0 {
+      lines.append("UWAGA: architektura gubi backup przy utracie warstwy chmurowej.")
+      return lines
+    }
+    if unmeasured > 0 {
+      lines.append(
+        "PRZEBIEG NIC NIE DOWODZI: \(unmeasured) z \(executedRounds) rund nie zmierzylo niczego")
+      lines.append(
+        "(zapis sie nie zaczal, skonczyl sie przed wyrwaniem podlogi albo obrazu nie "
+          + "dalo sie sprawdzic).")
+      return lines
+    }
+    lines.append("Obraz przezyl kazde wyrwanie podlogi.")
+    return lines
   }
 }
 
-/// Leje losowe dane, dopoki podloga nie zniknie. Zwraca `false`, gdy zapis
-/// padl - czyli w oczekiwanym przypadku.
+/// Wynik sprawdzenia obrazu `fsck_apfs`. Trzy stany, bo "nie udalo sie
+/// sprawdzic" i "niespojny" to dwie rozne odpowiedzi - patrz `classify`.
+enum ImageCheck: Equatable {
+  case consistent
+  case inconsistent
+  case notChecked(String)
+}
+
+/// Co sie stalo z probnym zapisem.
+///
+/// Trzy stany, nie dwa. `writeUntilItBreaks` zwracalo `Bool`, a `false` znaczylo
+/// jednoczesnie "zapis przerwano w polowie" (cala tresc testu) i "zapisu nie
+/// dalo sie w ogole zaczac" - `createFile` albo `FileHandle` padly od razu, na
+/// przyklad bo sciezki nie ma. Harness drukowal wtedy "zapis przerwany, zgodnie
+/// z oczekiwaniem" i konczyl "Obraz przezyl kazde wyrwanie podlogi", nie
+/// napisawszy ani jednego bajtu.
+///
+/// `completed` tez jest osobno i tez NIE jest sukcesem testu: zapis, ktory
+/// skonczyl sie przed wyrwaniem podlogi, nie zmierzyl niczego (dokladnie ta
+/// pulapka, przed ktora ostrzega komentarz o `arc4random_buf` przy funkcji).
+enum WriteProbe: Equatable {
+  /// Zapisu NIE ZACZELISMY - runda nic nie mierzy.
+  case neverStarted(String)
+  /// Zapis szedl i zostal przerwany - oczekiwany przypadek.
+  case interrupted(megabytesWritten: Int)
+  /// Zapis doszedl do konca, czyli podloga zniknela za pozno albo wcale.
+  case completed(megabytesWritten: Int)
+}
+
+/// Leje losowe dane, dopoki podloga nie zniknie.
+///
+/// Wewnetrzna (nie `private`), zeby test mogl sprawdzic, ze "nie zaczalem
+/// pisac" i "zapis przerwany" to dwie rozne odpowiedzi.
 ///
 /// Pisze porcjami przez `FileHandle`, a nie jednym `Data.write`, zeby zapis
 /// naprawde trwal i dalo sie go przerwac w polowie.
@@ -188,24 +298,43 @@ struct PullPlugCommand: AsyncParsableCommand {
 /// konczyl sie PRZED wyrwaniem podlogi - harness meldowal "obraz przezyl", nie
 /// sprawdziwszy tego, po co istnieje. Zmierzone: z urandom zapis wciaz trwa,
 /// gdy znika montowanie.
-private func writeUntilItBreaks(to url: URL, megabytes: Int) -> Bool {
-  guard FileManager.default.createFile(atPath: url.path, contents: nil),
-    let handle = FileHandle(forWritingAtPath: url.path),
-    let entropy = FileHandle(forReadingAtPath: "/dev/urandom")
-  else { return false }
+func writeUntilItBreaks(to url: URL, megabytes: Int) -> WriteProbe {
+  guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+    return .neverStarted("nie udalo sie utworzyc \(url.path)")
+  }
+  guard let handle = FileHandle(forWritingAtPath: url.path) else {
+    return .neverStarted("nie udalo sie otworzyc do zapisu \(url.path)")
+  }
+  guard let entropy = FileHandle(forReadingAtPath: "/dev/urandom") else {
+    try? handle.close()
+    return .neverStarted("nie udalo sie otworzyc /dev/urandom")
+  }
   defer {
     try? handle.close()
     try? entropy.close()
   }
+  var written = 0
   for _ in 0..<megabytes {
     do {
       guard let chunk = try entropy.read(upToCount: 1024 * 1024), !chunk.isEmpty else {
-        return false
+        // Zero bajtow z urandom przy PIERWSZEJ porcji znaczy, ze zapis nigdy
+        // sie nie zaczal - a przy setnej, ze padl w trakcie.
+        return written == 0
+          ? .neverStarted("/dev/urandom nie dal ani jednego bajtu")
+          : .interrupted(megabytesWritten: written)
       }
       try handle.write(contentsOf: chunk)
+      written += 1
     } catch {
-      return false
+      return written == 0
+        ? .neverStarted("pierwszy zapis padl od razu: \(error.localizedDescription)")
+        : .interrupted(megabytesWritten: written)
     }
   }
-  return (try? handle.synchronize()) != nil
+  // Nieudany `synchronize` to zapis, ktory nie doszedl na dysk - czyli
+  // przerwany, a nie ukonczony.
+  guard (try? handle.synchronize()) != nil else {
+    return .interrupted(megabytesWritten: written)
+  }
+  return .completed(megabytesWritten: written)
 }

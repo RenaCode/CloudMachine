@@ -266,6 +266,23 @@ command shows you what it is looking at.
 Empty logs after a fresh install are normal — the agents only write when
 something happens.
 
+That last sentence is also why silence proves nothing about the watchdog itself.
+`backup-health` runs on `StartInterval 1800` with no `KeepAlive`, so an agent
+that was unloaded or that hung looks exactly like one that ran and had nothing
+to report. Every run therefore drops its date into
+`~/Library/Application Support/CloudMachine/backup-health-last-run`, and both
+`drive-status` and the app window show it:
+
+```
+Czujka backupu:   2026-09-25 22:04 (12 min temu)
+Czujka backupu:   2026-09-22 03:10 (3 dni temu) - CZUJKA MOZE NIE CHODZIC
+```
+
+The second line means nobody has been asking whether the backup works — not
+that the backup is broken. Check the cycle yourself (`cloudmachine-agent
+backup-health`) and then find out why the agent stopped
+(`launchctl print gui/$UID/com.renacode.cloudmachine.backup-health`).
+
 ### Before rebooting
 
 ```sh

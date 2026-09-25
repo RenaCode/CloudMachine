@@ -228,6 +228,13 @@ struct BackupHealthCommand: AsyncParsableCommand {
     let report = await BackupHealth.currentReport(
       maxAgeHours: maxAgeHours, preferencesFile: preferences)
 
+    // Znacznik "czujka przebiegla" - PRZED wypisaniem czegokolwiek i przed
+    // decyzja o kodzie wyjscia, bo przebieg, ktory znalazl awarie, jest tak
+    // samo przebiegiem jak ten, ktory nic nie znalazl. Bez tego jedynym
+    // objawem wyladowanej albo zawieszonej czujki bylaby cisza - a cisza jest
+    // tu stanem normalnym (patrz `WatchdogHeartbeat`).
+    WatchdogHeartbeat.record()
+
     if let lastSuccess = report.lastSuccess {
       print("Ostatnia udana kopia: \(BackupHealth.stamp(lastSuccess))")
     } else {
@@ -371,6 +378,9 @@ struct DriveStatus: AsyncParsableCommand {
     } else {
       print("Backup:           nie trwa")
     }
+    // Kto pilnuje czujki. Bez tego wiersza "brak alarmu" znaczylo jednoczesnie
+    // "backup dziala" i "nikt nie sprawdzal" - patrz `WatchdogHeartbeat`.
+    print("Czujka backupu:   \(StatusLines.watchdogRun(WatchdogHeartbeat.current()))")
 
     // Na samym koncu i bez wyrownania do kolumny - to nie jest kolejny wiersz
     // stanu, tylko cos, co ma zaklocic czytanie. `HealthAlert` od niedawna nie

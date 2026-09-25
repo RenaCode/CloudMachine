@@ -91,4 +91,35 @@ public enum StatusLines {
       "        Powiadomienie systemowe nie doszlo - ten alarm zobaczysz TYLKO tutaj.",
     ]
   }
+
+  /// Wiersz "Czujka backupu", czyli kiedy `backup-health` ostatnio przebiegla.
+  ///
+  /// Trzeci wiersz z tej samej rodziny, co dwa powyzej: pokazuje fakt, ktorego
+  /// inaczej nie widac. Czujka chodzi z `StartInterval 1800` i bez `KeepAlive`,
+  /// wiec wyladowana albo zawieszona nie daje ZADNEGO objawu poza cisza - a
+  /// cisza jest tu stanem normalnym (README: "Empty logs after a fresh install
+  /// are normal"). Bez tego wiersza "brak alarmu" znaczylo jednoczesnie
+  /// "backup dziala" i "nikt nie sprawdzal", czyli nie znaczylo nic.
+  ///
+  /// Nazwany osobno i dodany na koncu `StatusLines`, zamiast wpleciony w
+  /// istniejace funkcje - `drive-status` przebudowuje rownolegle galaz
+  /// `naprawy/dozorca-bufora`.
+  public static func watchdogRun(_ freshness: WatchdogHeartbeat.Freshness) -> String {
+    switch freshness {
+    case .fresh(let lastRun, let age):
+      return "\(BackupHealth.stamp(lastRun)) (\(BackupHealth.formatAge(age)) temu)"
+    case .stale(let lastRun, let age):
+      // Znacznik z przyszlosci (przestawiony zegar, plik przeniesiony z innej
+      // maszyny) tez jest brakiem wiedzy, a nie wiekiem - "-60 min temu" nie
+      // jest zdaniem, ktore cokolwiek mowi.
+      guard age >= 0 else {
+        return "\(BackupHealth.stamp(lastRun)) - znacznik z PRZYSZLOSCI"
+      }
+      return
+        "\(BackupHealth.stamp(lastRun)) (\(BackupHealth.formatAge(age)) temu) - "
+        + "CZUJKA MOZE NIE CHODZIC"
+    case .never:
+      return "NIGDY - czujka nie zapisala zadnego przebiegu"
+    }
+  }
 }
