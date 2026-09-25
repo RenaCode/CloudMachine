@@ -216,4 +216,58 @@ final class BackupImageServiceTests: XCTestCase {
       return XCTFail("brak odpowiedzi ma byc .unknown, dostalem \(wynik)")
     }
   }
+
+  // MARK: - Ustalenie 5: co odpiecie mowi o kolejce
+
+  /// TA usterka. `expireQueuedUploads()` liczylo tylko SUKCESY, wiec kolejka
+  /// pelna pozycji, z ktorych zadnej nie udalo sie przyspieszyc, wychodzila
+  /// stad jako `0` - dokladnie tak samo jak kolejka pusta. Zmierzony stan tej
+  /// maszyny w chwili audytu: 462 pozycje, a log twierdzilby "kolejka pusta".
+  ///
+  /// Te linie czyta czlowiek w chwili, w ktorej decyduje, czy wolno skasowac
+  /// bufor - "kolejka pusta" czyta sie tam jako "nic nie czeka na wyslanie".
+  func testKolejkaPelnaBezAniJednegoSukcesuToNiePustaKolejka() {
+    let linia = BackupImageService.expiryLogLine(
+      DriveBufferService.ExpiryOutcome(queued: 462, moved: 0))
+    XCTAssertFalse(
+      linia.contains("kolejka pusta"),
+      "462 pozycje w kolejce to nie pusta kolejka - dostalem: \(linia)")
+    XCTAssertTrue(linia.contains("462"), "liczba czekajacych pozycji musi byc widoczna: \(linia)")
+    XCTAssertTrue(
+      linia.contains("nie udalo sie"),
+      "log musi powiedziec, ze terminow NIE przesunieto: \(linia)")
+  }
+
+  /// Pusta kolejka nadal ma sie opisywac jako pusta - inaczej "naprawa"
+  /// polegajaca na skasowaniu tego przypadku przeszlaby niezauwazona.
+  func testPustaKolejkaNadalMowiZeJestPusta() {
+    XCTAssertTrue(
+      BackupImageService.expiryLogLine(
+        DriveBufferService.ExpiryOutcome(queued: 0, moved: 0)
+      ).contains("kolejka pusta"))
+  }
+
+  /// Czesciowa porazka tez nie jest sukcesem: pozycje bez przesunietego terminu
+  /// beda czekac cale `writeBackSeconds` i drenaz potrwa dluzej, niz wynikaloby
+  /// z linii "wymuszono wysylke N pozycji".
+  func testCzesciowePrzesuniecieMowiIleZOSTALO() {
+    let linia = BackupImageService.expiryLogLine(
+      DriveBufferService.ExpiryOutcome(queued: 100, moved: 60))
+    XCTAssertTrue(linia.contains("60 z 100"), linia)
+    XCTAssertTrue(linia.contains("40"), "brakujace 40 pozycji musi byc widoczne: \(linia)")
+  }
+
+  func testWszystkiePrzesunieteToZwyklyKomunikat() {
+    let linia = BackupImageService.expiryLogLine(
+      DriveBufferService.ExpiryOutcome(queued: 12, moved: 12))
+    XCTAssertEqual(linia, "Odpiecie: wymuszono wysylke 12 pozycji z kolejki")
+  }
+
+  /// Brak odpowiedzi rclone to trzeci, osobny przypadek - nie wolno go zlac
+  /// ani z pusta kolejka, ani z porazka przesuwania.
+  func testBrakOdpowiedziToNadalOsobnyPrzypadek() {
+    let linia = BackupImageService.expiryLogLine(nil)
+    XCTAssertTrue(linia.contains("nie odpowiedzial"), linia)
+    XCTAssertFalse(linia.contains("kolejka pusta"), linia)
+  }
 }

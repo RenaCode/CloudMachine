@@ -366,14 +366,20 @@ public enum DriveBufferService {
   /// Wolac PO tym, jak zapisy z odpiecia zdazyly trafic do kolejki - pozycje
   /// dolozone pozniej nie zostana ruszone.
   ///
-  /// Zwraca liczbe pozycji, ktorym przesunieto termin, albo `nil`, gdy rclone
-  /// nie odpowiedzial na pytanie o kolejke.
+  /// Zwraca `ExpiryOutcome` - ile pozycji ZASTALISMY i ilu udalo sie przesunac
+  /// termin - albo `nil`, gdy rclone nie odpowiedzial na pytanie o kolejke.
   ///
   /// `nil` i `0` to DWIE ROZNE RZECZY i dlatego typ jest opcjonalny. Do 23
   /// wrzesnia 2026 obie sytuacje - "kolejka byla pusta" i "nie dostalismy
   /// odpowiedzi" - wychodzily stad jako `0`, wiec `detach` milczal w logu
   /// dokladnie w tym przypadku, w ktorym terminow NIE przesunieto i drenaz
   /// mogl potrwac cale `writeBackSeconds` (dziesiec minut) zamiast chwili.
+  ///
+  /// Sama liczba przesunietych pozycji nie wystarcza, bo TRZECI przypadek
+  /// wyglada jak pierwszy: gdy kolejka ma pozycje, ale kazde
+  /// `vfs/queue-set-expiry` padnie, "przesunieto 0" bylo nieodroznialne od
+  /// "nie bylo czego przesuwac". Dlatego `queued` i `moved` sa osobno - patrz
+  /// `BackupImageService.expiryLogLine`.
   ///
   /// Limit na samo listowanie kolejki podniesiony z 30 s do 60 s: ten sam plik
   /// dokumentuje pomiar **36,7 s** dla LZEJSZEGO `vfs/stats` przy zapchanym
@@ -385,8 +391,24 @@ public enum DriveBufferService {
   /// wywolanie decyduje o calej funkcji, a to jest jedno z setek i jego strata
   /// kosztuje jedna pozycje. Przy kilkuset pozycjach sufit 60 s na sztuke
   /// zamienilby odpiecie w operacje bez gornego ograniczenia czasu.
+  /// Ile pozycji do przyspieszenia bylo w kolejce i ilu FAKTYCZNIE przesunieto
+  /// termin. Dwa pola, nie jedno, bo "zero" znaczy cos innego w zaleznosci od
+  /// tego, ile bylo prob - patrz `expireQueuedUploads`.
+  public struct ExpiryOutcome: Sendable, Equatable {
+    /// Pozycje zastane w kolejce, ktore dalo sie przyspieszyc (bez tych juz
+    /// wysylanych - patrz `parseQueueIDs`).
+    public var queued: Int
+    /// Ile z nich rclone potwierdzil.
+    public var moved: Int
+
+    public init(queued: Int, moved: Int) {
+      self.queued = queued
+      self.moved = moved
+    }
+  }
+
   @discardableResult
-  public static func expireQueuedUploads() async -> Int? {
+  public static func expireQueuedUploads() async -> ExpiryOutcome? {
     guard
       let result = try? await CMTooling.runRclone(
         ["rc", "--url", rcAddress, "vfs/queue"], timeout: 60),
@@ -402,7 +424,7 @@ public enum DriveBufferService {
         timeout: 30)
       if response?.succeeded == true { moved += 1 }
     }
-    return moved
+    return ExpiryOutcome(queued: ids.count, moved: moved)
   }
 
   /// Czysta wersja: numery pozycji z odpowiedzi `vfs/queue`, ktorym da sie
