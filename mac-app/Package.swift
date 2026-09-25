@@ -45,7 +45,15 @@ let package = Package(
         ),
         .testTarget(
             name: "CloudMachineAppTests",
-            dependencies: ["CloudMachineApp", "CloudMachineCore"],
+            // `cloudmachine-poc` jest tu od 25.09.2026 i celowo: harnessy
+            // mierza zachowanie hdiutil i FUSE-T, ale SPOSOB, w jaki zdaja
+            // z tego relacje, jest zwyklym kodem i psul sie po cichu -
+            // `pullplug` meldowal "Obraz przezyl kazde wyrwanie podlogi"
+            // po przebiegu, w ktorym zapis nigdy sie nie zaczal. Testy
+            // dotykaja WYLACZNIE czystych czesci (klasyfikacja wyniku,
+            // podsumowanie, proba zapisu do katalogu, ktorego nie ma) - zaden
+            // z nich nie tworzy obrazu dyskowego.
+            dependencies: ["CloudMachineApp", "CloudMachineCore", "cloudmachine-poc"],
             path: "Tests/CloudMachineAppTests"
         )
     ]
