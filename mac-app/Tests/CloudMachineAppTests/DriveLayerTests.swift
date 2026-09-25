@@ -336,15 +336,31 @@ final class UploadStallDetectionTests: XCTestCase {
 /// go z petli sluzy testowaniu - a testu nie bylo. Tu jest.
 final class BufferGuardThresholdTests: XCTestCase {
 
-  /// Prog pauzy MUSI lezec powyzej rozmiaru bufora. `--vfs-cache-max-size` to
-  /// granica miekka i bufor normalnie stoi przy limicie (zmierzone: rowno
-  /// 100 GiB przez cala pierwsza wysylke). Prog rowny albo nizszy oznaczalby
-  /// wstrzymywanie backupu bez przerwy.
-  func testPauseThresholdSitsAboveTheCacheSize() {
+  /// Prog pauzy MUSI lezec PONIZEJ rozmiaru bufora - i to jest odwrocenie
+  /// wymagania, ktore stalo tu wczesniej.
+  ///
+  /// Stara wersja zadala progu POWYZEJ rozmiaru cache'a, bo progi odnosily sie
+  /// do `bytesUsed`, czyli do rozmiaru CALEGO cache'a. Ta wielkosc z definicji
+  /// stoi przy limicie (`--vfs-cache-max-size 100G` plus `max-age 9999h`),
+  /// zmierzone: 281 pomiarow, minimum 99 GB. Prog ponizej niej faktycznie
+  /// wstrzymywalby backup bez przerwy - wiec tamto wymaganie bylo sluszne DLA
+  /// TAMTEJ MIARY.
+  ///
+  /// Od 2026-09-25 progi odnosza sie do ZALEGLOSCI NIEWYSLANEJ. Zaleglosc to
+  /// dokladnie ta czesc cache'a, ktorej rclone NIE MOZE usunac, wiec gdy
+  /// zrowna sie z `cacheSizeGB`, limit nie ma juz zapasu i kazdy kolejny
+  /// gigabajt idzie poza niego, w wolne miejsce na dysku. Prog pauzy musi wiec
+  /// zdazyc ZANIM to nastapi.
+  ///
+  /// Co kosztowala stara wersja: przy progu wznowienia 40 GB liczonym z miary,
+  /// ktora nigdy nie spadla ponizej 99 GB, w calym dzienniku jest jedna linia
+  /// PAUZA i ZERO linii WZNOWIENIE - dozorca stal w pauzie 53 godziny.
+  func testPauseThresholdSitsBelowTheCacheSize() {
     let t = BufferGuardService.Thresholds()
-    XCTAssertGreaterThan(
+    XCTAssertLessThan(
       t.highGB, DriveBufferService.cacheSizeGB,
-      "Prog pauzy ponizej rozmiaru bufora zatrzymywalby backup non stop.")
+      "Prog pauzy rowny rozmiarowi bufora znaczy zero zapasu: zaleglosc rowna "
+        + "pojemnosci cache'a wypycha kazdy kolejny gigabajt w wolne miejsce.")
   }
 
   /// Prog wznowienia musi byc wyraznie nizszy od progu pauzy, inaczej dozorca
@@ -357,12 +373,27 @@ final class BufferGuardThresholdTests: XCTestCase {
       "Zbyt waski odstep progow daje cykl pauza-wznowienie-pauza.")
   }
 
-  /// Progi wyliczaja sie z rozmiaru bufora. Wpisane z palca dzialaly tylko
-  /// przypadkiem, dla jednej konkretnej wartosci.
+  /// Progi nadal WYLICZAJA sie z rozmiaru bufora, a nie sa wpisane z palca -
+  /// ta wlasnosc zostaje, zmienily sie tylko mnozniki, bo zmienila sie
+  /// wielkosc, do ktorej progi sie odnosza (zaleglosc zamiast rozmiaru cache'a).
+  /// Wpisane z palca dzialaly tylko przypadkiem, dla jednej konkretnej wartosci.
   func testThresholdsFollowTheCacheSize() {
     let t = BufferGuardService.Thresholds()
-    XCTAssertEqual(t.highGB, DriveBufferService.cacheSizeGB * 3 / 2)
-    XCTAssertEqual(t.lowGB, DriveBufferService.cacheSizeGB * 2 / 5)
+    XCTAssertEqual(t.highGB, DriveBufferService.cacheSizeGB / 2)
+    XCTAssertEqual(t.lowGB, DriveBufferService.cacheSizeGB / 10)
+  }
+
+  /// Prog wznowienia musi byc OSIAGALNY. To jest cala lekcja z 53 godzin pauzy:
+  /// stare 40 GB odnosilo sie do wielkosci, ktora nigdy nie zeszla ponizej
+  /// 99 GB, wiec warunek wyjscia z pauzy byl falszywy w 281 obserwacjach na 281.
+  /// Zaleglosc schodzi do zera, gdy kolejka sie oprozni - ale tylko wtedy, gdy
+  /// prog lezy w zasiegu tego, co kolejka potrafi oddac.
+  func testResumeThresholdIsReachable() {
+    let t = BufferGuardService.Thresholds()
+    XCTAssertGreaterThan(t.lowGB, 0, "Prog wznowienia rowny zeru wymaga pustej kolejki.")
+    XCTAssertLessThan(
+      t.lowGB, DriveBufferService.cacheSizeGB,
+      "Prog wznowienia powyzej pojemnosci cache'a jest nieosiagalny z definicji.")
   }
 
   func testExplicitThresholdsAreRespected() {
