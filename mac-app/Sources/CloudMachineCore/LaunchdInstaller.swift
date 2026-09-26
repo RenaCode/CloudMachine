@@ -55,8 +55,15 @@ public enum LaunchdInstaller {
       // Martwy obraz (patrz `ImageProbe`) nie da sie odpiac grzecznie -
       // `hdiutil detach` bez `-force` odmawia, a instalacja stanelaby na
       // dokladnie tym stanie, ktory ma naprawic.
-      let attachment = BackupImageService.attachment
-      let force = !attachment.isUsable
+      // WYLACZNIE `.dead`, a nie `!isUsable`. `.unknown` tez nie jest
+      // "uzywalny", ale znaczy "nie wiem" - a `detach -force` na urzadzeniu,
+      // ktore moze byc zywe, porzuca zapisy czekajace na wysylke na Dysk.
+      // Od 26.09.2026 `.unknown` jest tu OSIAGALNY (sonda czytelnosci ma limit
+      // czasu i po jego przekroczeniu oddaje wlasnie ten stan), wiec roznica
+      // przestala byc teoretyczna. Bez `-force` `hdiutil detach` po prostu
+      // odmowi, instalacja przerwie sie z komunikatem i nikt nie straci danych.
+      var force = false
+      if case .dead = await BackupImageService.attachment() { force = true }
       CMLogger.log(
         "Instalacja agentow: najpierw odpinam obraz\(force ? " (martwy - na sile)" : "") i czekam na wysylke"
       )

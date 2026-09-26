@@ -19,11 +19,12 @@ final class BackupHealthTests: XCTestCase {
     lastAttempt: Date? = nil,
     result: Int? = 0,
     mounted: Bool = true,
-    attached: Bool = true,
+    attached: Bool? = true,
     destinationRegistered: Bool = true,
     erroredFiles: Int = 0,
     outOfSpace: Bool = false,
-    queueReadable: Bool = true
+    queueReadable: Bool = true,
+    imageProbeTimedOut: Bool = false
   ) -> BackupHealth.Report {
     BackupHealth.evaluate(
       lastSuccess: lastSuccess ?? now.addingTimeInterval(-1800),
@@ -35,7 +36,37 @@ final class BackupHealthTests: XCTestCase {
       destinationRegistered: destinationRegistered,
       erroredFiles: erroredFiles,
       outOfSpace: outOfSpace,
-      queueReadable: queueReadable)
+      queueReadable: queueReadable,
+      imageProbeTimedOut: imageProbeTimedOut)
+  }
+
+  /// Sonda czytelnosci nie odpowiedziala w czasie. To NIE jest "obraz nie jest
+  /// podpiety" (obraz siedzi w tablicy montowan) i NIE jest "obraz MARTWY"
+  /// (urzadzenie nie odpowiedzialo wcale, a nie bledem). Pierwszy komunikat
+  /// wyslalby czlowieka podpinac cos, co jest podpiete; drugi - odpinac NA
+  /// SILE urzadzenie, ktore moze byc zywe i trzymac niewyslane dane.
+  ///
+  /// Najwazniejsze jednak jest to, ze czujka W OGOLE tu dociera: przed
+  /// poprawka ten odczyt nie mial limitu czasu, a `StartInterval 1800` bez
+  /// `KeepAlive` znaczy, ze jedno zawieszenie uciszalo czujke NA STALE.
+  func testSondaBezOdpowiedziJestZglaszanaJakoBrakWiedzy() {
+    let report = healthyInput(attached: nil, imageProbeTimedOut: true)
+    XCTAssertFalse(report.healthy, "cisza o stanie, ktorego nie znamy, jest tu awaria")
+    XCTAssertTrue(
+      report.problems.contains { $0.summary.contains("oddaje dane") },
+      "czujka ma DOKONCZYC przebieg i zglosic brak wiedzy: \(report.problems)")
+    XCTAssertFalse(report.problems.contains { $0.summary.contains("nie jest podpiety") })
+    XCTAssertFalse(report.problems.contains { $0.summary.contains("MARTWY") })
+  }
+
+  /// Dwie przyczyny "nie wiem" wysylaja czlowieka w dwa rozne miejsca, wiec
+  /// nie moga dostac tego samego zdania.
+  func testDwiePrzyczynyBrakuWiedzyOObrazieMajaRozneKomunikaty() {
+    let sonda = healthyInput(attached: nil, imageProbeTimedOut: true).problems
+    let tablica = healthyInput(attached: nil).problems
+    XCTAssertNotEqual(sonda, tablica)
+    XCTAssertFalse(sonda.isEmpty)
+    XCTAssertFalse(tablica.isEmpty)
   }
 
   /// Obraz w tablicy montowan, ale odczyt pada - 22 wrz 2026 przez 15 h zaden

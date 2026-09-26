@@ -24,7 +24,7 @@ import Foundation
 /// Dlatego sonda czyta bajt. Nic slabszego nie odroznia zywego od martwego.
 public enum ImageProbe {
 
-  public enum Verdict: Equatable {
+  public enum Verdict: Equatable, Sendable {
     /// Odczyt sie udal.
     case readable
     /// Urzadzenie nie oddaje danych. `errno` z nieudanego odczytu.
@@ -33,6 +33,16 @@ public enum ImageProbe {
     /// tak wyglada swiezy wolumen przed pierwsza kopia. Nie da sie stwierdzic
     /// awarii, wiec NIE zglaszamy jej.
     case nothingToProbe
+    /// Sonda NIE ODPOWIEDZIALA w wyznaczonym czasie.
+    ///
+    /// To NIE jest `.dead` i zlanie tych dwoch przypadkow byloby grozne:
+    /// `.dead` wyzwala w `attach-image` odpiecie NA SILE obrazu, na ktorym
+    /// czekaja jeszcze niewyslane dane, a tutaj nie wiemy nawet tego, czy
+    /// urzadzenie jest martwe. Brak wiedzy ma WSTRZYMYWAC operacje
+    /// nieodwracalna, nie ja wyzwalac - dlatego ten werdykt mapuje sie na
+    /// `BackupImageService.Attachment.unknown`, ktore juz blokuje `attach`
+    /// i `create`.
+    case timedOut
   }
 
   /// Bledy, ktore znacza "urzadzenie zniklo", a nie "plik jest dziwny".
@@ -99,11 +109,179 @@ public enum ImageProbe {
     return nil
   }
 
-  /// Sonda na zywym wolumenie.
-  public static func probe(volume: URL) -> Verdict {
-    probe(
+  // MARK: - Limit czasu
+  //
+  // DLACZEGO WATEK ODDZIELONY DEADLINEM, A NIE `ProcessRunner.run(timeout:)`
+  //
+  // Sonda to `readdir` plus `open`/`read` na wolumenie stojacym na FUSE-T.
+  // Kiedy rclone przestaje odpowiadac, te wywolania wchodza w NIEPRZERYWALNE
+  // oczekiwanie w jadrze (stan "U" w `ps`). Takiego watku nie da sie ani
+  // anulowac, ani ubic: `Task.cancel()` jest kooperacyjne i `read()` w jadrze
+  // z nim nie wspolpracuje, a SIGKILL tez nie dziala - to samo ograniczenie
+  // opisuje juz `ProcessRunner` przy swojej "ostatecznej granicy". Skoro sondy
+  // nie da sie PRZERWAC, jedyne, co da sie zagwarantowac, to ze jej
+  // zawieszenie nie zawiesza WOLAJACEGO. Sonda dostaje wiec wlasny watek,
+  // a wolajacy deadline i werdykt `.timedOut`.
+  //
+  // Dlatego tez nie ma tu (i nie moze byc) synchronicznego `probe(volume:)` -
+  // byl do 26.09.2026 i wlasnie on zamrazal panel na `@MainActor` oraz
+  // uciszal czujke `backup-health` na stale. Jedyne wejscie na zywy wolumen
+  // jest `async`, zeby wolajacy czekal bez blokowania watku.
+  //
+  // Rozwazone i ODRZUCONE:
+  //
+  // - Sonda w PODPROCESIE przez `ProcessRunner.run(..., timeout:)` - wzorzec,
+  //   ktory w tym repo ratuje `tmutil`. Kupuje tu dokladnie tyle samo, co
+  //   watek (zawieszenie nie zatrzymuje wolajacego), a placi znacznie wiecej:
+  //   nowa podkomenda agenta, odnajdywanie binarki w trzech ukladach (bundel
+  //   GUI, `.build/` przy pracy z terminala, `/Applications` pod launchd),
+  //   `fork`+`exec` co 10 s w petli odswiezania panelu i - tak samo jak tu -
+  //   osierocony proces zawieszony w jadrze, ktorego nikt nie ubije. Trzy nowe
+  //   miejsca, w ktorych sonda moze przestac dzialac po cichu, za zysk
+  //   ograniczony do tego, ze zaklinowany watek nalezy do obcego procesu.
+  //
+  // - `open(..., O_NONBLOCK)`. Na PLIKU ZWYKLYM O_NONBLOCK nie czyni `read()`
+  //   nieblokujacym - dotyczy FIFO, gniazd i urzadzen znakowych, a nie
+  //   oczekiwania na I/O pliku; `readdir` nie ma nawet takiego wariantu.
+  //   Sonda stracilaby wiec czytelnosc kodu, nie zyskujac gwarancji, a przy
+  //   okazji przestalaby mierzyc to, po co istnieje: ODDANIE bajtu przez
+  //   urzadzenie.
+  //
+  // - Wyscig dwoch `Task` z `Task.sleep` i `cancel()` na przegranym - patrz
+  //   wyzej, anulowanie nie ma jak dosiegnac `read()` w jadrze. Watek z puli
+  //   `DispatchQueue.global()` odpada z tego samego powodu, tylko gorzej:
+  //   zaklinowany watek zostaje zajety na zawsze, a pula ma ~64 miejsca
+  //   i jest wspoldzielona z cala reszta procesu.
+
+  /// Ile czekamy na werdykt, zanim oglosimy `.timedOut`.
+  ///
+  /// Na zywym wolumenie sonda trwa mikrosekundy - jeden `readdir` i odczyt
+  /// jednego bajtu. Te 15 s to wiec nie budzet na prace, a granica
+  /// cierpliwosci. Dolna granice wyznacza ZYWY, ale wolny FUSE-T (pasmo
+  /// sciagane z Dysku w trakcie odczytu), ktorego nie wolno brac za
+  /// niewiadoma; gorna - to, po co ten limit istnieje: 25.09.2026
+  /// `drive-status` wisial ponad 25 s i trzeba go bylo zabic recznie, a czujka
+  /// `backup-health` chodzi co 1800 s, wiec pelne 15 s i tak nie zblizy sie
+  /// do jej okna.
+  public static let probeTimeout: TimeInterval = 15
+
+  /// Werdykt przekazywany z watku sondujacego do wolajacego.
+  ///
+  /// Obie strony musza przezyc brak drugiej: wolajacy moze sie poddac na
+  /// deadline i nigdy nie odebrac werdyktu, a watek moze nigdy nie dojsc do
+  /// `finish`, bo utknal w jadrze.
+  private final class ProbeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var verdict: Verdict?
+    private var handler: ((Verdict) -> Void)?
+
+    func finish(_ value: Verdict) {
+      lock.lock()
+      guard verdict == nil else {
+        lock.unlock()
+        return
+      }
+      verdict = value
+      let waiting = handler
+      handler = nil
+      lock.unlock()
+      waiting?(value)
+    }
+
+    /// Wola `handler` z werdyktem - natychmiast, jesli sonda zdazyla
+    /// odpowiedziec, zanim wolajacy zapisal sie na powiadomienie.
+    func whenDone(_ handler: @escaping (Verdict) -> Void) {
+      lock.lock()
+      if let verdict {
+        lock.unlock()
+        handler(verdict)
+        return
+      }
+      self.handler = handler
+      lock.unlock()
+    }
+  }
+
+  /// Ktore wolumeny maja wlasnie sonde w locie.
+  private final class ProbeSlots: @unchecked Sendable {
+    static let shared = ProbeSlots()
+    private let lock = NSLock()
+    private var busy: Set<String> = []
+
+    /// `true` = slot byl wolny i od tej chwili nalezy do wolajacego.
+    func claim(_ slot: String) -> Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      return busy.insert(slot).inserted
+    }
+
+    func release(_ slot: String) {
+      lock.lock()
+      busy.remove(slot)
+      lock.unlock()
+    }
+  }
+
+  /// Startuje sonde na WLASNYM watku. `nil` = sonda tego slotu wciaz trwa.
+  ///
+  /// Jedna sonda na slot to nie optymalizacja. Bez tego panel GUI, ktory
+  /// odswieza sie co 10 s, zostawialby na trwale zaklinowanym wolumenie po
+  /// jednym wiszacym watku na przebieg - kilkaset na godzine, kazdy z wlasnym
+  /// stosem i zaden do odzyskania. Drugi watek i tak nie dowiedzialby sie
+  /// niczego nowego: skoro pierwszy stoi w jadrze, odpowiedzi nie ma, wiec
+  /// kolejny wolajacy dostaje `.timedOut` od razu.
+  private static func startProbe(
+    slot: String,
+    regularFiles: @escaping @Sendable () throws -> [URL],
+    readFirstByte: @escaping @Sendable (URL) -> Int32?
+  ) -> ProbeBox? {
+    guard ProbeSlots.shared.claim(slot) else { return nil }
+    let box = ProbeBox()
+    let thread = Thread {
+      let verdict = probe(regularFiles: regularFiles, readFirstByte: readFirstByte)
+      // Zwolnienie slotu PRZED oddaniem werdyktu: inaczej wolajacy obudzony
+      // przez `finish` widzialby slot jako wciaz zajety.
+      ProbeSlots.shared.release(slot)
+      box.finish(verdict)
+    }
+    thread.name = "com.renacode.cloudmachine.image-probe"
+    thread.stackSize = 512 * 1024
+    thread.start()
+    return box
+  }
+
+  /// Sonda na zywym wolumenie. Po `timeout` oddaje `.timedOut`, a wolajacy
+  /// idzie dalej - sam odczyt moze zostac w jadrze na zawsze i to jest
+  /// przyjete, byle nie zabral ze soba czujki ani interfejsu.
+  public static func probe(volume: URL, timeout: TimeInterval = probeTimeout) async -> Verdict {
+    await probe(
+      slot: volume.path, timeout: timeout,
       regularFiles: { try regularFiles(in: volume) },
       readFirstByte: { readFirstByteErrno(of: $0) })
+  }
+
+  /// Jak wyzej, ale z wstrzykiwanym listowaniem i odczytem - zeby test mogl
+  /// podstawic sonde, ktora NIGDY NIE ODPOWIADA, bez martwego wolumenu pod
+  /// reka. `slot` jest osobnym parametrem z tego samego powodu: dwa testy nie
+  /// moga sobie wzajemnie zajmowac tego samego slotu.
+  static func probe(
+    slot: String,
+    timeout: TimeInterval,
+    regularFiles: @escaping @Sendable () throws -> [URL],
+    readFirstByte: @escaping @Sendable (URL) -> Int32?
+  ) async -> Verdict {
+    guard
+      let box = startProbe(slot: slot, regularFiles: regularFiles, readFirstByte: readFirstByte)
+    else { return .timedOut }
+    return await withCheckedContinuation { (continuation: CheckedContinuation<Verdict, Never>) in
+      let once = ContinuationGuard()
+      box.whenDone { verdict in
+        if once.claim() { continuation.resume(returning: verdict) }
+      }
+      DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+        if once.claim() { continuation.resume(returning: .timedOut) }
+      }
+    }
   }
 
   /// Zwykle pliki w katalogu glownym. Dopoki cache katalogu jest swiezy
