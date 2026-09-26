@@ -112,22 +112,31 @@ public enum BackupImageService {
     return points.contains(targetPath.path)
   }
 
-  public enum Attachment: Equatable {
+  public enum Attachment: Equatable, Sendable {
     case detached
     case attached
     /// W tablicy montowan, ale odczyt pada z podanym `errno`. Time Machine
     /// widzi ten stan jako "dysk odlaczony" i nie zrobi ani jednej kopii,
     /// dopoki obraz nie zostanie odpiety i podpiety na nowo.
     case dead(errno: Int32)
-    /// Tablicy montowan NIE UDALO SIE odczytac, wiec o stanie obrazu nie
-    /// wiadomo nic. To nie jest `.detached`: `.detached` to twierdzenie
-    /// ("sprawdzilem, nie ma"), a tu nie bylo czego sprawdzic.
+    /// O stanie obrazu NIE WIADOMO nic. To nie jest `.detached`: `.detached`
+    /// to twierdzenie ("sprawdzilem, nie ma"), a tu nie bylo czego sprawdzic.
     ///
-    /// Po przejsciu na `getmntinfo(MNT_NOWAIT)` ten stan jest skrajnie malo
-    /// prawdopodobny - to odczyt z pamieci jadra, ktory nie ma jak zawisnac
-    /// ani pojsc do sieci. Istnieje mimo to, bo `attachment` jest typem, na
-    /// ktorym wolajacy opieraja decyzje, a typ nie powinien zmuszac do
-    /// zmyslania odpowiedzi.
+    /// Dwie przyczyny, obie prowadzace do tej samej decyzji (wstrzymaj, nie
+    /// ruszaj obrazu):
+    ///
+    /// 1. Tablicy montowan nie udalo sie odczytac. Po przejsciu na
+    ///    `getmntinfo(MNT_NOWAIT)` skrajnie malo prawdopodobne - to odczyt
+    ///    z pamieci jadra, ktory nie ma jak zawisnac ani pojsc do sieci.
+    /// 2. Obraz JEST w tablicy montowan, ale sonda czytelnosci nie
+    ///    odpowiedziala w `ImageProbe.probeTimeout` (od 26.09.2026 - wczesniej
+    ///    nie odpowiadala w nieskonczonosc i zabierala ze soba wolajacego).
+    ///
+    /// Osobnego, piatego stanu na drugi przypadek NIE ma swiadomie: kazda
+    /// decyzja podejmowana na tym typie jest w obu przypadkach identyczna,
+    /// a rozdzielenie ich zachecaloby do rozjechania sie tych drog. Kto
+    /// pisze do czlowieka i musi podac przyczyne, bierze ja z
+    /// `attachmentReading()`.
     case unknown
 
     /// Czy Time Machine ma gdzie pisac. `.unknown` swiadomie daje `false` -
@@ -137,25 +146,47 @@ public enum BackupImageService {
   }
 
   /// Stan podpiecia z uwzglednieniem tego, czy urzadzenie ZYJE.
-  public static var attachment: Attachment {
+  ///
+  /// `async`, a nie wlasciwosc obliczana, odkad sonda czytelnosci ma limit
+  /// czasu: czekanie na nia nie moze blokowac watku wolajacego (patrz
+  /// `ImageProbe` - `@MainActor` panelu i czujka bez `KeepAlive` placily za to
+  /// zamrozonym interfejsem i cisza).
+  public static func attachment() async -> Attachment {
+    await attachmentReading().attachment
+  }
+
+  /// Jak `attachment()`, ale mowi TEZ, czy "nie wiem" wzielo sie z sondy,
+  /// ktora nie odpowiedziala w czasie.
+  ///
+  /// Dla decyzji ta roznica nie ma znaczenia (oba przypadki wstrzymuja), ale
+  /// dla KOMUNIKATU ma ogromne: "nie udalo sie odczytac tablicy montowan" kaze
+  /// czlowiekowi sprawdzic zupelnie co innego niz "obraz jest w tablicy, ale
+  /// odczyt z niego nie wraca".
+  public static func attachmentReading() async -> (attachment: Attachment, probeTimedOut: Bool) {
     switch attachedState() {
-    case .none: return .unknown
-    case .some(false): return .detached
+    case .none: return (.unknown, false)
+    case .some(false): return (.detached, false)
     case .some(true):
-      switch ImageProbe.probe(volume: targetPath) {
-      case .dead(let errno): return .dead(errno: errno)
-      case .readable, .nothingToProbe: return .attached
+      switch await ImageProbe.probe(volume: targetPath) {
+      case .dead(let errno): return (.dead(errno: errno), false)
+      case .readable, .nothingToProbe: return (.attached, false)
+      // NIE `.dead`: `.dead` znaczy "urzadzenie odpowiedzialo bledem
+      // urzadzenia", a tu urzadzenie nie odpowiedzialo wcale.
+      case .timedOut: return (.unknown, true)
       }
     }
   }
 
-  public static func describe(_ attachment: Attachment) -> String {
+  public static func describe(_ attachment: Attachment, probeTimedOut: Bool = false) -> String {
     switch attachment {
     case .detached: return "BRAK"
     case .attached: return "OK  (\(targetPath.path))"
     case .dead(let errno):
       return
         "MARTWY - w tablicy montowan, ale odczyt pada (errno \(errno)); attach-image podpina na nowo"
+    case .unknown where probeTimedOut:
+      return
+        "NIE WIADOMO - w tablicy montowan, ale sonda czytelnosci nie odpowiedziala w \(Int(ImageProbe.probeTimeout)) s"
     case .unknown:
       return "NIE WIADOMO - nie udalo sie odczytac tablicy montowan"
     }
@@ -428,7 +459,8 @@ public enum BackupImageService {
     guard exists else {
       return CMActionResult(succeeded: false, message: "Brak obrazu - najpierw go utworz.")
     }
-    switch attachment {
+    let reading = await attachmentReading()
+    switch reading.attachment {
     case .attached:
       return CMActionResult(succeeded: true, message: "Juz podpiete: \(targetPath.path)")
     case .unknown:
@@ -436,6 +468,23 @@ public enum BackupImageService {
       // obrazie, ktory moze byc juz podpiety - a wczesniej jeszcze
       // `purgeStaleDevices()`, czyli `detach -force` na cudzym, zywym
       // urzadzeniu. "Nie wiem" nie moze uruchamiac ani jednego, ani drugiego.
+      //
+      // Dotyczy to TAKZE sondy, ktora nie odpowiedziala w czasie. Cena jest
+      // realna i wybrana swiadomie: jesli obraz jest naprawde martwy, a odczyt
+      // z niego wisi, ta funkcja go nie naprawi i tik agenta sprobuje znowu za
+      // 900 s. Odwrotna pomylka jest jednak nieodwracalna - `detach -force` na
+      // wolnym, ale ZYWYM urzadzeniu porzuca zapisy, ktore nie doleciely na
+      // Dysk. O tym, ze stan jest nieznany, melduje czujka `backup-health`;
+      // milczenia tu nie ma.
+      if reading.probeTimedOut {
+        return CMActionResult(
+          succeeded: false,
+          message: """
+            Obraz jest w tablicy montowan, ale sonda czytelnosci nie odpowiedziala w \
+            \(Int(ImageProbe.probeTimeout)) s - NIE WIADOMO, czy urzadzenie zyje. NIE \
+            odpinam na sile i NIE podpinam.
+            """)
+      }
       return CMActionResult(
         succeeded: false,
         message: """

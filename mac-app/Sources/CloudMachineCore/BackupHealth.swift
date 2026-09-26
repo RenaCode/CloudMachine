@@ -120,6 +120,10 @@ public enum BackupHealth {
     driveFreeBytes: UInt64? = nil,
     localFreeGB: Int? = nil,
     imageDeadErrno: Int32? = nil,
+    // Obraz JEST w tablicy montowan, ale sonda czytelnosci nie wrocila.
+    // Chodzi w parze z `attached: nil` i sluzy WYLACZNIE do tego, by
+    // powiedziec czlowiekowi, czego dokladnie nie wiemy - decyzja jest ta sama.
+    imageProbeTimedOut: Bool = false,
     maxAgeHours: Double = BackupHealth.maxAgeHours
   ) -> Report {
     var problems: [Problem] = []
@@ -175,12 +179,25 @@ public enum BackupHealth {
       // milczala o stanie, ktorego nie znala. Komunikat musi byc INNY niz
       // przy realnym odpieciu: "nie jest podpiety" wysyla czlowieka do
       // podpinania obrazu, ktory moze byc podpiety poprawnie.
-      problems.append(
-        Problem(
-          summary: "Nie wiadomo, czy obraz backupu jest podpiety",
-          detail:
-            "Nie udalo sie odczytac tablicy montowan, wiec stan obrazu \(BackupImageService.targetPath.path) jest NIEZNANY. Nie podpinaj go na oslepe - najpierw sprawdz, czy `mount` w ogole odpowiada (przy martwym montowaniu FUSE-T potrafi wisiec)."
-        ))
+      // Dwie przyczyny "nie wiem" i DWA rozne komunikaty, bo wysylaja czlowieka
+      // w dwa rozne miejsca. Trzeci moment, w ktorym to samo rozroznienie
+      // ratuje ten raport - patrz `mounted` wyzej i `destinationRegistered`
+      // nizej.
+      if imageProbeTimedOut {
+        problems.append(
+          Problem(
+            summary: "Nie wiadomo, czy obraz backupu oddaje dane",
+            detail:
+              "Obraz \(BackupImageService.targetPath.path) figuruje w tablicy montowan, ale sonda czytelnosci nie odpowiedziala w \(Int(ImageProbe.probeTimeout)) s - tak zachowuje sie odczyt zablokowany na martwym montowaniu FUSE-T. To NIE jest dowod, ze obraz jest martwy, wiec NIE odpinaj go na sile: `attach-image` swiadomie nic wtedy nie robi, bo odpiecie zywego urzadzenia porzuca dane czekajace na wysylke. Sprawdz najpierw, czy rclone odpowiada (cloudmachine-agent drive-status) i czy agent gdrive-buffer zyje."
+          ))
+      } else {
+        problems.append(
+          Problem(
+            summary: "Nie wiadomo, czy obraz backupu jest podpiety",
+            detail:
+              "Nie udalo sie odczytac tablicy montowan, wiec stan obrazu \(BackupImageService.targetPath.path) jest NIEZNANY. Nie podpinaj go na oslepe - najpierw sprawdz, czy `mount` w ogole odpowiada (przy martwym montowaniu FUSE-T potrafi wisiec)."
+          ))
+      }
     }
     // `nil` to NIE to samo co `false`. Od 23.09.2026 `tmutil` ma limit czasu
     // (patrz `TimeMachineStatus.commandTimeout`), wiec przy martwym montowaniu
@@ -361,7 +378,15 @@ public enum BackupHealth {
       inPreferences: plist, volumeNamed: BackupImageService.volumeName)
 
     let stats = await DriveBufferService.queueStats()
-    let attachment = BackupImageService.attachment
+    // `attachmentReading()`, nie `attachment()`: sonda czytelnosci ma limit
+    // czasu i po jego przekroczeniu oddaje `.unknown`. Czujka DOKANCZA wtedy
+    // przebieg i zglasza brak wiedzy - to jest cala roznica wzgledem stanu do
+    // 26.09.2026, w ktorym ten odczyt nie mial limitu, a `StartInterval 1800`
+    // bez `KeepAlive` znaczy, ze launchd NIE uruchomi drugiej instancji,
+    // dopoki zyje pierwsza. Jedno zawieszenie uciszalo wiec czujke NA STALE,
+    // a cisza w tym systemie wyglada identycznie jak zdrowie.
+    let reading = await BackupImageService.attachmentReading()
+    let attachment = reading.attachment
     var deadErrno: Int32?
     if case .dead(let errno) = attachment { deadErrno = errno }
 
@@ -412,6 +437,7 @@ public enum BackupHealth {
       driveFreeBytes: (await DriveBufferService.remoteQuota())?.free,
       localFreeGB: localFree,
       imageDeadErrno: deadErrno,
+      imageProbeTimedOut: reading.probeTimedOut,
       maxAgeHours: maxAgeHours)
 
     report.problems.append(contentsOf: unmeasuredLocalDiskProblems(localFreeGB: localFree))

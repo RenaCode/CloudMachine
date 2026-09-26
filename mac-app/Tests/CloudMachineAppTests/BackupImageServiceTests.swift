@@ -158,9 +158,16 @@ final class BackupImageServiceTests: XCTestCase {
       BackupImageService.describe(.detached),
       BackupImageService.describe(.dead(errno: ENXIO)),
       BackupImageService.describe(.unknown),
+      // Ten sam stan, INNA przyczyna: sonda czytelnosci nie odpowiedziala
+      // w czasie. Decyzja jest ta sama (wstrzymaj), ale zdanie dla czlowieka
+      // musi byc inne - patrz `attachmentReading()`.
+      BackupImageService.describe(.unknown, probeTimedOut: true),
     ]
     XCTAssertEqual(Set(opisy).count, opisy.count, "opisy sie powtarzaja: \(opisy)")
     XCTAssertTrue(BackupImageService.describe(.unknown).contains("NIE WIADOMO"))
+    XCTAssertTrue(
+      BackupImageService.describe(.unknown, probeTimedOut: true).contains("sonda"),
+      "opis ma mowic, ze to sonda nie odpowiedziala, a nie ze tablica montowan")
   }
 
   // MARK: - Urzadzenie nadrzedne

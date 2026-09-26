@@ -38,7 +38,12 @@ public enum ProcessRunnerError: LocalizedError {
 /// sie zakonczy (patrz komentarz przy `timeout` nizej). Jesli terminationHandler
 /// i tak pozniej sie odpali, MUSI juz nic nie robic zamiast wywolac fatal error
 /// przez powtorne `continuation.resume`.
-private final class ContinuationGuard: @unchecked Sendable {
+///
+/// Wewnetrzny, a nie prywatny: od 26.09.2026 `ImageProbe` poddaje sie na
+/// deadline dokladnie tak samo (sonda zawieszona w jadrze moze odpowiedziec
+/// pozniej albo nigdy), wiec obie sciezki musza miec te sama, sprawdzona
+/// semantyke "wznawia ten, kto byl pierwszy".
+final class ContinuationGuard: @unchecked Sendable {
   private let lock = NSLock()
   private var done = false
 

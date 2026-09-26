@@ -309,7 +309,13 @@ struct DriveStatus: AsyncParsableCommand {
     )
     let mounted = DriveBufferService.mountedState()
     print("Montowanie Drive: \(StatusLines.mounted(mounted))")
-    print("Obraz podpiety:   \(BackupImageService.describe(BackupImageService.attachment))")
+    // Sonda czytelnosci ma od 26.09.2026 limit czasu - dlatego to narzedzie
+    // nie wisi na martwym montowaniu (25.09.2026 wisialo ponad 25 s i trzeba
+    // bylo je zabic), tylko melduje, ze odpowiedzi nie ma.
+    let image = await BackupImageService.attachmentReading()
+    print(
+      "Obraz podpiety:   \(BackupImageService.describe(image.attachment, probeTimedOut: image.probeTimedOut))"
+    )
 
     // Kolejke czytamy PRZED wierszami o buforze, bo obydwa z niej korzystaja.
     // Drugie pytanie do rclone kosztowaloby do 60 s przy zapchanym buforze

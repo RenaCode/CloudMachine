@@ -132,7 +132,14 @@ final class CloudMachineController: ObservableObject {
     buffer.mounted = DriveBufferService.isMounted
     // Martwy obraz (w tablicy montowan, ale bez odczytu) liczy sie jako
     // NIEPODPIETY - z punktu widzenia Time Machine dokladnie tym jest.
-    buffer.imageAttached = BackupImageService.attachment.isUsable
+    //
+    // `await`, a nie wlasciwosc obliczana: ta funkcja chodzi na `@MainActor`
+    // co 10 s, a w sondzie siedzi `read()` na FUSE-T. Do 26.09.2026 byl to
+    // zwykly, blokujacy odczyt - zaklinowany wolumen zamrazal caly interfejs
+    // (ruch okna, menu, przyciski) na tyle, ile trwalo I/O, czyli potencjalnie
+    // bez konca. Teraz sonda siedzi na wlasnym watku z limitem czasu, a panel
+    // czeka na wynik bez blokowania watku glownego.
+    buffer.imageAttached = await BackupImageService.attachment().isUsable
     // Rozmiar bufora bierzemy od rclone; wlasny obchod katalogu to 6504
     // wywolania stat co 10 sekund na dysku, na ktory leci backup.
     buffer.sizeGB = BufferGuardService.bufferGB(stats: stats)
