@@ -39,6 +39,38 @@ public enum BackupHealth {
   /// na czas nadganiania wysylki.
   public static let maxAgeHours = 3.0
 
+  /// Przez tyle minut od startu systemu "montowanie / obraz / cel jeszcze nie
+  /// stoi" NIE jest awaria.
+  ///
+  /// Agent `backup-health` ma `RunAtLoad`, wiec odpala sie razem z sesja -
+  /// kilka sekund po tym, jak rclone dopiero ruszyl. Po kazdym restarcie
+  /// (21.09, 25.09, 01.10.2026) czujka meldowala wtedy "AWARIA BACKUPU:
+  /// Montowanie Google Drive nie dziala" 4-8 s po zalogowaniu, zanim cokolwiek
+  /// mialo szanse wstac. Alarm, ktory pada przy kazdym starcie, uczy go
+  /// ignorowac - i wtedy przepada ten jeden prawdziwy.
+  ///
+  /// 20 min, bo tyle zmierzono w najgorszym przypadku: 01.10.2026 po
+  /// restarcie z ~19 GB niewyslanych pasm rclone wczytywal i wysylal zaleglosc
+  /// do 15:42, a obraz podpial sie o 15:49 - 17 min po starcie agentow.
+  /// Odroczone sa WYLACZNIE stany `false` urzadzen. Wiek ostatniej udanej
+  /// kopii, RESULT, bledy wysylki i "nie wiadomo" (zawieszony odczyt) alarmuja
+  /// od pierwszej sekundy, a nastepny przebieg czujki (co 30 min) wypada juz
+  /// po tym oknie i zglosi kazdy stan, ktory sam sie nie naprawil.
+  public static let startupGraceMinutes = 20.0
+
+  /// Ile sekund minelo od startu systemu (`kern.boottime`). `nil` = nie
+  /// udalo sie odczytac - wtedy okresu rozruchu NIE stosujemy, bo "nie wiem"
+  /// nie moze wyciszac alarmu.
+  public static func systemUptime(now: Date = Date()) -> TimeInterval? {
+    var boot = timeval()
+    var size = MemoryLayout<timeval>.size
+    var mib: [Int32] = [CTL_KERN, KERN_BOOTTIME]
+    guard sysctl(&mib, 2, &boot, &size, nil, 0) == 0, boot.tv_sec > 0 else { return nil }
+    let booted = Date(
+      timeIntervalSince1970: TimeInterval(boot.tv_sec) + TimeInterval(boot.tv_usec) / 1_000_000)
+    return now.timeIntervalSince(booted)
+  }
+
   /// Pojedyncza rzecz, ktora poszla nie tak. Tekst jest gotowy do pokazania
   /// uzytkownikowi - to jedyna forma, w jakiej ktokolwiek to zobaczy.
   public struct Problem: Equatable {
@@ -62,16 +94,22 @@ public enum BackupHealth {
     /// pliku, wiec nic nie wiemy". Kto czyta ten raport (np. panel GUI), musi
     /// je rozroznic, zeby nie pokazac braku wiedzy jako faktu.
     public var preferencesReadable: Bool
+    /// Stany "jeszcze niegotowe" odlozone na okres rozruchu - patrz
+    /// `startupGraceMinutes`. NIE sa awaria i NIE ida do powiadomienia, ale
+    /// nie znikaja: `backup-health` wypisuje je osobno, zeby czlowiek pytajacy
+    /// tuz po starcie widzial, na co jeszcze czekamy.
+    public var deferred: [Problem]
     public var healthy: Bool { problems.isEmpty }
 
     public init(
       problems: [Problem], lastSuccess: Date?, lastAttempt: Date?,
-      preferencesReadable: Bool = true
+      preferencesReadable: Bool = true, deferred: [Problem] = []
     ) {
       self.problems = problems
       self.lastSuccess = lastSuccess
       self.lastAttempt = lastAttempt
       self.preferencesReadable = preferencesReadable
+      self.deferred = deferred
     }
   }
 
@@ -124,9 +162,17 @@ public enum BackupHealth {
     // Chodzi w parze z `attached: nil` i sluzy WYLACZNIE do tego, by
     // powiedziec czlowiekowi, czego dokladnie nie wiemy - decyzja jest ta sama.
     imageProbeTimedOut: Bool = false,
-    maxAgeHours: Double = BackupHealth.maxAgeHours
+    maxAgeHours: Double = BackupHealth.maxAgeHours,
+    // Czy trwa okres rozruchu po starcie systemu - patrz `startupGraceMinutes`.
+    withinStartupGrace: Bool = false
   ) -> Report {
     var problems: [Problem] = []
+    var deferred: [Problem] = []
+    // Stan urzadzenia, ktory tuz po starcie jest NORMALNY, bo jeszcze nic nie
+    // zdazylo wstac. Po okresie rozruchu to zwykla awaria.
+    func notReadyYet(_ problem: Problem) {
+      if withinStartupGrace { deferred.append(problem) } else { problems.append(problem) }
+    }
 
     // Kolejnosc od przyczyny do skutku: jesli montowanie lezy, wiek kopii
     // i tak bedzie rosl, ale to montowanie trzeba naprawic.
@@ -141,7 +187,7 @@ public enum BackupHealth {
     case .some(true):
       break
     case .some(false):
-      problems.append(
+      notReadyYet(
         Problem(
           summary: "Montowanie Google Drive nie dziala",
           detail: "Bez niego obraz backupu jest nieosiagalny i Time Machine nie ma gdzie pisac."))
@@ -167,7 +213,7 @@ public enum BackupHealth {
               + "Naprawa: cloudmachine-agent attach-image (odpina na sile i podpina na nowo)."))
       }
     case .some(false):
-      problems.append(
+      notReadyYet(
         Problem(
           summary: "Obraz backupu nie jest podpiety",
           detail: "Time Machine nie widzi celu \(BackupImageService.targetPath.path)."))
@@ -208,7 +254,7 @@ public enum BackupHealth {
     case .some(true):
       break
     case .some(false):
-      problems.append(
+      notReadyYet(
         Problem(
           summary: "Time Machine nie wskazuje na CloudMachine",
           detail: "Cel backupu zostal przestawiony albo wyrejestrowany - kopie nie powstaja."))
@@ -313,7 +359,8 @@ public enum BackupHealth {
         ))
     }
 
-    return Report(problems: problems, lastSuccess: lastSuccess, lastAttempt: lastAttempt)
+    return Report(
+      problems: problems, lastSuccess: lastSuccess, lastAttempt: lastAttempt, deferred: deferred)
   }
 
   /// Ponizej tylu GB wolnych na Google Drive zglaszamy problem.
@@ -438,7 +485,10 @@ public enum BackupHealth {
       localFreeGB: localFree,
       imageDeadErrno: deadErrno,
       imageProbeTimedOut: reading.probeTimedOut,
-      maxAgeHours: maxAgeHours)
+      maxAgeHours: maxAgeHours,
+      // Zegar RZECZYWISTY, nie `now`: testy podstawiaja `now` z przeszlosci,
+      // a uptime liczony od niego wychodzilby ujemny, czyli "trwa rozruch".
+      withinStartupGrace: (systemUptime() ?? .infinity) < startupGraceMinutes * 60)
 
     report.problems.append(contentsOf: unmeasuredLocalDiskProblems(localFreeGB: localFree))
     return report

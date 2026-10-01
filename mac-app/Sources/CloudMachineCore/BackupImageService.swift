@@ -537,8 +537,26 @@ public enum BackupImageService {
     // `writeBackSeconds` liczonym w minutach kolejka sama nie opustoszeje
     // w ponizszym limicie czasu, wiec najpierw wymuszamy wysylke - inaczej
     // podpiecie po kazdym starcie bylo by loteria.
-    await DriveBufferService.expireQueuedUploads()
-    await DriveBufferService.waitUntilIdle(timeout: 120)
+    //
+    // Czekamy, dopoki wysylka robi postep, a nie sztywne 120 s - po restarcie
+    // bez `prepare-shutdown` zaleglosc siega kilkunastu GB (patrz
+    // `UploadDrain`).
+    let drain = await UploadDrain.wait(
+      sleep: { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
+      expire: { _ = await DriveBufferService.expireQueuedUploads() },
+      unsent: { await DriveBufferService.queueStats()?.unsentItems })
+    switch drain {
+    case .idle:
+      break
+    case .stalled(let unsent):
+      CMLogger.log("Podpinanie: wysylka stoi (\(unsent) pozycji w kolejce) - podpinam mimo to")
+    case .timedOut(let unsent):
+      CMLogger.log(
+        "Podpinanie: zaleglosc nie zeszla w \(Int(UploadDrain.defaultMaxTotal / 60)) min (\(unsent) pozycji) - podpinam mimo to"
+      )
+    case .noAnswer:
+      CMLogger.log("Podpinanie: rclone nie odpowiada o stan kolejki - podpinam na oslep")
+    }
 
     let result = await retryingFlakyMount(attempts: 5) {
       try? await ProcessRunner.run(

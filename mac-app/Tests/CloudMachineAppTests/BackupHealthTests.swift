@@ -311,4 +311,55 @@ final class BackupHealthTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: plik) }
     XCTAssertTrue(BackupHealth.preferencesReadable(preferencesFile: plik.path))
   }
+
+  // MARK: - Okres rozruchu
+
+  /// ZNANA ZLA PROBKA z 21.09, 25.09 i 01.10.2026: czujka odpala sie razem
+  /// z sesja, kilka sekund po starcie rclone - nic jeszcze nie stoi.
+  private func tuzPoStarcie(grace: Bool, lastSuccessAgo: TimeInterval = 1800)
+    -> BackupHealth.Report
+  {
+    BackupHealth.evaluate(
+      lastSuccess: now.addingTimeInterval(-lastSuccessAgo),
+      lastAttempt: now.addingTimeInterval(-lastSuccessAgo),
+      result: 0, now: now, mounted: false, attached: false, destinationRegistered: false,
+      erroredFiles: 0, outOfSpace: false, queueReadable: false,
+      withinStartupGrace: grace)
+  }
+
+  func testTuzPoStarcieNiegotoweUrzadzeniaNieSaAwaria() {
+    let report = tuzPoStarcie(grace: true)
+    XCTAssertTrue(report.healthy, "\(report.problems)")
+    XCTAssertEqual(report.deferred.count, 3, "odlozone, nie zgubione: \(report.deferred)")
+  }
+
+  /// Ten sam stan PO okresie rozruchu musi alarmowac - inaczej poprzedni test
+  /// przechodzilby tez dla czujki, ktora milczy zawsze.
+  func testPoOkresieRozruchuTenSamStanAlarmuje() {
+    let report = tuzPoStarcie(grace: false)
+    XCTAssertEqual(report.problems.count, 3, "\(report.problems)")
+    XCTAssertTrue(report.deferred.isEmpty)
+  }
+
+  /// Okres rozruchu NIE wycisza starej kopii: Mac wylaczony na noc to wiek,
+  /// ktory czujka ma zglosic od pierwszej sekundy.
+  func testOkresRozruchuNieWyciszaStarejKopii() {
+    let report = tuzPoStarcie(grace: true, lastSuccessAgo: 5 * 3600)
+    XCTAssertTrue(report.problems.contains { $0.summary.contains("Brak udanej kopii") })
+  }
+
+  /// "Nie wiem" (zawieszony tmutil) nie jest normalnym stanem rozruchu.
+  func testOkresRozruchuNieWyciszaBrakuWiedzy() {
+    let report = BackupHealth.evaluate(
+      lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
+      result: 0, now: now, mounted: true, attached: true, destinationRegistered: nil,
+      erroredFiles: 0, outOfSpace: false, queueReadable: true, withinStartupGrace: true)
+    XCTAssertFalse(report.healthy)
+  }
+
+  func testUptimeDaSieOdczytac() {
+    let uptime = BackupHealth.systemUptime()
+    XCTAssertNotNil(uptime)
+    XCTAssertGreaterThan(uptime ?? -1, 0)
+  }
 }

@@ -244,6 +244,11 @@ struct BackupHealthCommand: AsyncParsableCommand {
       print("Ostatnia proba:       \(BackupHealth.stamp(lastAttempt))")
     }
 
+    // Odlozone na okres rozruchu - nie awaria, ale nie przemilczamy ich.
+    for problem in report.deferred {
+      print("CZEKAM (start systemu): \(problem.summary)")
+    }
+
     guard !report.healthy else {
       print("Cykl backupu: OK")
       if !quiet { await HealthAlert.report(report) }
