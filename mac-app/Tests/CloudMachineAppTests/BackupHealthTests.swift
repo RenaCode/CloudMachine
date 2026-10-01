@@ -362,4 +362,31 @@ final class BackupHealthTests: XCTestCase {
     XCTAssertNotNil(uptime)
     XCTAssertGreaterThan(uptime ?? -1, 0)
   }
+
+  // MARK: - Przebieg w toku
+
+  private func probaSprzedDwochGodzin(running: Bool?) -> BackupHealth.Report {
+    BackupHealth.evaluate(
+      lastSuccess: now.addingTimeInterval(-2.5 * 3600),
+      lastAttempt: now.addingTimeInterval(-2 * 3600),
+      result: 0, now: now, mounted: true, attached: true, destinationRegistered: true,
+      erroredFiles: 0, outOfSpace: false, queueReadable: true, backupRunning: running)
+  }
+
+  /// ZNANA ZLA PROBKA z 01.10.2026 17:02: przejscie calego dysku po
+  /// restarcie trwa godzinami, a czujka zglaszala probe, ktora jeszcze trwa.
+  func testTrwajacyPrzebiegNieJestNieudanaProba() {
+    XCTAssertTrue(probaSprzedDwochGodzin(running: true).healthy)
+  }
+
+  /// Ta sama proba, gdy Time Machine juz NIE pracuje (albo nie wiadomo) -
+  /// to jest prawdziwy nieudany przebieg i ma alarmowac.
+  func testZakonczonaProbaBezKopiiAlarmuje() {
+    for running in [false, nil] as [Bool?] {
+      XCTAssertTrue(
+        probaSprzedDwochGodzin(running: running).problems.contains {
+          $0.summary.contains("nie skonczyla sie kopia")
+        }, "running=\(String(describing: running))")
+    }
+  }
 }

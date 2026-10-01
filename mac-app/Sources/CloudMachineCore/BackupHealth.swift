@@ -164,7 +164,9 @@ public enum BackupHealth {
     imageProbeTimedOut: Bool = false,
     maxAgeHours: Double = BackupHealth.maxAgeHours,
     // Czy trwa okres rozruchu po starcie systemu - patrz `startupGraceMinutes`.
-    withinStartupGrace: Bool = false
+    withinStartupGrace: Bool = false,
+    // Czy Time Machine WLASNIE wykonuje przebieg (`tmutil status`).
+    backupRunning: Bool? = nil
   ) -> Report {
     var problems: [Problem] = []
     var deferred: [Problem] = []
@@ -289,8 +291,14 @@ public enum BackupHealth {
 
     // Proba bez sukcesu po niej to backup, ktory ruszyl i padl. Sam wiek
     // ostatniego sukcesu tego nie pokaze, dopoki nie przekroczy progu.
+    //
+    // Wyjatek: przebieg, ktory WCIAZ TRWA. Po restarcie Time Machine potrafi
+    // przejsc caly dysk (01.10.2026: 882 GB, 3,6 mln plikow, ~4 h), a czujka
+    // meldowala wtedy po godzinie "proba nie skonczyla sie kopia" o probie,
+    // ktora po prostu jeszcze sie nie skonczyla. Przebieg zawieszony na
+    // zawsze i tak zlapie prog wieku ostatniej udanej kopii wyzej.
     if let lastAttempt, let lastSuccess, lastAttempt > lastSuccess,
-      now.timeIntervalSince(lastAttempt) > 3600
+      now.timeIntervalSince(lastAttempt) > 3600, backupRunning != true
     {
       problems.append(
         Problem(
@@ -488,7 +496,8 @@ public enum BackupHealth {
       maxAgeHours: maxAgeHours,
       // Zegar RZECZYWISTY, nie `now`: testy podstawiaja `now` z przeszlosci,
       // a uptime liczony od niego wychodzilby ujemny, czyli "trwa rozruch".
-      withinStartupGrace: (systemUptime() ?? .infinity) < startupGraceMinutes * 60)
+      withinStartupGrace: (systemUptime() ?? .infinity) < startupGraceMinutes * 60,
+      backupRunning: await TimeMachineStatus.runningState())
 
     report.problems.append(contentsOf: unmeasuredLocalDiskProblems(localFreeGB: localFree))
     return report
