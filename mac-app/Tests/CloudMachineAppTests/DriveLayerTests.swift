@@ -98,6 +98,18 @@ final class DriveLayerTests: XCTestCase {
     XCTAssertTrue(args.contains("--rc"))
   }
 
+  /// 02.10.2026: powiadomienia o zmianach z Dysku (domyslnie co minute)
+  /// uniewaznialy katalog `bands` po kazdej wlasnej wysylce, a jego
+  /// przeladowanie trzymalo blokade ~42 s - cale montowanie stalo co minute.
+  func testMountNieUniewazniaKataloguPoWlasnychWysylkach() {
+    let args = DriveBufferService.mountArguments()
+    func value(_ flag: String) -> String? {
+      args.firstIndex(of: flag).map { args[$0 + 1] }
+    }
+    XCTAssertEqual(value("--poll-interval"), "0")
+    XCTAssertEqual(value("--dir-cache-time"), "9999h")
+  }
+
   /// Rozmiar pasma zostal wybrany pomiarem (patrz gdrive/README.md). Zmiana
   /// dziala tylko przy tworzeniu obrazu, wiec nie wolno jej przeoczyc.
   func testBandSizeIs32MB() {

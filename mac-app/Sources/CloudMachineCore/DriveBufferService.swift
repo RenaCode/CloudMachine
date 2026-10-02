@@ -131,7 +131,17 @@ public enum DriveBufferService {
       "--vfs-write-back", "\(writeBackSeconds)s",
       "--vfs-cache-poll-interval", "1m",
       "--cache-dir", cacheDir.path,
-      "--dir-cache-time", "5m",
+      // Do tego folderu pisze WYLACZNIE ten Mac, wiec powiadomienia o zmianach
+      // z Dysku niosa tylko nasze wlasne wysylki - a kazde uniewaznia katalog
+      // `bands` (18 853 pliki 02.10.2026). Nastepny `stat` przeladowywal go
+      // z Google stronami po 1000, TRZYMAJAC blokade katalogu: ~42 s co
+      // minute stal kazdy Getattr z FUSE (Time Machine, hdiutil), kazde
+      // `vfs/stats` i kazde zakonczenie wysylki. Z tego braly sie zawieszone
+      // `hdiutil attach`, `validateMountPoint timed out` w Time Machine
+      // i czerwony panel. Bez powiadomien i z dlugim cache katalog laduje sie
+      // raz po starcie; wlasne zapisy rclone dopisuje do niego sam.
+      "--poll-interval", "0",
+      "--dir-cache-time", "9999h",
       "--attr-timeout", "5m",
       "--transfers", "8",
       // Rozmiar kawalka dopasowany do rozmiaru pasma obrazu.
