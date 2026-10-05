@@ -36,7 +36,7 @@ Measured on a Mac Studio, 332 Mbit/s uplink:
 |---|---|
 | Full backup | 210 GiB, about two hours |
 | Incremental backup | ~370 MB of new data, a few minutes |
-| Google Drive used | 265 GiB (Sep 2026) |
+| Google Drive used | 589 GiB (29 Sep 2026) — of which only 417 GiB is live data |
 | Actually uploaded per day | **327–595 GB** — see below |
 
 That last row is not a typo, and it is the number that surprises people. What
@@ -55,6 +55,51 @@ So the daily cap is not just a first-backup concern, and it does not require a
 source larger than 750 GB. A 265 GiB backup reached it. `--vfs-write-back` is
 the lever that keeps it in check — see [Why the pieces are what they
 are](#why-the-pieces-are-what-they-are).
+
+### The image is larger than the backup, and the gap only grows
+
+The other number that surprises people is the first one. Measured 29 September
+2026, on an image created on the 11th:
+
+```
+live data in the volume   417 GiB
+bands on Google Drive     589 GiB   (18,860 files x 31.98 MiB)
+gap                       172 GiB   -- 29% of the image holds nothing
+```
+
+Three layers, none of which can tell the one below what it just did:
+
+1. Time Machine writes a snapshot. APFS allocates blocks, the sparsebundle
+   allocates the 32 MB bands covering them.
+2. Time Machine thins old snapshots. APFS frees those blocks *inside* the
+   volume — but **there is no TRIM path from a filesystem, through `hdiutil`,
+   down to the band files.** The band stays, holding data nothing references.
+3. APFS keeps writing. Being copy-on-write, it prefers untouched ranges over
+   recycling what was just freed.
+
+Step 3 is what makes this grow rather than settle. If freed blocks were reused
+promptly the dead bands would be self-replenishing headroom and the image would
+plateau. They are not, so the gap widens.
+
+**Do not try to reclaim it with `hdiutil compact`.** It is the only tool for the
+job and it takes nothing but an image path — no way to scope it. Against an
+image that lives on Drive it would pull the whole ~589 GiB down through rclone
+past a 100 GB cache, push back hundreds of GiB as it relocates data, blow the
+750 GB/day write ceiling, and hold the image detached for a day or more with no
+backups running. The return is a fraction of the 172 GiB, because a band can
+only be dropped when all 32 MB of it is free and APFS scatters its allocations.
+Google does not bill for writes; the dead bands cost quota and nothing else.
+
+The lever worth *measuring*, if the gap ever matters, is the cause rather than
+the symptom: the volume is 3.9 TiB of logical space holding 417 GiB, so the
+allocator never has a reason to reuse anything. Sizing the image nearer the
+working set should force recycling and flatten the band count. That is an
+untested hypothesis, written down here so the next person does not have to
+re-derive it.
+
+One trap while reading any of this: **Google's storage UI labels GiB as GB.**
+The "591.79 GB" it shows is 589 GiB of sparsebundle plus 2.8 GiB of everything
+else on the account. `operations/about` through the rclone rc gives real bytes.
 
 ---
 
@@ -446,12 +491,13 @@ checksum and the tool reports `has no checksum`. The right tool is `fsck_apfs`
 on the attached device, which is what `verify-image` runs.
 
 **`verify-image` is not a background task.** `fsck_apfs` reads the image's
-metadata through the rclone mount, snapshot by snapshot — on a 210 GiB backup
-with 18 snapshots that is hours, not minutes. Running it against the *attached*
-image saturates the mount badly enough that `mount(8)` itself blocks and
-`backupd` cannot mount the destination, so the hourly backups fail while it
-runs. Detach first, as the command requires, and do it when you can leave the
-Mac alone.
+metadata through the rclone mount, snapshot by snapshot, so its runtime tracks
+the snapshot count rather than the data size — 39 snapshots over a 589 GiB
+image (29 Sep 2026) is hours, not minutes, and the count climbs hourly.
+Running it against the *attached* image saturates the mount badly enough that
+`mount(8)` itself blocks and `backupd` cannot mount the destination, so the
+hourly backups fail while it runs. Detach first, as the command requires, and
+do it when you can leave the Mac alone.
 
 ---
 
