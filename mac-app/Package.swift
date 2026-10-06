@@ -18,10 +18,10 @@ let package = Package(
             path: "Sources/CloudMachineApp"
         ),
         .executableTarget(
-            // Nazwa targetu = nazwa skompilowanej binarki w SPM - celowo
-            // "cloudmachine-agent" (nie "CloudMachineAgent"), zeby zgadzalo
-            // sie z tym, czego szuka CMPaths.agentBinaryPath, build-app.sh i
-            // szablony launchd (__CM_AGENT_BIN__).
+            // Target name = name of the compiled binary in SPM - deliberately
+            // "cloudmachine-agent" (not "CloudMachineAgent"), so that it matches
+            // what CMPaths.agentBinaryPath, build-app.sh and the launchd
+            // templates (__CM_AGENT_BIN__) look for.
             name: "cloudmachine-agent",
             dependencies: [
                 "CloudMachineCore",
@@ -30,12 +30,13 @@ let package = Package(
             path: "Sources/CloudMachineAgent"
         ),
         .executableTarget(
-            // Harnessy pomiarowe (dawne gdrive/poc-*.sh). Celowo OSOBNA
-            // binarka: mierza zachowanie hdiutil i FUSE-T, nie nasz kod, i nie
-            // naleza do dzialajacego systemu - `build-app` ich nie kopiuje do
-            // bundla. Osobny target, a nie podkomendy agenta, wlasnie po to,
-            // zeby nie dalo sie ich przypadkiem uruchomic na produkcji:
-            // kazdy z nich tworzy i kasuje obrazy dyskow.
+            // Measurement harnesses (formerly gdrive/poc-*.sh). Deliberately a
+            // SEPARATE binary: they measure the behaviour of hdiutil and FUSE-T,
+            // not our code, and they are not part of the running system -
+            // `build-app` does not copy them into the bundle. A separate target
+            // rather than agent subcommands precisely so that they cannot be
+            // run on production by accident: each of them creates and deletes
+            // disk images.
             name: "cloudmachine-poc",
             dependencies: [
                 "CloudMachineCore",
@@ -45,14 +46,14 @@ let package = Package(
         ),
         .testTarget(
             name: "CloudMachineAppTests",
-            // `cloudmachine-poc` jest tu od 25.09.2026 i celowo: harnessy
-            // mierza zachowanie hdiutil i FUSE-T, ale SPOSOB, w jaki zdaja
-            // z tego relacje, jest zwyklym kodem i psul sie po cichu -
-            // `pullplug` meldowal "Obraz przezyl kazde wyrwanie podlogi"
-            // po przebiegu, w ktorym zapis nigdy sie nie zaczal. Testy
-            // dotykaja WYLACZNIE czystych czesci (klasyfikacja wyniku,
-            // podsumowanie, proba zapisu do katalogu, ktorego nie ma) - zaden
-            // z nich nie tworzy obrazu dyskowego.
+            // `cloudmachine-poc` has been here since 2026-09-25, on purpose:
+            // the harnesses measure the behaviour of hdiutil and FUSE-T, but
+            // the WAY they report on it is ordinary code and it broke
+            // silently - `pullplug` reported "The image survived every
+            // floor pull" after a run in which writing never started. The
+            // tests touch ONLY the pure parts (result classification,
+            // summary, attempting to write to a directory that does not
+            // exist) - none of them creates a disk image.
             dependencies: ["CloudMachineApp", "CloudMachineCore", "cloudmachine-poc"],
             path: "Tests/CloudMachineAppTests"
         )

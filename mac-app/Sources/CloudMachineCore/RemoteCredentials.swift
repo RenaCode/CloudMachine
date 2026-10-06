@@ -1,16 +1,16 @@
 import Foundation
 
-/// Wlasne poswiadczenia OAuth do Google Drive.
+/// Own OAuth credentials for Google Drive.
 ///
-/// Nie sa ozdobnikiem: bez nich rclone laczy sie na WSPoLDZIELONYM `client_id`
-/// rclone, limitowanym wspolnie ze wszystkimi jego uzytkownikami i wycofywanym
-/// w 2026. Do tej pory dalo sie je wprowadzic wylacznie recznym
-/// `security add-generic-password` z README - czyli krokiem, ktorego nikt nie
-/// robi, dopoki cos nie przestanie dzialac.
+/// They are not decoration: without them rclone connects with rclone's SHARED
+/// `client_id`, rate-limited jointly with all of its users and being retired
+/// in 2026. Until now they could only be entered by a manual
+/// `security add-generic-password` from the README - i.e. a step nobody takes
+/// until something stops working.
 ///
-/// W repozytorium ICH NIE MA i nigdy nie bylo: kod czyta je z Keychaina, a
-/// historia gita zawiera wylacznie placeholder `...apps.googleusercontent.com`
-/// w komentarzu. Sprawdzone 13 wrz 2026.
+/// They are NOT in the repository and never were: the code reads them from the
+/// Keychain, and the git history contains only the placeholder
+/// `...apps.googleusercontent.com` in a comment. Verified 13 Sep 2026.
 extension RemoteConfigurer {
 
   public static let clientIDAccount = "client_id"
@@ -25,20 +25,22 @@ extension RemoteConfigurer {
       self.hasClientSecret = hasClientSecret
     }
 
-    /// Polowiczna konfiguracja jest gorsza niz zadna, bo wyglada na zrobiona.
-    /// rclone potrzebuje OBU wartosci - przy jednej i tak wraca na
-    /// wspoldzielony `client_id`.
+    /// A half-done configuration is worse than none, because it looks done.
+    /// rclone needs BOTH values - with only one it falls back to the shared
+    /// `client_id` anyway.
     public var isComplete: Bool { hasClientID && hasClientSecret }
     public var isPartial: Bool { (hasClientID || hasClientSecret) && !isComplete }
 
     public var summary: String {
-      if isComplete { return "Wlasne poswiadczenia Google: ustawione." }
+      if isComplete { return L10n.tr("Own Google credentials: set.") }
       if isPartial {
-        return
-          "NIEPELNE: brakuje \(hasClientID ? "client_secret" : "client_id") - rclone i tak uzyje wspoldzielonego client_id rclone."
+        return L10n.tr(
+          "INCOMPLETE: %@ is missing - rclone will use rclone's shared client_id anyway.",
+          hasClientID ? "client_secret" : "client_id")
       }
-      return
-        "Brak wlasnych poswiadczen - rclone uzywa wspoldzielonego client_id, limitowanego wspolnie i wycofywanego w 2026."
+      return L10n.tr(
+        "No own credentials - rclone uses the shared client_id, rate-limited jointly and being retired in 2026."
+      )
     }
   }
 
@@ -49,12 +51,13 @@ extension RemoteConfigurer {
     return CredentialsState(hasClientID: await id, hasClientSecret: await secret)
   }
 
-  /// Zapisuje oba poswiadczenia.
+  /// Stores both credentials.
   ///
-  /// Zmiana poswiadczen NIE przekonfigurowuje istniejacego remote - token juz
-  /// wydany dziala dalej na starym `client_id`. Zeby nowe weszly w zycie,
-  /// trzeba przejsc `configure-remote --replace-existing`, i o tym mowi
-  /// komunikat, zamiast zostawiac zludzenie, ze samo zadziala.
+  /// Changing the credentials does NOT reconfigure an existing remote - a
+  /// token already issued keeps working on the old `client_id`. For the new
+  /// ones to take effect, `configure-remote --replace-existing` has to be run,
+  /// and the message says so instead of leaving the illusion that it will
+  /// happen by itself.
   public static func storeCredentials(clientID: String, clientSecret: String) async throws {
     try await KeychainStore.save(clientID, account: clientIDAccount, service: keychainService)
     try await KeychainStore.save(

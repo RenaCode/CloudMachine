@@ -1,12 +1,12 @@
 import Foundation
 
-/// Sciezki potrzebne WYLACZNIE narzedziom budowania (`build-app`, `make-dmg`,
-/// `setup-signing-cert`) - w przeciwienstwie do `CMPaths` (CloudMachineCore),
-/// ktore rozwiazuje sciezki dla dzialajacej juz appki/CLI (w tym wewnatrz
-/// zainstalowanego .app), te narzedzia maja sens WYLACZNIE uruchomione z
-/// checkoutu zrodlowego (to one PRODUKUJA .app, nie go konsumuja) - stad
-/// `#filePath` (znane w czasie kompilacji, niezalezne od tego skad polecenie
-/// zostanie potem uruchomione) zamiast `CommandLine.arguments[0]`.
+/// Paths needed ONLY by the build tools (`build-app`, `make-dmg`,
+/// `setup-signing-cert`) - unlike `CMPaths` (CloudMachineCore), which resolves
+/// paths for the already running app/CLI (including inside the installed
+/// .app), these tools make sense ONLY when run from the source checkout (they
+/// PRODUCE the .app, they do not consume it) - hence `#filePath` (known at
+/// compile time, independent of where the command is later run from) instead
+/// of `CommandLine.arguments[0]`.
 enum BuildPaths {
   static var macAppRoot: URL {
     URL(fileURLWithPath: #filePath)

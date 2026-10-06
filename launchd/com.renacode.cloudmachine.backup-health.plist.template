@@ -12,19 +12,19 @@
   <key>RunAtLoad</key>
   <true/>
   <!--
-    Czujka cyklu backupu. Jedyny element, ktory odpowiada na pytanie "czy kopia
-    NADAL powstaje", a nie "czy urzadzenia sa podpiete" - te dwie rzeczy
-    rozjezdzaja sie po cichu i wlasnie ten rozjazd jest tu najgrozniejsza
-    awaria.
+    Backup cycle watchdog. The only component that answers the question "is a
+    backup STILL being made", rather than "are the devices attached" - those
+    two things drift apart silently, and that drift is the most dangerous
+    failure here.
 
-    Bez KeepAlive: to jednorazowe sprawdzenie, ktore konczy sie kodem 1, gdy
-    cykl jest zerwany. KeepAlive zamienilby kazda awarie w petle restartow.
+    No KeepAlive: this is a one-shot check that exits with code 1 when the
+    cycle is broken. KeepAlive would turn every failure into a restart loop.
 
-    Co 30 minut, przy cyklu godzinowym i progu 3 h - wystarczajaco czesto, zeby
-    zerwany cykl nie przelezal doby, i rzadko, zeby nic nie kosztowac. Czujka
-    czyta lokalny plik preferencji Time Machine, a NIE montowanie Google Drive:
-    nadzor, ktory wisi razem z tym, co nadzoruje, milczy dokladnie wtedy, gdy
-    ma mowic.
+    Every 30 minutes, with an hourly cycle and a 3 h threshold - often enough
+    that a broken cycle does not sit unnoticed for a day, and rarely enough to
+    cost nothing. The watchdog reads the local Time Machine preferences file,
+    NOT the Google Drive mount: a supervisor that hangs together with what it
+    supervises goes silent exactly when it should speak.
   -->
   <key>StartInterval</key>
   <integer>1800</integer>

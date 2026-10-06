@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// System wizualny RenaCode dla CloudMachine.
-/// Spójne tokeny kolorów, typografii i glassmorphismu z Dietetyk-AI i Trader-AI.
+/// The RenaCode visual system for CloudMachine.
+/// Color, typography and glassmorphism tokens consistent with Dietetyk-AI and Trader-AI.
 public enum RenaCodeTheme {
-  // MARK: - Kolory Podstawowe (Tokens)
+  // MARK: - Base Colors (Tokens)
 
   public static let bgDark = Color(red: 7 / 255, green: 9 / 255, blue: 19 / 255)  // #070913
   public static let bgDarkEnd = Color(red: 13 / 255, green: 17 / 255, blue: 39 / 255)  // #0D1127
@@ -18,27 +18,27 @@ public enum RenaCodeTheme {
   public static let borderGlassGlow = Color(red: 124 / 255, green: 58 / 255, blue: 237 / 255)
     .opacity(0.35)
 
-  // Akcenty kolorystyczne
-  // #7C3AED Fiolet AI
+  // Color accents
+  // #7C3AED AI violet
   public static let colorPrimary = Color(red: 124 / 255, green: 58 / 255, blue: 237 / 255)
   // #C084FC
   public static let colorPrimaryLight = Color(red: 192 / 255, green: 132 / 255, blue: 252 / 255)
-  // #06B6D4 Cyjan aktywności
+  // #06B6D4 Activity cyan
   public static let colorCyan = Color(red: 6 / 255, green: 182 / 255, blue: 212 / 255)
-  // #34D399 Szmaragd
+  // #34D399 Emerald
   public static let colorSuccess = Color(red: 52 / 255, green: 211 / 255, blue: 153 / 255)
   // #10B981
   public static let colorSuccessDark = Color(red: 16 / 255, green: 185 / 255, blue: 129 / 255)
-  // #F59E0B Pomarańcz
+  // #F59E0B Orange
   public static let colorWarning = Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255)
-  // #F87171 Czerwień
+  // #F87171 Red
   public static let colorDanger = Color(red: 248 / 255, green: 113 / 255, blue: 113 / 255)
 
   public static let textMain = Color(red: 241 / 255, green: 245 / 255, blue: 249 / 255)  // #F1F5F9
   public static let textMuted = Color(red: 148 / 255, green: 163 / 255, blue: 184 / 255)  // #94A3B8
   public static let textDim = Color(red: 100 / 255, green: 116 / 255, blue: 139 / 255)  // #64748B
 
-  // MARK: - Gradienty
+  // MARK: - Gradients
 
   public static let aiGradient = LinearGradient(
     colors: [colorPrimary, colorPrimaryLight],
@@ -65,7 +65,7 @@ public enum RenaCodeTheme {
   )
 }
 
-// MARK: - Tło ze świetlistymi kulami (Ambient Orbs Background)
+// MARK: - Ambient Orbs Background
 
 public struct AmbientGlowBackground: View {
   public init() {}
@@ -75,14 +75,14 @@ public struct AmbientGlowBackground: View {
       RenaCodeTheme.darkGradient
         .ignoresSafeArea()
 
-      // Fioletowa kuleczka z lewej strony
+      // Violet orb on the left
       Circle()
         .fill(RenaCodeTheme.colorPrimary.opacity(0.18))
         .frame(width: 380, height: 380)
         .blur(radius: 90)
         .offset(x: -220, y: -180)
 
-      // Cyjanowa kuleczka z prawej strony
+      // Cyan orb on the right
       Circle()
         .fill(RenaCodeTheme.colorCyan.opacity(0.14))
         .frame(width: 340, height: 340)
@@ -93,7 +93,7 @@ public struct AmbientGlowBackground: View {
   }
 }
 
-// MARK: - Modyfikator Karty Glassmorphic (GlassCard)
+// MARK: - Glassmorphic Card Modifier (GlassCard)
 
 public struct GlassCardModifier: ViewModifier {
   var cornerRadius: CGFloat
@@ -140,7 +140,7 @@ extension View {
   }
 }
 
-// MARK: - Komponent Karta Statystyk (KPI StatCard)
+// MARK: - KPI Stat Card Component (StatCard)
 
 public struct StatCard: View {
   let title: String
@@ -233,7 +233,7 @@ public struct RenaCodePillBadge: View {
   }
 }
 
-// MARK: - Style Przycieków (ButtonStyles)
+// MARK: - Button Styles
 
 public struct PrimaryGradientButtonStyle: ButtonStyle {
   @Environment(\.isEnabled) private var isEnabled

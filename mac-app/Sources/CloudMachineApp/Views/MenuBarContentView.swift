@@ -1,18 +1,19 @@
+import CloudMachineCore
 import SwiftUI
 
-/// Zawartość paska menu (MenuBar Extra), utrzymana w nowoczesnym
-/// stylu wizualnym RenaCode.
+/// Contents of the menu bar (MenuBar Extra), kept in the modern
+/// RenaCode visual style.
 struct MenuBarContentView: View {
   @EnvironmentObject private var controller: CloudMachineController
   @Environment(\.openWindow) private var openWindow
 
-  /// Otwiera panel i wyciąga go NA WIERZCH.
+  /// Opens the panel and brings it TO THE FRONT.
   ///
-  /// Aplikacja jest agentem paska menu (`LSUIElement`), więc samo
-  /// `openWindow` tworzy okno, ale nie aktywuje aplikacji - okno lądowało
-  /// pod oknami programu, w którym użytkownik akurat pracował. Aktywacja
-  /// musi być jawna i musi iść PO utworzeniu okna, stąd odłożenie na
-  /// następny obieg pętli zdarzeń.
+  /// The app is a menu bar agent (`LSUIElement`), so `openWindow` on its own
+  /// creates the window but does not activate the app - the window ended up
+  /// beneath the windows of whatever program the user happened to be working in. Activation
+  /// has to be explicit and has to come AFTER the window is created, hence deferring it to
+  /// the next pass of the event loop.
   private func showDashboard() {
     openWindow(id: "dashboard")
     DispatchQueue.main.async {
@@ -26,7 +27,7 @@ struct MenuBarContentView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      // Nagłówek z logo i indeksem sprawności
+      // Header with the logo and the health indicator
       HStack(spacing: 10) {
         ZStack {
           RoundedRectangle(cornerRadius: 8)
@@ -64,11 +65,11 @@ struct MenuBarContentView: View {
 
       Divider().background(RenaCodeTheme.borderGlass)
 
-      // Postęp aktywnej kopii zapasowej
+      // Progress of the running backup
       if let progress = controller.status.backupProgress, let percent = progress.percent {
         VStack(alignment: .leading, spacing: 4) {
           HStack {
-            Text("Backup w toku")
+            Text(L10n.tr("Backup in progress"))
               .font(.system(size: 12, weight: .medium))
               .foregroundStyle(RenaCodeTheme.textMuted)
             Spacer()
@@ -92,10 +93,10 @@ struct MenuBarContentView: View {
         }
       }
 
-      // Stan kolejki i bufora
+      // Queue and buffer state
       VStack(spacing: 6) {
         HStack {
-          Text("Czeka na wysłanie")
+          Text(L10n.tr("Waiting to upload"))
             .font(.system(size: 12))
             .foregroundStyle(RenaCodeTheme.textMuted)
           Spacer()
@@ -103,7 +104,8 @@ struct MenuBarContentView: View {
             !controller.status.buffer.queueKnown
               ? "?"
               : (controller.status.buffer.draining
-                ? "\(controller.status.buffer.uploadsQueued) plików" : "nic")
+                ? L10n.tr("%@ files", "\(controller.status.buffer.uploadsQueued)")
+                : L10n.tr("nothing"))
           )
           .font(.system(size: 12, weight: .semibold, design: .monospaced))
           .foregroundStyle(
@@ -112,7 +114,7 @@ struct MenuBarContentView: View {
         }
 
         HStack {
-          Text("Bufor SSD")
+          Text(L10n.tr("SSD buffer"))
             .font(.system(size: 12))
             .foregroundStyle(RenaCodeTheme.textMuted)
           Spacer()
@@ -124,13 +126,13 @@ struct MenuBarContentView: View {
 
       Divider().background(RenaCodeTheme.borderGlass)
 
-      // Przyciski akcji
+      // Action buttons
       VStack(spacing: 6) {
         if controller.status.backupProgress == nil {
           Button(action: { Task { await controller.startBackup() } }) {
             HStack {
               Image(systemName: "play.fill")
-              Text("Zrób backup teraz")
+              Text(L10n.tr("Back up now"))
               Spacer()
             }
           }
@@ -140,7 +142,7 @@ struct MenuBarContentView: View {
           Button(action: { Task { await controller.stopBackup() } }) {
             HStack {
               Image(systemName: "stop.fill")
-              Text("Wstrzymaj backup")
+              Text(L10n.tr("Stop backup"))
               Spacer()
             }
           }
@@ -150,7 +152,7 @@ struct MenuBarContentView: View {
         Button(action: showDashboard) {
           HStack {
             Image(systemName: "macwindow")
-            Text("Otwórz CloudMachine")
+            Text(L10n.tr("Open CloudMachine"))
             Spacer()
           }
         }
@@ -159,7 +161,7 @@ struct MenuBarContentView: View {
         Button(action: { NSApplication.shared.terminate(nil) }) {
           HStack {
             Image(systemName: "power")
-            Text("Zakończ")
+            Text(L10n.tr("Quit"))
             Spacer()
           }
         }

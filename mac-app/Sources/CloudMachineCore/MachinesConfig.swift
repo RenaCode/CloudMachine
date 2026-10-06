@@ -18,11 +18,11 @@ public struct MachinesConfig: Codable, Equatable {
   public var safetyMarginPercent: Int
   public var remoteName: String
   public var remoteRootFolder: String
-  /// Limit predkosci wysylania rclone (Mbps - megabity/s, jak u dostawcow
-  /// internetu), przekazywany jako `--bwlimit` (ktory oczekuje megabajtow/s -
-  /// konwersja w `CloudArchiveService.bwLimitArgs`). `0` = bez limitu.
-  /// Uzywane przez warstwe archiwizacji w chmurze (`CloudArchiveService`) przy
-  /// kazdym `rclone copy` ukonczonego backupu na Google Drive.
+  /// rclone upload speed limit (Mbps - megabits/s, as internet providers
+  /// quote it), passed as `--bwlimit` (which expects megabytes/s - conversion
+  /// in `CloudArchiveService.bwLimitArgs`). `0` = no limit. Used by the cloud
+  /// archiving layer (`CloudArchiveService`) on every `rclone copy` of a
+  /// finished backup to Google Drive.
   public var bwLimitMbps: Int
   public var machines: [MachineEntry]
 
@@ -44,10 +44,10 @@ public struct MachinesConfig: Codable, Equatable {
     machines: []
   )
 
-  /// Suma limitow przydzielonych maszynom, w GB.
+  /// Sum of the limits allocated to machines, in GB.
   public var allocatedGB: Int { machines.reduce(0) { $0 + $1.limitGB } }
 
-  /// Realny budzet po odjeciu marginesu bezpieczenstwa.
+  /// Real budget after subtracting the safety margin.
   public var safeBudgetGB: Int {
     driveTotalGB - (driveTotalGB * safetyMarginPercent / 100)
   }
@@ -73,9 +73,10 @@ public struct MachinesConfig: Codable, Equatable {
     safetyMarginPercent = try container.decode(Int.self, forKey: .safetyMarginPercent)
     remoteName = try container.decode(String.self, forKey: .remoteName)
     remoteRootFolder = try container.decode(String.self, forKey: .remoteRootFolder)
-    // WAZNE: `decodeIfPresent` - pole dodane pozniej, istniejace pliki
-    // machines.json na dyskach uzytkownikow go nie maja. Domyslnie bez
-    // limitu, zeby nie zmienic zachowania juz dzialajacych instalacji.
+    // IMPORTANT: `decodeIfPresent` - a field added later; existing
+    // machines.json files on users' disks do not have it. No limit by
+    // default, so as not to change the behaviour of installations already
+    // running.
     bwLimitMbps = try container.decodeIfPresent(Int.self, forKey: .bwLimitMbps) ?? 0
     let dict = try container.decode([String: MachineEntryPayload].self, forKey: .machines)
     machines = dict.map {
@@ -99,19 +100,19 @@ public struct MachinesConfig: Codable, Equatable {
     try container.encode(dict, forKey: .machines)
   }
 
-  /// Odpowiednik `cm_remote_path_for` z common.sh, np.
-  /// `gdrive-cloudmachine:CloudMachine/marcin-mac-studio`.
+  /// Counterpart of `cm_remote_path_for` from common.sh, e.g.
+  /// `gdrive-cloudmachine:CloudMachine/alex-mac-studio`.
   public func remotePath(forMachineKey key: String) -> String {
     "\(remoteName):\(remoteRootFolder)/\(key)"
   }
 
-  /// Odpowiednik `cm_machine_limit_gb` - `nil`, jesli maszyna nie jest zdefiniowana.
+  /// Counterpart of `cm_machine_limit_gb` - `nil` if the machine is not defined.
   public func limitGB(forMachineKey key: String) -> Int? {
     machines.first(where: { $0.key == key })?.limitGB
   }
 }
 
-/// Ksztalt pojedynczego wpisu maszyny w JSON-ie (bez klucza, ktory jest kluczem slownika).
+/// Shape of a single machine entry in the JSON (without the key, which is the dictionary key).
 private struct MachineEntryPayload: Codable {
   var displayName: String
   var limitGB: Int

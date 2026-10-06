@@ -2,34 +2,36 @@ import ArgumentParser
 import CloudMachineCore
 import Foundation
 
-/// Symuluje smierc warstwy chmurowej w trakcie zapisu.
+/// Simulates the death of the cloud layer in the middle of a write.
 ///
-/// Najgrozniejszy scenariusz tej architektury: Time Machine pisze do
-/// podpietego obrazu, a pod spodem znika montowanie rclone - bo padl proces,
-/// bo FUSE-T sie wysypal, bo system uspil dysk. Obraz traci swoje pasma w
-/// srodku zapisu.
+/// The most dangerous scenario of this architecture: Time Machine writes to
+/// the attached image, and underneath it the rclone mount disappears - because
+/// the process died, because FUSE-T crashed, because the system put the disk
+/// to sleep. The image loses its bands in the middle of a write.
 ///
-/// Test odpina zewnetrzny obraz (zastepnik montowania rclone) w trakcie zapisu
-/// do wewnetrznego, potem podpina wszystko z powrotem i sprawdza `fsck_apfs`.
+/// The test detaches the outer image (the stand-in for the rclone mount) while
+/// writing to the inner one, then attaches everything back and runs
+/// `fsck_apfs`.
 ///
-/// Interesuje nas nie to, czy zapis przezyje - nie przezyje - tylko czy obraz
-/// da sie pozniej naprawic, czy jest do wyrzucenia. Roznica miedzy "backup
-/// przerwany, wznowi sie" a "backup stracony, zaczynamy od zera".
+/// What interests us is not whether the write survives - it will not - but
+/// whether the image can be repaired afterwards or has to be thrown away. The
+/// difference between "backup interrupted, it will resume" and "backup lost,
+/// we start from zero".
 struct PullPlugCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "pullplug",
-    abstract: "Wyrywa warstwe chmurowa w trakcie zapisu i sprawdza, czy obraz przezyl.")
+    abstract: "Pulls the cloud layer out mid-write and checks whether the image survived.")
 
-  @Option(name: .long, help: "Rozmiar pasma w MB.")
+  @Option(name: .long, help: "Band size in MB.")
   var bandMB: Int = 64
 
-  @Option(name: .long, help: "Ile razy powtorzyc wyrwanie podlogi.")
+  @Option(name: .long, help: "How many times to repeat pulling the floor out.")
   var rounds: Int = 3
 
-  @Option(name: .long, help: "Katalog roboczy.")
+  @Option(name: .long, help: "Working directory.")
   var root: String = "/tmp/cm-plug"
 
-  @Flag(name: .long, help: "Tylko posprzataj po poprzednim przebiegu i zakoncz.")
+  @Flag(name: .long, help: "Only clean up after the previous run and exit.")
   var clean = false
 
   private static let fsck =
@@ -50,7 +52,7 @@ struct PullPlugCommand: AsyncParsableCommand {
     guard !clean else {
       await detachAll()
       try? FileManager.default.removeItem(at: runRoot)
-      print("Posprzatane.")
+      print("Cleaned up.")
       return
     }
 
@@ -68,73 +70,74 @@ struct PullPlugCommand: AsyncParsableCommand {
     try POC.recreateDirectory(runRoot)
     try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
 
-    print("Przygotowanie")
+    print("Preparation")
     try await POC.createSparseImage(at: outerImage, sizeGB: 20, volumeName: "PlugStandIn")
     try await POC.attach(outerImage, mountpoint: mountPoint)
     try await POC.createSparsebundle(
       at: image, sizeGB: 10, volumeName: "PlugPOC", bandMB: bandMB)
 
     var failed = 0
-    // Rundy, ktore NIC NIE ZMIERZYLY: zapis sie nie zaczal, skonczyl sie przed
-    // wyrwaniem podlogi albo obrazu nie dalo sie sprawdzic. Bez tego licznika
-    // przebieg bez ani jednego pomiaru konczyl sie zdaniem "Obraz przezyl
-    // kazde wyrwanie podlogi".
+    // Rounds that MEASURED NOTHING: the write did not start, finished before
+    // the floor was pulled out, or the image could not be checked. Without
+    // this counter a run without a single measurement ended with the sentence
+    // "The image survived every floor pull".
     var unmeasured = 0
     var executed = 0
     for round in 1...rounds {
       executed += 1
       print("")
-      print("--- runda \(round) ---")
+      print("--- round \(round) ---")
       try await POC.attach(image, mountpoint: target)
 
-      // Zapis w tle, zeby wyrwac podloge w jego trakcie. Ten zapis MA paść -
-      // przerwanie w polowie jest cala trescia testu.
+      // A background write, so the floor can be pulled out from under it. This
+      // write IS MEANT to fail - interrupting it halfway is the whole point of
+      // the test.
       let writer = Task.detached { [target] in
         writeUntilItBreaks(
-          to: target.appendingPathComponent("obciazenie-\(round).bin"), megabytes: 1500)
+          to: target.appendingPathComponent("load-\(round).bin"), megabytes: 1500)
       }
       try await Task.sleep(nanoseconds: 3_000_000_000)
 
-      print("Wyrywam podloge (odpinam zastepnik montowania)")
+      print("Pulling the floor out (detaching the mount stand-in)")
       await POC.detachQuietly(mountPoint.path, force: true)
-      // "Nie zaczalem pisac" NIE jest "zapis przerwany". Pierwsze znaczy, ze
-      // runda nie miala czego przerywac, czyli nie zmierzyla niczego.
+      // "I never started writing" is NOT "write interrupted". The former means
+      // the round had nothing to interrupt, i.e. it measured nothing.
       switch await writer.value {
-      case .neverStarted(let powod):
-        print("  ZAPIS NIGDY NIE WYSTARTOWAL: \(powod)")
-        print("  runda NIC NIE MIERZY - nie bylo czego przerywac")
+      case .neverStarted(let reason):
+        print("  THE WRITE NEVER STARTED: \(reason)")
+        print("  round MEASURES NOTHING - there was nothing to interrupt")
         unmeasured += 1
       case .interrupted(let megabytes):
-        print("  zapis przerwany po \(megabytes) MB, zgodnie z oczekiwaniem")
+        print("  write interrupted after \(megabytes) MB, as expected")
       case .completed(let megabytes):
-        print("  UWAGA: zapis \(megabytes) MB skonczyl sie PRZED wyrwaniem podlogi")
-        print("  runda NIC NIE MIERZY - podloga zniknela juz po zapisie")
+        print("  WARNING: the \(megabytes) MB write finished BEFORE the floor was pulled out")
+        print("  round MEASURES NOTHING - the floor disappeared only after the write")
         unmeasured += 1
       }
       await POC.detachQuietly(target.path, force: true)
 
-      print("Przywracam warstwe i sprawdzam obraz")
-      // Nie sprawdzamy obrazu w miejscu. Po wymuszonym odpieciu urzadzenie
-      // potrafi zostac w systemie jako zombie; podpiecie zwraca wtedy martwy
-      // uchwyt, a fsck_apfs melduje "failed to read container superblock" z
-      // UUID z samych zer. Wyglada to jak nieodwracalne uszkodzenie, a jest
-      // tylko nieczytelnym urzadzeniem - wczesniejsza wersja tego testu na tej
-      // podstawie trzy razy z rzedu orzekla utrate backupu, ktory byl caly.
+      print("Restoring the layer and checking the image")
+      // We do not check the image in place. After a forced detach a device can
+      // linger in the system as a zombie; attaching then returns a dead handle,
+      // and fsck_apfs reports "failed to read container superblock" with an
+      // all-zero UUID. It looks like irreversible damage, but it is only an
+      // unreadable device - an earlier version of this test, on that basis,
+      // declared three times in a row the loss of a backup that was intact.
       //
-      // Kopia pod swieza sciezka jest odporna na ten artefakt: nowy plik, nowe
-      // urzadzenie, zaden stary uchwyt nie ma z nim zwiazku.
+      // A copy under a fresh path is immune to this artefact: new file, new
+      // device, no old handle has anything to do with it.
       await POC.detachQuietly(target.path, force: true)
       await POC.purgeStaleDevices(forImage: image)
       try await Task.sleep(nanoseconds: 2_000_000_000)
       try await POC.attach(outerImage, mountpoint: mountPoint)
       try await Task.sleep(nanoseconds: 1_000_000_000)
 
-      let copy = runRoot.appendingPathComponent("kontrola-\(round).sparsebundle")
+      let copy = runRoot.appendingPathComponent("check-\(round).sparsebundle")
       try? FileManager.default.removeItem(at: copy)
       try FileManager.default.copyItem(at: image, to: copy)
 
       guard let device = try await attachWithoutMounting(copy) else {
-        print("  WYNIK: obrazu nie da sie nawet podpiac - stracony")
+        print("  RESULT: the image cannot even be attached - lost")
         failed += 1
         break
       }
@@ -142,24 +145,24 @@ struct PullPlugCommand: AsyncParsableCommand {
       let log = runRoot.appendingPathComponent("fsck-\(round).log")
       switch await checkImage(device: device, writingTo: log, repair: false) {
       case .consistent:
-        print("  WYNIK: spojny")
-      case .notChecked(let powod):
-        // NIE "stracony": nie mamy ani jednego wyniku. Na podstawie tego zdania
-        // odtwarza sie backup od zera, wiec nie ma prawa go mowic zgadywanie.
-        print("  WYNIK: NIE UDALO SIE SPRAWDZIC (\(powod))")
-        print("  spojnosc obrazu POZOSTAJE NIESPRAWDZONA - runda nic nie mierzy")
+        print("  RESULT: consistent")
+      case .notChecked(let reason):
+        // NOT "lost": we do not have a single result. A backup gets rebuilt from
+        // zero on the strength of that sentence, so a guess has no right to say it.
+        print("  RESULT: COULD NOT CHECK (\(reason))")
+        print("  image consistency REMAINS UNCHECKED - the round measures nothing")
         unmeasured += 1
       case .inconsistent:
-        print("  WYNIK: niespojny - probuje naprawic")
+        print("  RESULT: inconsistent - trying to repair")
         switch await checkImage(device: device, writingTo: log, repair: true, append: true) {
         case .consistent:
-          print("  naprawa udana - backup do uratowania")
+          print("  repair succeeded - the backup can be saved")
         case .inconsistent:
-          print("  naprawa nieudana - backup stracony (log: \(log.path))")
+          print("  repair failed - backup lost (log: \(log.path))")
           failed += 1
-        case .notChecked(let powod):
-          print("  naprawy NIE UDALO SIE uruchomic (\(powod))")
-          print("  nie wiadomo, czy backup da sie uratowac (log: \(log.path))")
+        case .notChecked(let reason):
+          print("  the repair COULD NOT be started (\(reason))")
+          print("  unknown whether the backup can be saved (log: \(log.path))")
           unmeasured += 1
         }
       }
@@ -176,8 +179,9 @@ struct PullPlugCommand: AsyncParsableCommand {
     }
   }
 
-  /// Podpina kopie bez montowania i zwraca urzadzenie z kontenerem APFS.
-  /// `41504653` to typ partycji Apple_APFS w wydruku `hdiutil attach -nomount`.
+  /// Attaches the copy without mounting and returns the device with the APFS
+  /// container. `41504653` is the Apple_APFS partition type in the output of
+  /// `hdiutil attach -nomount`.
   private func attachWithoutMounting(_ copy: URL) async throws -> String? {
     guard
       let result = try? await POC.run(
@@ -190,9 +194,9 @@ struct PullPlugCommand: AsyncParsableCommand {
     return nil
   }
 
-  /// `fsck_apfs` na uszkodzonym obrazie potrafi chodzic godzinami - dlatego
-  /// `timeout: nil`. Zabity fsck zglasza porazke, ktorej nie da sie odroznic
-  /// od realnej niespojnosci, a to tutaj jest cala mierzona wielkosc.
+  /// `fsck_apfs` on a damaged image can run for hours - hence `timeout: nil`.
+  /// A killed fsck reports a failure that cannot be told apart from a real
+  /// inconsistency, and that is the whole quantity measured here.
   private func checkImage(
     device: String, writingTo log: URL, repair: Bool, append: Bool = false
   ) async -> ImageCheck {
@@ -204,110 +208,113 @@ struct PullPlugCommand: AsyncParsableCommand {
     return Self.classify(fsck: result)
   }
 
-  /// "Nie udalo sie sprawdzic" to NIE to samo co "niespojny".
+  /// "Could not check" is NOT the same as "inconsistent".
   ///
-  /// Ten sam wzorzec, co w `BackupImageService.verifyLocked()`: `fsck_apfs`
-  /// nieuruchomiony (brak binarki, ubity proces, wyrwane urzadzenie) dawal
-  /// `false` dokladnie tak samo jak `fsck_apfs`, ktory znalazl uszkodzenie -
-  /// harness meldowal wtedy "backup stracony" i liczyl nieodwracalna strate,
-  /// nie majac ani jednego wyniku. Falszywy alarm o utracie calej kopii jest
-  /// tu grozniejszy niz brak odpowiedzi, bo na jego podstawie odtwarza sie
-  /// backup od zera.
+  /// The same pattern as in `BackupImageService.verifyLocked()`: a `fsck_apfs`
+  /// that never ran (missing binary, killed process, pulled device) gave
+  /// `false` exactly like a `fsck_apfs` that found damage - the harness then
+  /// reported "backup lost" and counted an irreversible loss without having a
+  /// single result. A false alarm about losing the whole backup is more
+  /// dangerous here than no answer, because the backup gets rebuilt from zero
+  /// on the strength of it.
   static func classify(fsck result: ProcessResult?) -> ImageCheck {
     guard let result else {
-      return .notChecked("fsck_apfs nie dal sie uruchomic albo nie zwrocil wyniku")
+      return .notChecked("fsck_apfs could not be started or returned no result")
     }
     return result.succeeded ? .consistent : .inconsistent
   }
 
-  /// Ostatnie zdanie przebiegu - jedyne, ktore ktokolwiek zapamieta.
+  /// The last sentence of the run - the only one anybody will remember.
   ///
-  /// Czyste i wydzielone, bo to tutaj byla usterka: dopoki liczyly sie tylko
-  /// straty, przebieg BEZ ANI JEDNEGO pomiaru konczyl sie zdaniem "Obraz
-  /// przezyl kazde wyrwanie podlogi". Harness nie ma prawa orzekac, ze cos
-  /// przezylo, jesli nie wie, czy to cos w ogole probowal zabic.
+  /// Pure and extracted, because this is where the bug was: as long as only
+  /// losses counted, a run WITHOUT A SINGLE measurement ended with the
+  /// sentence "The image survived every floor pull". The harness has no right
+  /// to declare that something survived if it does not know whether it even
+  /// tried to kill it.
   static func summary(requestedRounds: Int, executedRounds: Int, lost: Int, unmeasured: Int)
     -> [String]
   {
     var lines = [
-      "Rundy: \(requestedRounds) zamowione, \(executedRounds) wykonane   "
-        + "nieodwracalnych strat: \(lost)   rund bez pomiaru: \(unmeasured)"
+      "Rounds: \(requestedRounds) requested, \(executedRounds) executed   "
+        + "irreversible losses: \(lost)   rounds without a measurement: \(unmeasured)"
     ]
     if executedRounds == 0 {
-      lines.append("PRZEBIEG NIC NIE ZMIERZYL: nie wykonano ani jednej rundy.")
+      lines.append("THE RUN MEASURED NOTHING: not a single round was executed.")
       return lines
     }
     if lost > 0 {
-      lines.append("UWAGA: architektura gubi backup przy utracie warstwy chmurowej.")
+      lines.append("WARNING: the architecture loses the backup when the cloud layer is lost.")
       return lines
     }
     if unmeasured > 0 {
       lines.append(
-        "PRZEBIEG NIC NIE DOWODZI: \(unmeasured) z \(executedRounds) rund nie zmierzylo niczego")
+        "THE RUN PROVES NOTHING: \(unmeasured) of \(executedRounds) rounds measured nothing")
       lines.append(
-        "(zapis sie nie zaczal, skonczyl sie przed wyrwaniem podlogi albo obrazu nie "
-          + "dalo sie sprawdzic).")
+        "(the write did not start, finished before the floor was pulled out, or the image "
+          + "could not be checked).")
       return lines
     }
-    lines.append("Obraz przezyl kazde wyrwanie podlogi.")
+    lines.append("The image survived every floor pull.")
     return lines
   }
 }
 
-/// Wynik sprawdzenia obrazu `fsck_apfs`. Trzy stany, bo "nie udalo sie
-/// sprawdzic" i "niespojny" to dwie rozne odpowiedzi - patrz `classify`.
+/// The result of checking the image with `fsck_apfs`. Three states, because
+/// "could not check" and "inconsistent" are two different answers - see
+/// `classify`.
 enum ImageCheck: Equatable {
   case consistent
   case inconsistent
   case notChecked(String)
 }
 
-/// Co sie stalo z probnym zapisem.
+/// What happened to the test write.
 ///
-/// Trzy stany, nie dwa. `writeUntilItBreaks` zwracalo `Bool`, a `false` znaczylo
-/// jednoczesnie "zapis przerwano w polowie" (cala tresc testu) i "zapisu nie
-/// dalo sie w ogole zaczac" - `createFile` albo `FileHandle` padly od razu, na
-/// przyklad bo sciezki nie ma. Harness drukowal wtedy "zapis przerwany, zgodnie
-/// z oczekiwaniem" i konczyl "Obraz przezyl kazde wyrwanie podlogi", nie
-/// napisawszy ani jednego bajtu.
+/// Three states, not two. `writeUntilItBreaks` used to return `Bool`, and
+/// `false` meant both "the write was interrupted halfway" (the whole point of
+/// the test) and "the write could not start at all" - `createFile` or
+/// `FileHandle` failed immediately, for example because the path does not
+/// exist. The harness then printed "write interrupted, as expected" and ended
+/// with "The image survived every floor pull", without having written a single
+/// byte.
 ///
-/// `completed` tez jest osobno i tez NIE jest sukcesem testu: zapis, ktory
-/// skonczyl sie przed wyrwaniem podlogi, nie zmierzyl niczego (dokladnie ta
-/// pulapka, przed ktora ostrzega komentarz o `arc4random_buf` przy funkcji).
+/// `completed` is separate too and is NOT a test success either: a write that
+/// finished before the floor was pulled out measured nothing (exactly the trap
+/// the comment about `arc4random_buf` on the function warns about).
 enum WriteProbe: Equatable {
-  /// Zapisu NIE ZACZELISMY - runda nic nie mierzy.
+  /// We did NOT START the write - the round measures nothing.
   case neverStarted(String)
-  /// Zapis szedl i zostal przerwany - oczekiwany przypadek.
+  /// The write was running and got interrupted - the expected case.
   case interrupted(megabytesWritten: Int)
-  /// Zapis doszedl do konca, czyli podloga zniknela za pozno albo wcale.
+  /// The write reached the end, i.e. the floor disappeared too late or not at all.
   case completed(megabytesWritten: Int)
 }
 
-/// Leje losowe dane, dopoki podloga nie zniknie.
+/// Pours random data until the floor disappears.
 ///
-/// Wewnetrzna (nie `private`), zeby test mogl sprawdzic, ze "nie zaczalem
-/// pisac" i "zapis przerwany" to dwie rozne odpowiedzi.
+/// Internal (not `private`), so that a test can check that "I never started
+/// writing" and "write interrupted" are two different answers.
 ///
-/// Pisze porcjami przez `FileHandle`, a nie jednym `Data.write`, zeby zapis
-/// naprawde trwal i dalo sie go przerwac w polowie.
+/// Writes in chunks through `FileHandle`, not with a single `Data.write`, so
+/// that the write really takes time and can be interrupted halfway.
 ///
-/// Zrodlem danych jest `/dev/urandom` - dokladnie jak `dd if=/dev/urandom` w
-/// wersji powlokowej. To nie jest przesadna wiernosc, tylko warunek dzialania
-/// testu: to urandom wyznacza tempo zapisu. Wersja losujaca przez
-/// `arc4random_buf` przepychala 1500 MB w mniej niz trzy sekundy, wiec zapis
-/// konczyl sie PRZED wyrwaniem podlogi - harness meldowal "obraz przezyl", nie
-/// sprawdziwszy tego, po co istnieje. Zmierzone: z urandom zapis wciaz trwa,
-/// gdy znika montowanie.
+/// The data source is `/dev/urandom` - exactly like `dd if=/dev/urandom` in
+/// the shell version. This is not excessive fidelity but a condition for the
+/// test to work: urandom sets the pace of the write. The version generating
+/// data with `arc4random_buf` pushed 1500 MB in under three seconds, so the
+/// write finished BEFORE the floor was pulled out - the harness reported "the
+/// image survived" without having checked what it exists for. Measured: with
+/// urandom the write is still running when the mount disappears.
 func writeUntilItBreaks(to url: URL, megabytes: Int) -> WriteProbe {
   guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
-    return .neverStarted("nie udalo sie utworzyc \(url.path)")
+    return .neverStarted("could not create \(url.path)")
   }
   guard let handle = FileHandle(forWritingAtPath: url.path) else {
-    return .neverStarted("nie udalo sie otworzyc do zapisu \(url.path)")
+    return .neverStarted("could not open for writing \(url.path)")
   }
   guard let entropy = FileHandle(forReadingAtPath: "/dev/urandom") else {
     try? handle.close()
-    return .neverStarted("nie udalo sie otworzyc /dev/urandom")
+    return .neverStarted("could not open /dev/urandom")
   }
   defer {
     try? handle.close()
@@ -317,22 +324,22 @@ func writeUntilItBreaks(to url: URL, megabytes: Int) -> WriteProbe {
   for _ in 0..<megabytes {
     do {
       guard let chunk = try entropy.read(upToCount: 1024 * 1024), !chunk.isEmpty else {
-        // Zero bajtow z urandom przy PIERWSZEJ porcji znaczy, ze zapis nigdy
-        // sie nie zaczal - a przy setnej, ze padl w trakcie.
+        // Zero bytes from urandom on the FIRST chunk means the write never
+        // started - and on the hundredth, that it failed midway.
         return written == 0
-          ? .neverStarted("/dev/urandom nie dal ani jednego bajtu")
+          ? .neverStarted("/dev/urandom did not yield a single byte")
           : .interrupted(megabytesWritten: written)
       }
       try handle.write(contentsOf: chunk)
       written += 1
     } catch {
       return written == 0
-        ? .neverStarted("pierwszy zapis padl od razu: \(error.localizedDescription)")
+        ? .neverStarted("the first write failed immediately: \(error.localizedDescription)")
         : .interrupted(megabytesWritten: written)
     }
   }
-  // Nieudany `synchronize` to zapis, ktory nie doszedl na dysk - czyli
-  // przerwany, a nie ukonczony.
+  // A failed `synchronize` is a write that did not reach the disk - so it is
+  // interrupted, not completed.
   guard (try? handle.synchronize()) != nil else {
     return .interrupted(megabytesWritten: written)
   }

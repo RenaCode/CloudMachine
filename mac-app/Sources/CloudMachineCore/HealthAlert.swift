@@ -1,75 +1,84 @@
 import Foundation
 
-/// Donosi o zerwanym cyklu backupu tam, gdzie uzytkownik to zobaczy BEZ
-/// otwierania czegokolwiek.
+/// Reports a broken backup cycle where the user will see it WITHOUT opening
+/// anything.
 ///
-/// Powod istnienia: caly dotychczasowy "monitoring" tego projektu polegal na
-/// tym, ze ktos otworzy aplikacje i spojrzy na ikonke. Awaria, ktora nie
-/// przeszkadza w codziennej pracy - a taka jest kazda awaria backupu - nie
-/// daje zadnego powodu, zeby tam zajrzec. Kopia moze nie powstawac tygodniami
-/// i nic tego nie zdradzi.
+/// Reason for existence: all the "monitoring" this project had so far relied
+/// on someone opening the app and looking at the icon. A failure that does not
+/// get in the way of daily work - and every backup failure is like that -
+/// gives no reason to look there. Backups may not be made for weeks and
+/// nothing will give it away.
 ///
-/// Kanalem jest powiadomienie systemowe macOS: nie wymaga serwera pocztowego
-/// ani sekretu, ktorego brak bylby kolejna cicha awaria.
+/// The channel is a macOS system notification: it needs no mail server and no
+/// secret whose absence would be yet another silent failure.
 public enum HealthAlert {
 
-  /// Plik ze stanem ostatniego zgloszenia. Trzymany OBOK bufora i obrazu,
-  /// w katalogu, ktory zyje niezaleznie od nich - czujka nie moze dzielic losu
-  /// tego, co nadzoruje.
+  /// File with the state of the last report. Kept APART from the buffer and
+  /// the image, in a directory that lives independently of them - the
+  /// watchdog must not share the fate of what it supervises.
   public static var stateFile: URL {
     CMPaths.appSupportDir.appendingPathComponent("health-alert.json")
   }
 
   struct AlertState: Codable {
-    /// Ostatnio POKAZANY tekst - trzymany dla czlowieka (`drive-status`,
-    /// diagnoza z pliku), nie do porownywania.
+    /// The text last SHOWN - kept for a person (`drive-status`, diagnosis from
+    /// the file), not for comparison. It is in the UI language of the run that
+    /// wrote it.
     var lastSummary: String
     var lastAlertAt: Date
-    /// Tozsamosc problemow, czyli to, po czym poznajemy, ze chodzi o TE SAMA
-    /// awarie - patrz `identity(of:)`. Opcjonalne, zeby plik zapisany przed
-    /// 23.09.2026 nadal sie czytal; przy `nil` porownujemy po tekscie jak
-    /// dawniej (najwyzej jedno powiadomienie wiecej, raz).
+    /// Identity of the problems, i.e. how we recognize that it is THE SAME
+    /// failure - see `identity(of:)`. Optional, so that a file written before
+    /// 23.09.2026 can still be read; with `nil` we compare by text as before
+    /// (at most one extra notification, once).
+    ///
+    /// Built from `Problem.code`, which does not depend on the UI language.
+    /// Files written before the switch to codes hold a fingerprint of the
+    /// Polish summary instead; it does not match any code, so the first run
+    /// after the update notifies once more - the same one-off cost as above.
     var lastIdentity: String?
-    /// Czy powiadomienie FAKTYCZNIE doszlo. `nil` = plik w starym formacie,
-    /// czyli sprzed czasow, gdy ktokolwiek to sprawdzal - traktujemy jak
-    /// doreczone, bo inaczej po aktualizacji posypalyby sie ponowienia.
+    /// Whether the notification was ACTUALLY delivered. `nil` = a file in the
+    /// old format, i.e. from before anyone checked this - treated as delivered,
+    /// because otherwise retries would pour in after the update.
     var delivered: Bool?
-    /// Dlaczego nie doszlo - do pokazania czlowiekowi.
+    /// Why it was not delivered - to be shown to a person. Written as the
+    /// language-independent `osascriptFailureReason` and translated only when
+    /// displayed (see `lastDeliveryFailure`); older files may hold Polish text,
+    /// which is then shown as it is.
     var deliveryError: String?
   }
 
-  /// Po tylu godzinach przypominamy o TYM SAMYM problemie jeszcze raz.
+  /// After this many hours we remind about THE SAME problem once more.
   ///
-  /// Bez przypomnienia alarm zapala sie raz i gasnie na zawsze - a awaria
-  /// backupu trwa, dopoki ktos jej nie naprawi. Bez odstepu zamienia sie
-  /// w szum co 15 minut i przestaje cokolwiek znaczyc.
+  /// Without a reminder the alarm lights up once and goes out forever - while
+  /// a backup failure lasts until someone fixes it. Without a gap it turns
+  /// into noise every 15 minutes and stops meaning anything.
   static let reminderHours = 12.0
 
-  /// Zglasza problemy, jesli sa NOWE albo jesli minal czas przypomnienia.
-  /// Zwraca `true`, gdy faktycznie cos zgloszono I DORECZONO.
+  /// Reports the problems if they are NEW or if the reminder time has passed.
+  /// Returns `true` when something was actually reported AND DELIVERED.
   ///
-  /// `stateFile`, `deliver` i `log` sa podmienialne, zeby dalo sie sprawdzic
-  /// testem CALA sciezke - z odmowa doreczenia wlacznie - bez pisania do
-  /// prawdziwego katalogu uzytkownika, bez wyswietlania komukolwiek
-  /// powiadomien i bez dopisywania zmyslonych awarii do produkcyjnego logu.
+  /// `stateFile`, `deliver` and `log` are replaceable so that the WHOLE path
+  /// can be tested - including a refused delivery - without writing to the
+  /// user's real directory, without showing anyone notifications and without
+  /// adding made-up failures to the production log.
   ///
-  /// `log` jest wstrzykiwalny z dokladnie tego samego powodu, co
-  /// `BufferGuardService.Probes.log`. Dopoki nie byl, kazdy przebieg
-  /// `swift test` dopisywal swoje wymyslone "AWARIA BACKUPU" do prawdziwego
-  /// `cloudmachine.log` - zmierzone 25.09.2026: 117 linii zawierajacych
-  /// slowo "szczegoly", ktore istnieje wylacznie w
-  /// `HealthAlertTests.raport(_:)`, wszystkie z jednego dnia. Ten log jest
-  /// JEDYNYM sladem po awariach backupu i przestal pozwalac odroznic
-  /// zdarzenia, ktore sie staly, od tych, ktore ktos tylko przetestowal -
-  /// a po awarii czyta sie go wlasnie po to, zeby ustalic, co sie stalo.
+  /// `log` is injectable for exactly the same reason as
+  /// `BufferGuardService.Probes.log`. Until it was, every `swift test` run
+  /// appended its invented "BACKUP FAILURE" (then still in Polish) to the
+  /// real `cloudmachine.log` - measured 25.09.2026: 117 lines containing a
+  /// word that existed only in `HealthAlertTests.raport(_:)` (now
+  /// `report(_:)`), all from one day. This log is the ONLY trace of backup
+  /// failures and it stopped allowing events that happened to be told apart
+  /// from ones someone merely tested - and after a failure it is read
+  /// precisely to establish what happened.
   ///
-  /// Odrzucone: globalne przekierowanie `CMLogger` na plik tymczasowy w
-  /// `setUp` testu. To wspolny stan procesu, wiec przy testach biegnacych
-  /// rownolegle uciszalby rowniez te, ktore maja pisac, a wlaczony przez
-  /// pomylke w kodzie produkcyjnym uciszylby produkcje - czyli zamienilby
-  /// halas w logu na cisze w logu, co jest zamiana na gorsze. Domyslna
-  /// wartosc tego parametru idzie do prawdziwego logu i zaden kod
-  /// produkcyjny jej nie podaje.
+  /// Rejected: globally redirecting `CMLogger` to a temporary file in the
+  /// test's `setUp`. That is shared process state, so with tests running in
+  /// parallel it would also silence the ones that are supposed to write, and
+  /// switched on by mistake in production code it would silence production -
+  /// i.e. it would trade noise in the log for silence in the log, which is a
+  /// change for the worse. The default value of this parameter goes to the
+  /// real log and no production code passes it.
   @discardableResult
   public static func report(
     _ report: BackupHealth.Report,
@@ -81,8 +90,8 @@ public enum HealthAlert {
     log: @Sendable (String) -> Void = { CMLogger.log($0) }
   ) async -> Bool {
     guard let first = report.problems.first else {
-      // Wyzdrowienie kasuje stan, zeby nastepna awaria zglosila sie od razu,
-      // a nie czekala na okno przypomnienia.
+      // Recovery deletes the state, so that the next failure is reported
+      // right away instead of waiting for the reminder window.
       try? FileManager.default.removeItem(at: stateFile)
       return false
     }
@@ -92,26 +101,26 @@ public enum HealthAlert {
     if !shouldAlert(identity: identity, now: now, stateFile: stateFile) { return false }
 
     let body = report.problems.map { "\($0.summary): \($0.detail)" }.joined(separator: "\n")
-    log("AWARIA BACKUPU: \(body)")
-    let delivered = await deliver("CloudMachine: backup nie dziala", first.summary)
+    log("BACKUP FAILURE: \(body)")
+    let delivered = await deliver(L10n.tr("CloudMachine: backup is not working"), first.summary)
 
-    // Stan zapisujemy ZAWSZE, ale z informacja, czy powiadomienie doszlo.
+    // We ALWAYS write the state, but with the information whether the
+    // notification was delivered.
     //
-    // Wczesniej zapisywalo sie bezwarunkowo jako sukces, wiec nieudane
-    // powiadomienie (odmowa uprawnien dla procesu launchd, brak sesji Aqua,
-    // przekroczony limit czasu osascript) zamykalo okno ciszy na 12 godzin.
-    // Alarm ginal po cichu - czyli nadzor ginal razem z nadzorowanym, przed
-    // czym ostrzega naglowek tego pliku.
+    // Previously it was written unconditionally as a success, so a failed
+    // notification (permission refused for the launchd process, no Aqua
+    // session, osascript time limit exceeded) closed the quiet window for 12
+    // hours. The alarm vanished silently - i.e. the supervision died together
+    // with the supervised, which the header of this file warns against.
     if !delivered {
       log(
-        "NIE UDALO SIE pokazac powiadomienia o awarii backupu. Tresc poszla do logu powyzej; sprobuje ponownie przy nastepnym sprawdzeniu."
+        "FAILED to show the backup failure notification. The content went to the log above; will retry at the next check."
       )
     }
     let state = AlertState(
       lastSummary: summary, lastAlertAt: now, lastIdentity: identity,
       delivered: delivered,
-      deliveryError: delivered
-        ? nil : "osascript nie pokazal powiadomienia (uprawnienia albo brak sesji graficznej)")
+      deliveryError: delivered ? nil : osascriptFailureReason)
     if let data = try? JSONEncoder().encode(state) {
       try? data.write(to: stateFile, options: .atomic)
     }
@@ -122,28 +131,34 @@ public enum HealthAlert {
     -> Bool
   {
     guard let state = loadState(stateFile) else { return true }
-    // Nieudane doreczenie NIE zamyka okna ciszy - inaczej pierwsza nieudana
-    // proba uciszalaby alarm na 12 godzin.
+    // A failed delivery does NOT close the quiet window - otherwise the first
+    // failed attempt would silence the alarm for 12 hours.
     if state.delivered == false { return true }
     if (state.lastIdentity ?? state.lastSummary) != identity { return true }
     return now.timeIntervalSince(state.lastAlertAt) > reminderHours * 3600
   }
 
-  /// Tozsamosc zestawu problemow: te same summary z wycietymi LICZBAMI.
+  /// Identity of a set of problems: their codes with NUMBERS cut out.
   ///
-  /// Porownywanie gotowego tekstu dla uzytkownika nie dziala, bo ten tekst
-  /// zawiera zmienne: "Brak udanej kopii od 3 h" zmienia sie w "... od 4 h"
-  /// po godzinie. Warunek "inny tekst = nowy problem" byl wiec spelniony przy
-  /// KAZDYM przebiegu czujki i powiadomienie wracalo co godzine zamiast raz na
-  /// dwanascie - a alarm bez odstepu zamienia sie w szum i przestaje cokolwiek
-  /// znaczyc (patrz `reminderHours`). Ta sama awaria musi miec te sama
-  /// tozsamosc niezaleznie od tego, jak dlugo trwa.
+  /// Comparing the finished text for the user does not work, because that
+  /// text contains variables: "No successful backup for 3 h" turns into "...
+  /// for 4 h" an hour later. The condition "different text = new problem" was
+  /// therefore met on EVERY watchdog run and the notification came back every
+  /// hour instead of once every twelve - and an alarm without a gap turns into
+  /// noise and stops meaning anything (see `reminderHours`). The same failure
+  /// must have the same identity regardless of how long it lasts.
   ///
-  /// Ciag cyfr zastepujemy jednym `#`, zeby "od 9 h" i "od 12 h" dawaly ten
-  /// sam odcisk. NOWY problem dokladany do listy zmienia odcisk i alarmuje od
-  /// razu - i tak ma byc.
+  /// It also must not depend on the UI language: the summary is translated,
+  /// so the same failure seen by a Polish-language run and an English-language
+  /// run would look like two different ones. That is why we take
+  /// `Problem.code`, not `summary`.
+  ///
+  /// A run of digits is replaced by a single `#`, so that "for 9 h" and "for
+  /// 12 h" give the same fingerprint (this matters for problems whose code
+  /// defaults to their summary). A NEW problem added to the list changes the
+  /// fingerprint and alarms right away - and that is how it should be.
   static func identity(of problems: [BackupHealth.Problem]) -> String {
-    problems.map { fingerprint($0.summary) }.joined(separator: " | ")
+    problems.map { fingerprint($0.code) }.joined(separator: " | ")
   }
 
   static func fingerprint(_ text: String) -> String {
@@ -168,28 +183,43 @@ public enum HealthAlert {
     return try? JSONDecoder().decode(AlertState.self, from: data)
   }
 
-  /// Ostatnie zgloszenie, ktorego NIE udalo sie doreczyc - do pokazania
-  /// w `drive-status`. `nil`, gdy ostatnie zgloszenie doszlo albo gdy nie bylo
-  /// zadnego. Cichy alarm musi byc widoczny gdzies, gdzie czlowiek zaglada
-  /// sam, bo z definicji nie przyjdzie do niego po powiadomieniu.
+  /// Reason written to `deliveryError` when `osascript` did not show the
+  /// notification. Persisted in English and translated only for display, so
+  /// the file does not depend on the language of the run that wrote it.
+  static let osascriptFailureReason =
+    "osascript did not show the notification (permissions or no graphical session)"
+
+  /// The last report that could NOT be delivered - to be shown in
+  /// `drive-status`. `nil` when the last report was delivered or when there
+  /// was none. A silent alarm has to be visible somewhere a person looks on
+  /// their own, because by definition it will not reach them via a
+  /// notification.
   public static func lastDeliveryFailure(stateFile: URL = HealthAlert.stateFile) -> (
     at: Date, summary: String, reason: String
   )? {
     guard let state = loadState(stateFile), state.delivered == false else { return nil }
-    return (state.lastAlertAt, state.lastSummary, state.deliveryError ?? "nieznany powod")
+    let reason: String
+    switch state.deliveryError {
+    case .none: reason = L10n.tr("unknown reason")
+    case .some(osascriptFailureReason):
+      reason = L10n.tr(
+        "osascript did not show the notification (permissions or no graphical session)")
+    case .some(let other): reason = other
+    }
+    return (state.lastAlertAt, state.lastSummary, reason)
   }
 
-  /// Powiadomienie systemowe przez `osascript`. Sam tekst wstawiamy jako
-  /// literal AppleScript z ucieknietymi cudzyslowami - inaczej komunikat
-  /// zawierajacy `"` (a komunikaty rclone je zawieraja) rozwalilby skrypt
-  /// i alarm zginalby po cichu, czyli dokladnie tak, jak awaria, ktora ma
-  /// zglaszac.
+  /// System notification via `osascript`. The text itself is inserted as an
+  /// AppleScript literal with escaped quotes - otherwise a message containing
+  /// `"` (and rclone messages do contain them) would break the script and the
+  /// alarm would vanish silently, i.e. exactly like the failure it is meant to
+  /// report.
   ///
-  /// Zwraca `true` tylko wtedy, gdy `osascript` FAKTYCZNIE zakonczyl sie
-  /// powodzeniem. Wynik byl wczesniej wyrzucany przez `_ = try?`, wiec odmowa
-  /// uprawnien do powiadomien (typowa dla procesu launchd), brak sesji Aqua
-  /// albo przekroczony limit czasu wygladaly dokladnie tak samo, jak
-  /// pokazane powiadomienie.
+  /// Returns `true` only when `osascript` ACTUALLY finished successfully. The
+  /// result used to be thrown away with `_ = try?`, so a refused notification
+  /// permission (typical for a launchd process), no Aqua session or an
+  /// exceeded time limit looked exactly the same as a notification that was
+  /// shown.
   @discardableResult
   public static func notify(title: String, message: String) async -> Bool {
     let script =
@@ -198,14 +228,15 @@ public enum HealthAlert {
       let result = try? await ProcessRunner.run(
         "/usr/bin/osascript", ["-e", script], timeout: 30)
     else {
-      CMLogger.log("osascript nie odpowiedzial w limicie czasu - powiadomienie nie poszlo.")
+      CMLogger.log(
+        "osascript did not respond within the time limit - the notification was not sent.")
       return false
     }
     if !result.succeeded {
       let text = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
       CMLogger.log(
-        "osascript zwrocil kod \(result.exitCode): "
-          + (text.isEmpty ? "(bez komunikatu)" : text))
+        "osascript returned code \(result.exitCode): "
+          + (text.isEmpty ? "(no message)" : text))
     }
     return result.succeeded
   }

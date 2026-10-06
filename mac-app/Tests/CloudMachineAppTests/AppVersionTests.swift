@@ -2,11 +2,11 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Testy odczytu wersji.
+/// Tests for reading the version.
 ///
-/// Pytanie, na ktore ma odpowiadac ten kod, brzmi "czy dziala to, co w
-/// repozytorium". Kazdy test wstrzykuje wiec plist, ktory KLAMALBY, gdyby
-/// czytac tylko numer wersji.
+/// The question this code is meant to answer is "is what is running the same
+/// as what is in the repository". So every test injects a plist that WOULD LIE
+/// if only the version number were read.
 final class AppVersionTests: XCTestCase {
 
   private func plist(
@@ -22,7 +22,7 @@ final class AppVersionTests: XCTestCase {
     return dict
   }
 
-  func testCzytaWersjeBudoweICommit() {
+  func testReadsVersionBuildAndCommit() {
     let version = AppVersionReader.parse(infoPlist: plist())
     XCTAssertEqual(version.shortVersion, "1.1.0")
     XCTAssertEqual(version.build, "67")
@@ -30,43 +30,43 @@ final class AppVersionTests: XCTestCase {
     XCTAssertFalse(version.dirty)
   }
 
-  /// `build-app` wpisuje "true"/"false" jako STRING (podstawienie w szablonie
-  /// XML), ale recznie poprawiony plist moze miec <true/>. Oba musza znaczyc
-  /// to samo, inaczej brudny build zameldowalby sie jako czysty.
-  func testBrudneDrzewoRozpoznaneZeStringaIZBoola() {
+  /// `build-app` writes "true"/"false" as a STRING (substitution in the XML
+  /// template), but a manually edited plist may have <true/>. Both must mean
+  /// the same, otherwise a dirty build would report itself as clean.
+  func testDirtyTreeRecognizedFromStringAndFromBool() {
     XCTAssertTrue(AppVersionReader.parse(infoPlist: plist(dirty: "true")).dirty)
     XCTAssertTrue(AppVersionReader.parse(infoPlist: plist(dirty: true)).dirty)
     XCTAssertFalse(AppVersionReader.parse(infoPlist: plist(dirty: "false")).dirty)
     XCTAssertFalse(AppVersionReader.parse(infoPlist: plist(dirty: false)).dirty)
   }
 
-  /// Stary bundel, zbudowany przed dodaniem tych kluczy, nie moze udawac, ze
-  /// wie, z czego powstal.
-  func testStaryBundelBezCommituNieUdajeZeWie() {
+  /// An old bundle, built before these keys were added, must not pretend to
+  /// know what it was built from.
+  func testOldBundleWithoutCommitDoesNotPretendToKnow() {
     let version = AppVersionReader.parse(infoPlist: plist(commit: nil))
     XCTAssertEqual(version.commit, AppVersion.unknownCommit)
-    XCTAssertFalse(version.isTraceable, "Bez commitu nie da sie wskazac zrodla")
+    XCTAssertFalse(version.isTraceable, "Without a commit the source cannot be pointed at")
   }
 
-  /// Sedno: brudne drzewo znaczy, ze w binarce jest kod spoza commitu, wiec
-  /// numer commitu NIE dowodzi zgodnosci z galezia.
-  func testBrudnyBuildNieJestIdentyfikowalnyMimoZnanegoCommitu() {
+  /// The core: a dirty tree means the binary contains code from outside the
+  /// commit, so the commit number does NOT prove it matches the branch.
+  func testDirtyBuildIsNotTraceableDespiteKnownCommit() {
     let version = AppVersionReader.parse(infoPlist: plist(commit: "abc1234", dirty: "true"))
     XCTAssertEqual(version.commit, "abc1234")
-    XCTAssertFalse(version.isTraceable, "Brudne drzewo unieważnia commit jako dowod")
+    XCTAssertFalse(version.isTraceable, "A dirty tree invalidates the commit as proof")
   }
 
-  func testCzystyBuildZCommitemJestIdentyfikowalny() {
+  func testCleanBuildWithCommitIsTraceable() {
     XCTAssertTrue(AppVersionReader.parse(infoPlist: plist()).isTraceable)
   }
 
-  func testPodsumowanieNiesieCommitIOstrzezenie() {
+  func testSummaryCarriesCommitAndWarning() {
     XCTAssertEqual(AppVersionReader.parse(infoPlist: plist()).summary, "1.1.0 (67) abc1234")
     XCTAssertTrue(
-      AppVersionReader.parse(infoPlist: plist(dirty: "true")).summary.contains("BRUDNE-DRZEWO"))
+      AppVersionReader.parse(infoPlist: plist(dirty: "true")).summary.contains("DIRTY-TREE"))
     XCTAssertFalse(
       AppVersionReader.parse(infoPlist: plist(commit: nil)).summary.contains(
         AppVersion.unknownCommit),
-      "Brak commitu nie ma zasmiecac jednolinijkowca slowem 'nieznany'")
+      "A missing commit must not clutter the one-liner with the word 'unknown'")
   }
 }

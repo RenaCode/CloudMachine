@@ -2,11 +2,11 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Testy czekania na wysylke przed `hdiutil attach`.
+/// Tests of waiting for the upload before `hdiutil attach`.
 ///
-/// Odtwarzaja rozruch z 01.10.2026: ~600 pasm zaleglosci schodzacych przez
-/// ~6 min. Stare czekanie (sztywne 120 s) poddawalo sie w polowie i hdiutil
-/// ruszal w pelnej wysylce.
+/// They replay the start-up of 01.10.2026: a backlog of ~600 bands draining
+/// over ~6 min. The old wait (a fixed 120 s) gave up halfway and hdiutil
+/// started in the middle of the full upload.
 final class UploadDrainTests: XCTestCase {
 
   private final class FakeClock {
@@ -14,9 +14,9 @@ final class UploadDrainTests: XCTestCase {
     func sleep(_ seconds: TimeInterval) { now.addTimeInterval(seconds) }
   }
 
-  /// ZNANA ZLA PROBKA: 600 pozycji schodzi ~2 na sekunde, czyli ~5 min.
-  /// Sztywne 120 s puscilo by hdiutil przy ~360 pozycjach w kolejce.
-  func testCzekaNaZaleglosciKtoraSchodziDluzejNizDwieMinuty() async {
+  /// KNOWN BAD SAMPLE: 600 items drain at ~2 per second, i.e. ~5 min.
+  /// A fixed 120 s would have let hdiutil go with ~360 items in the queue.
+  func testWaitsForABacklogThatTakesLongerThanTwoMinutes() async {
     let clock = FakeClock()
     let start = clock.now
     let outcome = await UploadDrain.wait(
@@ -26,9 +26,9 @@ final class UploadDrainTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(clock.now.timeIntervalSince(start), 300)
   }
 
-  /// Wyczerpany limit dobowy: kolejka stoi. Nie czekamy wtedy pelnych 20 min,
-  /// tylko `stallTimeout`.
-  func testPoddajeSieGdyKolejkaStoi() async {
+  /// Daily limit exhausted: the queue stands still. We then do not wait the full
+  /// 20 min, only `stallTimeout`.
+  func testGivesUpWhenTheQueueStandsStill() async {
     let clock = FakeClock()
     let start = clock.now
     let outcome = await UploadDrain.wait(
@@ -39,8 +39,8 @@ final class UploadDrainTests: XCTestCase {
     XCTAssertLessThan(elapsed, UploadDrain.defaultStallTimeout + UploadDrain.defaultPoll * 2)
   }
 
-  /// Wahania w gore (TM dopisuje) nie sa postepem - liczy sie nowe minimum.
-  func testWahaniaBezNowegoMinimumToNiePostep() async {
+  /// Upward swings (TM adding writes) are not progress - only a new minimum counts.
+  func testSwingsWithoutANewMinimumAreNotProgress() async {
     let clock = FakeClock()
     var flip = false
     let outcome = await UploadDrain.wait(
@@ -52,8 +52,8 @@ final class UploadDrainTests: XCTestCase {
     XCTAssertEqual(outcome, .stalled(unsent: 50))
   }
 
-  /// Twardy sufit: kolejka schodzi, ale wolniej, niz trzeba.
-  func testTwardySufitPrzyPowolnymPostepie() async {
+  /// Hard ceiling: the queue drains, but more slowly than needed.
+  func testHardCeilingOnSlowProgress() async {
     let clock = FakeClock()
     let start = clock.now
     let outcome = await UploadDrain.wait(
@@ -64,17 +64,17 @@ final class UploadDrainTests: XCTestCase {
       clock.now.timeIntervalSince(start), UploadDrain.defaultMaxTotal + UploadDrain.defaultPoll * 2)
   }
 
-  /// rclone milczy - to nie postep i nie pusta kolejka.
-  func testBrakOdpowiedziNieJestPustaKolejka() async {
+  /// rclone is silent - that is neither progress nor an empty queue.
+  func testNoAnswerIsNotAnEmptyQueue() async {
     let clock = FakeClock()
     let outcome = await UploadDrain.wait(
       now: { clock.now }, sleep: { clock.sleep($0) }, expire: {}, unsent: { nil })
     XCTAssertEqual(outcome, .noAnswer)
   }
 
-  /// Pozycje wczytane z brudnego cache PO pierwszym przesunieciu terminow
-  /// dostaja pelne 10 min - przesuniecie trzeba ponawiac.
-  func testPonawiaPrzesuniecieTerminow() async {
+  /// Items read from the dirty cache AFTER the first deadline move get the
+  /// full 10 min - the move has to be repeated.
+  func testRepeatsMovingTheDeadlines() async {
     let clock = FakeClock()
     var expiries = 0
     _ = await UploadDrain.wait(

@@ -1,67 +1,67 @@
 import Foundation
 
-/// Znacznik "czujka NAPRAWDE przebiegla", czyli nadzor nad samym nadzorem.
+/// A "the watchdog REALLY ran" marker, i.e. supervision of the supervisor
+/// itself.
 ///
-/// `backup-health` chodzi z `StartInterval 1800` i BEZ `KeepAlive`. Jesli
-/// agent zostanie wyladowany (`launchctl bootout`, nieudana instalacja, zmiana
-/// nazwy binarki) albo zawisnie w nieprzerywalnym I/O na montowaniu Google
-/// Drive, to jedynym objawem jest CISZA - a cisza jest tu domyslnym,
-/// oczekiwanym stanem. README mowi wprost: "Empty logs after a fresh install
-/// are normal - the agents only write when something happens". Czyli dokladnie
-/// tak samo wyglada czujka, ktora dziala i nie ma o czym donosic, jak czujka,
-/// ktorej nie ma.
+/// `backup-health` runs with `StartInterval 1800` and WITHOUT `KeepAlive`. If
+/// the agent gets unloaded (`launchctl bootout`, a failed install, a renamed
+/// binary) or hangs in uninterruptible I/O on the Google Drive mount, the only
+/// symptom is SILENCE - and silence is the default, expected state here. The
+/// README says it plainly: "Empty logs after a fresh install are normal - the
+/// agents only write when something happens". So a watchdog that works and has
+/// nothing to report looks exactly like a watchdog that is not there.
 ///
-/// Dlatego kazdy przebieg zostawia po sobie PLIK z data. Brak alarmu przestaje
-/// znaczyc "wszystko dobrze" i zaczyna znaczyc "czujka przebiegla o 14:32 i nie
-/// miala o czym donosic" - albo "czujka nie przebiegla od trzech dni", co jest
-/// zupelnie inna informacja.
+/// That is why every run leaves a FILE with a date behind. No alert stops
+/// meaning "all good" and starts meaning "the watchdog ran at 14:32 and had
+/// nothing to report" - or "the watchdog has not run for three days", which is
+/// completely different information.
 ///
-/// Znacznik NIE jest kanalem alarmu. Zewnetrzny kanal (poczta, push) to
-/// decyzja wlasciciela o architekturze, nie poprawka - tutaj tylko odkladamy
-/// fakt, ktory `drive-status` i panel POKAZUJA, gdy czlowiek zaglada sam.
+/// The marker is NOT an alert channel. An external channel (mail, push) is the
+/// owner's architectural decision, not a fix - here we only record a fact that
+/// `drive-status` and the panel SHOW when a person looks for themselves.
 ///
-/// Plik lezy w `appSupportDir`, obok stanu alarmu (`health-alert.json`), a nie
-/// w buforze ani w obrazie - czujka nie moze dzielic losu tego, co nadzoruje.
+/// The file lives in `appSupportDir`, next to the alert state
+/// (`health-alert.json`), not in the buffer or in the image - the watchdog must
+/// not share the fate of what it supervises.
 public enum WatchdogHeartbeat {
 
-  /// Znacznik czujki `backup-health`.
+  /// Marker of the `backup-health` watchdog.
   ///
-  /// Zwykly tekst, nie JSON: to plik, ktory czlowiek `cat`-uje w trakcie
-  /// diagnozy, i ma byc czytelny bez narzedzi.
+  /// Plain text, not JSON: it is a file a person `cat`s during diagnosis, and
+  /// it has to be readable without tools.
   public static var backupHealthFile: URL {
     CMPaths.appSupportDir.appendingPathComponent("backup-health-last-run")
   }
 
-  /// Po tylu godzinach ciszy uznajemy, ze czujka NIE CHODZI.
+  /// After this many hours of silence we consider the watchdog NOT RUNNING.
   ///
-  /// `StartInterval` czujki to 1800 s, wiec godzina to dwa pominiete przebiegi
-  /// z rzedu - za duzo na przypadek, a jednoczesnie z zapasem na przebieg,
-  /// ktory trwa dlugo (kazde wywolanie tmutil ma limit czasu i czujka potrafi
-  /// go wykorzystac).
+  /// The watchdog's `StartInterval` is 1800 s, so an hour is two missed runs in
+  /// a row - too many to be chance, while leaving headroom for a run that takes
+  /// long (every tmutil call has a time limit and the watchdog can use it up).
   public static let maxSilenceHours = 1.0
 
-  /// Co wiemy o ostatnim przebiegu czujki.
+  /// What we know about the watchdog's last run.
   ///
-  /// Trzy stany, nie dwa, z tego samego powodu co `DestinationReading` i
-  /// `queueKnown`: "czujka nie zapisala ani jednego przebiegu" to inna
-  /// informacja niz "ostatni przebieg byl dawno". Pierwsze zdarza sie na
-  /// swiezej instalacji i po aktualizacji, ktora dodala ten znacznik.
+  /// Three states, not two, for the same reason as `DestinationReading` and
+  /// `queueKnown`: "the watchdog has not recorded a single run" is different
+  /// information from "the last run was long ago". The former happens on a
+  /// fresh install and after the update that added this marker.
   public enum Freshness: Equatable {
     case fresh(lastRun: Date, age: TimeInterval)
     case stale(lastRun: Date, age: TimeInterval)
-    /// Nie ma znacznika w ogole.
+    /// There is no marker at all.
     case never
   }
 
-  /// Odklada fakt "czujka przebiegla teraz".
+  /// Records the fact "the watchdog ran now".
   ///
-  /// Wolane ZANIM czujka cokolwiek wypisze i zanim zdecyduje o kodzie wyjscia:
-  /// przebieg, ktory znalazl awarie, jest tak samo przebiegiem jak ten, ktory
-  /// nic nie znalazl. Gdyby znacznik powstawal tylko na zdrowej sciezce,
-  /// zepsuty backup wygladalby jak nieczynna czujka i odwrotnie.
+  /// Called BEFORE the watchdog prints anything and before it decides on the
+  /// exit code: a run that found a failure is just as much a run as one that
+  /// found nothing. If the marker were written only on the healthy path, a
+  /// broken backup would look like an inactive watchdog and vice versa.
   ///
-  /// Zwraca `false`, gdy zapis sie NIE UDAL - wtedy znacznik bedzie stary,
-  /// czyli pomyli sie w bezpieczna strone ("czujka moze nie chodzic").
+  /// Returns `false` when the write did NOT succeed - the marker will then be
+  /// old, i.e. it errs on the safe side ("the watchdog may not be running").
   @discardableResult
   public static func record(now: Date = Date(), file: URL = WatchdogHeartbeat.backupHealthFile)
     -> Bool
@@ -72,23 +72,24 @@ public enum WatchdogHeartbeat {
     return (try? data.write(to: file, options: .atomic)) != nil
   }
 
-  /// Data ostatniego przebiegu albo `nil`, gdy znacznika nie ma (albo jest
-  /// nieczytelny - jedno i drugie znaczy tu "nie wiem, kiedy czujka chodzila").
+  /// Date of the last run, or `nil` when there is no marker (or it is
+  /// unreadable - both mean "I do not know when the watchdog ran" here).
   public static func lastRun(file: URL = WatchdogHeartbeat.backupHealthFile) -> Date? {
     guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
     return ISO8601DateFormatter().date(from: text.trimmingCharacters(in: .whitespacesAndNewlines))
   }
 
-  /// Czysta ocena wieku znacznika - osobno od odczytu pliku, zeby dalo sie ja
-  /// sprawdzic testem bez dotykania dysku.
+  /// Pure assessment of the marker's age - separate from reading the file, so
+  /// it can be tested without touching the disk.
   public static func freshness(
     lastRun: Date?, now: Date = Date(),
     maxSilenceHours: Double = WatchdogHeartbeat.maxSilenceHours
   ) -> Freshness {
     guard let lastRun else { return .never }
     let age = now.timeIntervalSince(lastRun)
-    // Ujemny wiek (znacznik z przyszlosci - przestawiony zegar, kopia z innej
-    // maszyny) NIE jest swiezoscia: nie wiemy, kiedy czujka chodzila.
+    // A negative age (a marker from the future - a clock that was changed, a
+    // copy from another machine) is NOT freshness: we do not know when the
+    // watchdog ran.
     guard age >= 0, age <= maxSilenceHours * 3600 else {
       return .stale(lastRun: lastRun, age: age)
     }

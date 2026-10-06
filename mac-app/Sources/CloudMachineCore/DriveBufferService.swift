@@ -1,16 +1,16 @@
 import Foundation
 
-/// Bufor miedzy Time Machine a Google Drive - port `gdrive/mount-drive.sh`.
+/// The buffer between Time Machine and Google Drive - a port of `gdrive/mount-drive.sh`.
 ///
-/// Montuje Drive jako wolumen z lokalnym cache zapisu. Zapis konczy sie
-/// w momencie trafienia do cache, wysylka idzie w tle - dlatego zerwanie lacza
-/// wstrzymuje drenaz zamiast przerywac backup.
+/// Mounts Drive as a volume with a local write cache. A write completes the
+/// moment it reaches the cache, the upload goes on in the background - which
+/// is why a broken link pauses the drain instead of interrupting the backup.
 ///
-/// Proces rclone zostaje na pierwszym planie; cyklem zycia zarzadza launchd
+/// The rclone process stays in the foreground; launchd manages its life cycle
 /// (KeepAlive).
 public enum DriveBufferService {
 
-  // MARK: - Sciezki i ustawienia
+  // MARK: - Paths and settings
 
   public static var root: URL {
     let dir = FileManager.default.homeDirectoryForCurrentUser
@@ -25,67 +25,66 @@ public enum DriveBufferService {
 
   public static let remoteName = "gdrive"
   public static let remotePath = "CloudMachine/mac-studio"
-  /// Rozmiar bufora. Trzymany jako liczba, bo progi dozorcy sa z niego
-  /// wyliczane - inaczej zmiana jednego bez drugiego daje progi, ktore nigdy
-  /// nie zadzialaja albo dzialaja natychmiast.
+  /// Buffer size. Kept as a number, because the watchdog's thresholds are
+  /// derived from it - otherwise changing one without the other gives
+  /// thresholds that never fire or fire immediately.
   public static let cacheSizeGB = 100
   public static var cacheSize: String { "\(cacheSizeGB)G" }
 
-  /// Ile rclone czeka od ostatniej zmiany pasma, zanim je wysle.
+  /// How long rclone waits after a band's last change before uploading it.
   ///
-  /// To NIE jest ustawienie ostroznosciowe, tylko zderzak na wzmocnienie
-  /// zapisu. Time Machine przepisuje te same pasma przez caly przebieg, a przy
-  /// krotkim odroczeniu kazde dotkniecie to pelne 32 MB wysylane od nowa.
-  /// Zmierzone na wlasnym logu (56 533 odstepow miedzy kolejnymi wysylkami
-  /// TEGO SAMEGO pasma): mediana odstepu to 9,5 minuty, wiec 10 minut sklei
-  /// okolo polowy powtorzen. Dalsze wydluzanie oplaca sie coraz slabiej
-  /// (15 min -> 57%, 30 min -> 70%), a rosnie okno, w ktorym dane sa TYLKO
-  /// lokalnie.
+  /// This is NOT a caution setting, but a bumper against write amplification.
+  /// Time Machine rewrites the same bands throughout a run, and with a short
+  /// delay every touch is a full 32 MB uploaded again. Measured on our own log
+  /// (56,533 intervals between consecutive uploads of THE SAME band): the median
+  /// interval is 9.5 minutes, so 10 minutes merges about half of the repeats.
+  /// Going longer pays off less and less (15 min -> 57%, 30 min -> 70%), while
+  /// the window in which data exists ONLY locally grows.
   ///
-  /// Historia: bylo 30 s i przy tej wartosci doba 14/15 wrzesnia 2026
-  /// wypchnela 823 GB na Dysk przy realnej zmianie okolo 45 GB - czyli ponad
-  /// dobowy limit Google (750 GB), co zablokowalo wysylke na kilka godzin.
+  /// History: it was 30 s, and with that value the day of 14/15 September 2026
+  /// pushed 823 GB to Drive for about 45 GB of real change - i.e. over Google's
+  /// daily limit (750 GB), which blocked the upload for several hours.
   ///
-  /// Kazda sciezka wygaszania MUSI wymuszac wysylke przez
-  /// `expireQueuedUploads()`, inaczej odpiecie czekaloby tyle, co to odroczenie.
+  /// Every shutdown path MUST force the upload via `expireQueuedUploads()`,
+  /// otherwise a detach would wait as long as this delay.
   public static let writeBackSeconds = 600
 
-  /// Adres interfejsu sterujacego rclone. Slucha tylko na petli zwrotnej, ale
-  /// kazdy lokalny proces moze przez niego sterowac montowaniem - jesli kiedys
-  /// uznamy to za zbyt luzne, trzeba dolozyc `--rc-user`/`--rc-pass`.
+  /// Address of rclone's remote control interface. It listens on loopback only,
+  /// but any local process can control the mount through it - if we ever decide
+  /// that is too loose, `--rc-user`/`--rc-pass` have to be added.
   public static let rcAddress = "127.0.0.1:5572"
 
-  /// Powyzej tego rozmiaru log rclone jest przycinany przy starcie. rclone nie
-  /// rotuje wlasnego logu, a ten projekt stracil juz raz 3.3 GiB na logu,
-  /// ktory rosl bez ograniczen.
+  /// Above this size the rclone log is trimmed at start-up. rclone does not
+  /// rotate its own log, and this project has already lost 3.3 GiB once to a log
+  /// that grew without limit.
   private static let logSizeLimit: UInt64 = 100 * 1024 * 1024
 
-  // MARK: - Stan
+  // MARK: - State
 
-  /// Punkty montowania prosto z tablicy jadra. `nil` = tablicy NIE UDALO SIE
-  /// odczytac, co jest czyms innym niz "nic nie jest zamontowane".
+  /// Mount points straight from the kernel table. `nil` = the table COULD NOT
+  /// be read, which is something else than "nothing is mounted".
   ///
-  /// DLACZEGO NIE `/sbin/mount`
+  /// WHY NOT `/sbin/mount`
   ///
-  /// Do 23 wrzesnia 2026 bylo tu uruchomienie `/sbin/mount` z
-  /// `readDataToEndOfFile()` + `waitUntilExit()` BEZ limitu czasu. Przy martwym
-  /// montowaniu FUSE-T (incydent ENXIO z 22.09) taki odczyt potrafi wejsc w
-  /// nieprzerywalne I/O i nie wrocic - a czyta stad `isMounted`, czyli czujka
-  /// `backup-health` ORAZ petla odswiezania GUI chodzaca co 10 sekund.
-  /// Zawieszenie wieszalo wiec i podglad, i nadzor, na tej samej awarii,
-  /// ktora oba maja wykryc.
+  /// Until 23 September 2026 this ran `/sbin/mount` with
+  /// `readDataToEndOfFile()` + `waitUntilExit()` WITHOUT a time limit. With a
+  /// dead FUSE-T mount (the ENXIO incident of 22.09) such a read can enter
+  /// uninterruptible I/O and never return - and `isMounted` reads from here,
+  /// i.e. the `backup-health` monitor AND the GUI refresh loop running every 10
+  /// seconds. The hang thus froze both the view and the supervision, on the very
+  /// failure both are meant to detect.
   ///
-  /// Nalozenie limitu czasu (jak w `TimeMachineStatus.commandTimeout`)
-  /// usuneloby zawieszenie, ale kazdy taki limit jest tu czystym kosztem:
-  /// przy odswiezaniu co 10 s wywolania zaczelyby sie nakladac, a odpowiedz
-  /// i tak by nie przyszla. `getmntinfo(MNT_NOWAIT)` usuwa problem u zrodla -
-  /// czyta tablice montowan z pamieci jadra i NIE odpytuje zadnego systemu
-  /// plikow (od tego jest `MNT_WAIT`, ktore wlasnie umialoby zawisnac).
-  /// Nie ma tu procesu, potoku ani wejscia/wyjscia, wiec nie ma czego
-  /// ograniczac limitem. Zmierzone na tej maszynie: 19 montowan w 0,0002 s.
+  /// Adding a time limit (as in `TimeMachineStatus.commandTimeout`) would remove
+  /// the hang, but any such limit is pure cost here: with a refresh every 10 s
+  /// the calls would start to overlap, and the answer would not come anyway.
+  /// `getmntinfo(MNT_NOWAIT)` removes the problem at the source - it reads the
+  /// mount table from kernel memory and does NOT query any file system (that is
+  /// what `MNT_WAIT` does, which is exactly what could hang). There is no
+  /// process, pipe or I/O here, so there is nothing to put a limit on. Measured
+  /// on this machine: 19 mounts in 0.0002 s.
   ///
-  /// Przy okazji znika parsowanie tekstu: `f_mntonname` to sciezka wprost,
-  /// zamiast szukania `" on <sciezka> "` w wydruku.
+  /// Text parsing goes away as a bonus: `f_mntonname` is the path itself,
+  /// instead of searching for `" on <path> "` in the output.
   public static func mountPoints() -> [String]? {
     var raw: UnsafeMutablePointer<statfs>?
     let count = getmntinfo(&raw, MNT_NOWAIT)
@@ -97,60 +96,59 @@ public enum DriveBufferService {
     }
   }
 
-  /// Czy bufor jest zamontowany. `nil` = NIE WIADOMO.
+  /// Whether the buffer is mounted. `nil` = UNKNOWN.
   ///
-  /// Rozroznienie jest tu istotne, bo na tej odpowiedzi stoi decyzja o
-  /// podpieciu i o utworzeniu obrazu - a "nie wiem" udajace "nie zamontowane"
-  /// to ten sam rodzaj cichej awarii, ktory w tym pliku zamyka juz
-  /// `UploadState.queueUnknown` po stronie kolejki.
+  /// The distinction matters here, because the decision to attach and to create
+  /// the image rests on this answer - and "I do not know" posing as "not
+  /// mounted" is the same kind of silent failure that `UploadState.queueUnknown`
+  /// already closes on the queue side.
   public static func mountedState() -> Bool? {
     guard let points = mountPoints() else { return nil }
-    // Tablica montowan jest zrodlem prawdy - samo istnienie katalogu nic nie
-    // znaczy, bo punkt montowania zostaje na dysku po odmontowaniu.
+    // The mount table is the source of truth - the directory merely existing
+    // means nothing, because the mount point stays on disk after unmounting.
     return points.contains(mountPoint.path)
   }
 
-  /// Skrot dla miejsc, w ktorych brak odczytu i "nie zamontowane" znacza to
-  /// samo - czyli tam, gdzie i tak czekamy na montowanie albo tylko je
-  /// wypisujemy. Wszedzie, gdzie z odpowiedzi wynika DECYZJA, uzywaj
-  /// `mountedState()`.
+  /// Shortcut for places where a failed read and "not mounted" mean the same
+  /// thing - i.e. where we wait for the mount anyway or only print it.
+  /// Wherever a DECISION follows from the answer, use `mountedState()`.
   public static var isMounted: Bool { mountedState() ?? false }
 
-  // MARK: - Uruchomienie
+  // MARK: - Start-up
 
-  /// Argumenty `rclone mount`. Wydzielone, zeby dalo sie je sprawdzic testem
-  /// bez uruchamiania czegokolwiek.
+  /// Arguments for `rclone mount`. Split out so that they can be tested without
+  /// running anything.
   public static func mountArguments() -> [String] {
     [
       "mount", "\(remoteName):\(remotePath)", mountPoint.path,
       "--vfs-cache-mode", "full",
       "--vfs-cache-max-size", cacheSize,
-      // Cache nie moze wyrzucac danych, ktore czekaja na wyslanie - stad
-      // wysoki wiek. Rozmiarem rzadzi --vfs-cache-max-size.
+      // The cache must not evict data waiting to be uploaded - hence the high
+      // age. Size is governed by --vfs-cache-max-size.
       "--vfs-cache-max-age", "9999h",
       "--vfs-write-back", "\(writeBackSeconds)s",
       "--vfs-cache-poll-interval", "1m",
       "--cache-dir", cacheDir.path,
-      // Do tego folderu pisze WYLACZNIE ten Mac, wiec powiadomienia o zmianach
-      // z Dysku niosa tylko nasze wlasne wysylki - a kazde uniewaznia katalog
-      // `bands` (18 853 pliki 02.10.2026). Nastepny `stat` przeladowywal go
-      // z Google stronami po 1000, TRZYMAJAC blokade katalogu: ~42 s co
-      // minute stal kazdy Getattr z FUSE (Time Machine, hdiutil), kazde
-      // `vfs/stats` i kazde zakonczenie wysylki. Z tego braly sie zawieszone
-      // `hdiutil attach`, `validateMountPoint timed out` w Time Machine
-      // i czerwony panel. Bez powiadomien i z dlugim cache katalog laduje sie
-      // raz po starcie; wlasne zapisy rclone dopisuje do niego sam.
+      // ONLY this Mac writes to this folder, so change notifications from Drive
+      // carry only our own uploads - and each one invalidates the `bands`
+      // directory (18,853 files on 02.10.2026). The next `stat` reloaded it from
+      // Google in pages of 1000, HOLDING the directory lock: for ~42 s out of every
+      // minute every Getattr from FUSE (Time Machine, hdiutil), every `vfs/stats`
+      // and every upload completion stood still. That is where the hung
+      // `hdiutil attach`, `validateMountPoint timed out` in Time Machine and the red
+      // panel came from. Without notifications and with a long cache the directory
+      // loads once after start-up; rclone adds its own writes to it by itself.
       "--poll-interval", "0",
       "--dir-cache-time", "9999h",
       "--attr-timeout", "5m",
       "--transfers", "8",
-      // Rozmiar kawalka dopasowany do rozmiaru pasma obrazu.
+      // Chunk size matched to the image's band size.
       "--drive-chunk-size", "32M",
-      // Bez tego skasowane pasma ida do kosza Dysku i dalej licza sie
-      // do limitu pojemnosci.
+      // Without this, deleted bands go to Drive's trash and keep counting
+      // towards the storage limit.
       "--drive-use-trash=false",
-      // Po przekroczeniu dobowego limitu 750 GB rclone ma stanac, a nie
-      // kreci sie w 403 do konca swiata.
+      // After exceeding the daily 750 GB limit rclone is to stop, not spin in
+      // 403s until the end of the world.
       "--drive-stop-on-upload-limit",
       "--volname", remoteName,
       "--rc", "--rc-addr", rcAddress, "--rc-no-auth",
@@ -159,9 +157,9 @@ public enum DriveBufferService {
     ]
   }
 
-  /// Przygotowuje otoczenie i oddaje argumenty do uruchomienia. Nie uruchamia
-  /// rclone sam - robi to `cloudmachine-agent mount-drive`, ktore musi zostac
-  /// na pierwszym planie pod launchd.
+  /// Prepares the environment and returns the arguments to run with. Does not
+  /// start rclone itself - `cloudmachine-agent mount-drive` does that, and it
+  /// has to stay in the foreground under launchd.
   public static func prepare() throws -> [String] {
     try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
@@ -179,10 +177,11 @@ public enum DriveBufferService {
     try? FileManager.default.moveItem(at: logFile, to: rotated)
   }
 
-  /// Wyklucza katalog bufora z Time Machine. Bufor trzyma kopie danych
-  /// backupu - gdyby Time Machine go objal, backupowalby wlasny backup i rosl
-  /// bez konca. Wykluczenie zapisuje sie jako xattr na katalogu, wiec ginie
-  /// razem z nim; dlatego odnawiamy je przy kazdym starcie, a nie raz w setupie.
+  /// Excludes the buffer directory from Time Machine. The buffer holds a copy of
+  /// the backup data - if Time Machine covered it, it would back up its own
+  /// backup and grow forever. The exclusion is stored as an xattr on the
+  /// directory, so it disappears together with it; that is why we renew it on
+  /// every start-up, not once in setup.
   @discardableResult
   public static func excludeBufferFromTimeMachine() async -> Bool {
     let result = try? await ProcessRunner.run(
@@ -190,74 +189,74 @@ public enum DriveBufferService {
     return result?.succeeded == true
   }
 
-  // MARK: - Kolejka wysylki
+  // MARK: - Upload queue
 
   public struct QueueStats {
     public var uploadsInProgress: Int
     public var uploadsQueued: Int
     public var files: Int
     public var erroredFiles: Int
-    /// Rozmiar bufora wg samego rclone. Liczenie go wlasnym obchodem katalogu
-    /// oznaczalo 6504 wywolania stat przy kazdym odswiezeniu interfejsu, co
-    /// 10 sekund, na tym samym dysku, na ktory leci backup.
+    /// Buffer size according to rclone itself. Computing it with our own walk of
+    /// the directory meant 6504 stat calls on every interface refresh, every 10
+    /// seconds, on the same disk the backup is going to.
     public var bytesUsed: UInt64
-    /// rclone nie ma juz gdzie odlozyc danych - nie zdazyl wyslac tego, co
-    /// trzyma, wiec nie ma czego usunac. Mocniejszy sygnal niz jakikolwiek
-    /// prog, bo pochodzi od tego, kto naprawde wie.
+    /// rclone has nowhere left to put data - it has not managed to upload what
+    /// it holds, so there is nothing to evict. A stronger signal than any
+    /// threshold, because it comes from the one who really knows.
     public var outOfSpace: Bool
 
-    /// rclone nic TERAZ nie robi. To warunek STABILNOSCI `hdiutil` na
-    /// montowaniu FUSE-T (patrz `retryingFlakyMount`) i nic wiecej - w
-    /// szczegolnosci NIE jest dowodem, ze kopia doleciala na Dysk.
+    /// rclone is doing nothing RIGHT NOW. This is a STABILITY condition for
+    /// `hdiutil` on a FUSE-T mount (see `retryingFlakyMount`) and nothing more -
+    /// in particular it is NOT proof that the backup has reached Drive.
     public var isIdle: Bool { uploadsInProgress == 0 && uploadsQueued == 0 }
 
-    /// Nic nie czeka I nic nie zostalo po drodze porzucone.
+    /// Nothing is waiting AND nothing was abandoned along the way.
     ///
-    /// Do 23 wrzesnia 2026 to pytanie mialo tylko jedna odpowiedz - te, ktora
-    /// dzis nazywa sie `isIdle` - i to ona szla do komunikatu odpiecia oraz do
-    /// `safeToRebootNow()`. Pasmo, ktore rclone porzucil, wypada z kolejki
-    /// dokladnie tak samo jak pasmo wyslane: `uploadsQueued` wraca do zera,
-    /// a slad zostaje wylacznie w `erroredFiles`. Skutek: "Odpiete, wszystko
-    /// wyslane na Google Drive" i "Restart bez pytania: TAK" przy danych
-    /// istniejacych tylko lokalnie - podczas gdy `UploadState` z tych samych
-    /// licznikow wyprowadzal juz `.failedFiles(...)` i "WYMAGA REAKCJI".
+    /// Until 23 September 2026 this question had only one answer - the one now
+    /// called `isIdle` - and it went into the detach message and into
+    /// `safeToRebootNow()`. A band that rclone abandoned drops out of the queue
+    /// exactly like an uploaded band: `uploadsQueued` returns to zero, and the
+    /// only trace is left in `erroredFiles`. Result: "Detached, everything
+    /// uploaded to Google Drive" and "Restart without asking: YES" with data
+    /// existing only locally - while `UploadState`, from the same counters,
+    /// already derived `.failedFiles(...)` and "ACTION NEEDED".
     public var isQuiet: Bool { isIdle && erroredFiles == 0 }
 
-    /// Ile pozycji CZEKA na wyslanie: kolejka plus to, co wlasnie leci.
+    /// How many items are WAITING to be uploaded: the queue plus what is
+    /// uploading right now.
     ///
-    /// To jest ta wielkosc, z ktorej dozorca bufora wyprowadza swoja miare
-    /// (patrz `BufferGuardService.backlogGB`) - a NIE `bytesUsed`. Rozmiar
-    /// cache'a przy `--vfs-cache-max-size 100G` i `--vfs-cache-max-age 9999h`
-    /// stoi pod limitem stale (w dzienniku 281 pomiarow, minimum 99 GB), bo
-    /// rclone trzyma tam takze to, co dawno wyslal. Zaleglosc niewyslana jest
-    /// jedyna z tych dwoch liczb, ktora odpowiada na pytanie "czy wysylka
-    /// nadaza".
+    /// This is the quantity from which the buffer watchdog derives its measure
+    /// (see `BufferGuardService.backlogGB`) - and NOT `bytesUsed`. The cache size
+    /// with `--vfs-cache-max-size 100G` and `--vfs-cache-max-age 9999h` sits at
+    /// the limit permanently (281 measurements in the journal, minimum 99 GB),
+    /// because rclone also keeps there what it uploaded long ago. The unsent
+    /// backlog is the only one of these two numbers that answers the question
+    /// "is the upload keeping up".
     ///
-    /// `uploadsInProgress` wchodzi do sumy, bo pozycja w trakcie wysylki tez
-    /// jeszcze nie jest na Dysku i tez zajmuje bufor. Przy `--transfers 8` to
-    /// najwyzej osiem pozycji, ale pusta kolejka z osmioma transferami w toku
-    /// nie jest zerowa zaleglosci.
+    /// `uploadsInProgress` is part of the sum, because an item being uploaded is
+    /// not on Drive yet either and also takes up the buffer. With `--transfers 8`
+    /// that is at most eight items, but an empty queue with eight transfers in
+    /// progress is not a zero backlog.
     public var unsentItems: Int { uploadsQueued + uploadsInProgress }
   }
 
-  /// Odczytuje stan kolejki przez interfejs sterujacy rclone.
+  /// Reads the queue state through rclone's remote control interface.
   ///
-  /// UWAGA: `--rc-no-auth` to flaga SERWERA. Klient `rclone rc` jej nie
-  /// przyjmuje i konczy sie bledem "unknown flag" - kosztowalo to juz jedno
-  /// ciche zepsucie podgladu stanu.
+  /// NOTE: `--rc-no-auth` is a SERVER flag. The `rclone rc` client does not
+  /// accept it and ends with an "unknown flag" error - this has already cost one
+  /// silent breakage of the status view.
   ///
-  /// Limit czasu 60 s, a nie 30 s: 23.09.2026 to samo wywolanie trwalo
-  /// **36,7 s** przy zapchanym buforze (kolejne 0,03 s - wiec sporadycznie, pod
-  /// obciazeniem). Przy 30 s konczylo sie `nil`, a `nil` szedl dalej jako
-  /// komplet zer i interfejs oglaszal "Wszystko wyslane" przy 386 pasmach w
-  /// kolejce. Samo podniesienie limitu tego nie naprawia - od tego jest
-  /// `UploadState.queueUnknown` - ale sprawia, ze pytanie zwykle dostaje
-  /// odpowiedz.
+  /// Time limit 60 s, not 30 s: on 23.09.2026 the same call took **36.7 s** with
+  /// a clogged buffer (the next one 0.03 s - so sporadic, under load). With 30 s
+  /// it ended with `nil`, and `nil` went on as a set of zeros and the interface
+  /// announced "Everything uploaded" with 386 bands in the queue. Raising the
+  /// limit alone does not fix that - that is what `UploadState.queueUnknown` is
+  /// for - but it means the question usually gets an answer.
   ///
-  /// Wyzej nie warto. Petla odswiezania interfejsu chodzi co 10 s i czeka na
-  /// ten odczyt, a `drive-status` pyta dwa razy (drugi raz przez
-  /// `safeToRebootNow`). Przy martwym rclone kazda sekunda limitu to sekunda
-  /// zamrozonego okna, a odpowiedz i tak nie przyjdzie.
+  /// Higher is not worth it. The interface refresh loop runs every 10 s and
+  /// waits for this read, and `drive-status` asks twice (the second time via
+  /// `safeToRebootNow`). With a dead rclone every second of the limit is a
+  /// second of a frozen window, and the answer will not come anyway.
   public static func queueStats() async -> QueueStats? {
     guard
       let result = try? await CMTooling.runRclone(
@@ -267,30 +266,31 @@ public enum DriveBufferService {
     return parseQueueStats(result.stdout)
   }
 
-  /// Czysta wersja parsowania odpowiedzi `vfs/stats`. `nil` znaczy "nie wiem",
-  /// nigdy "same zera".
+  /// Pure version of parsing the `vfs/stats` response. `nil` means "I do not
+  /// know", never "all zeros".
   ///
-  /// Wydzielone, zeby dalo sie to sprawdzic testem - dotad parsowanie siedzialo
-  /// w funkcji async wolajacej rclone i nie bylo do niego dostepu z zadnej
-  /// strony poza uruchomieniem calego bufora.
+  /// Split out so that it can be tested - until now the parsing sat in an async
+  /// function calling rclone and there was no way to reach it other than
+  /// running the whole buffer.
   ///
-  /// Dwie rzeczy, ktore tu byly i musialy zniknac:
+  /// Two things that were here and had to go:
   ///
-  /// 1. `(json["diskCache"] as? [String: Any]) ?? json` - odpowiedz BEZ sekcji
-  ///    `diskCache` (rclone zbudowane bez cache dysku, inna wersja interfejsu,
-  ///    obcieta odpowiedz) wpadala na `json`, gdzie zadnego z licznikow nie ma.
-  /// 2. `number(_:in:)` oddajace 0 dla brakujacego klucza.
+  /// 1. `(json["diskCache"] as? [String: Any]) ?? json` - a response WITHOUT the
+  ///    `diskCache` section (rclone built without the disk cache, a different
+  ///    interface version, a truncated response) fell through to `json`, where
+  ///    none of the counters are.
+  /// 2. `number(_:in:)` returning 0 for a missing key.
   ///
-  /// Razem dawaly `QueueStats` z samymi zerami zamiast `nil`, czyli
-  /// `queueKnown == true` i znow plansza "Wszystko wyslane na Google Drive".
-  /// To ten sam wzorzec, ktory naprawiono wyzej przez `UploadState.queueUnknown`,
-  /// tyle ze przesuniety o jeden krok - do parsowania.
+  /// Together they gave `QueueStats` with all zeros instead of `nil`, i.e.
+  /// `queueKnown == true` and again the "Everything uploaded to Google Drive"
+  /// screen. It is the same pattern that was fixed above by
+  /// `UploadState.queueUnknown`, just moved one step - into the parsing.
   static func parseQueueStats(_ raw: String) -> QueueStats? {
     guard
       let data = raw.data(using: .utf8),
       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-      // vfs/stats zwraca liczniki zagniezdzone w sekcji "diskCache". Jej brak
-      // to brak odpowiedzi na zadane pytanie, a nie odpowiedz "zero".
+      // vfs/stats returns the counters nested in the "diskCache" section. Its
+      // absence is no answer to the question asked, not the answer "zero".
       let disk = json["diskCache"] as? [String: Any]
     else { return nil }
 
@@ -314,22 +314,22 @@ public enum DriveBufferService {
       files: files,
       erroredFiles: errored,
       bytesUsed: UInt64(max(0, bytesUsed)),
-      // Jedyne pole, ktorego brak wolno nadrobic domyslna wartoscia: to flaga,
-      // a nie licznik - starsze rclone jej nie wystawia, a jej brak nie da sie
-      // pomylic z "bufor pelny".
+      // The only field whose absence may be made up with a default: it is a
+      // flag, not a counter - older rclone does not expose it, and its absence
+      // cannot be mistaken for "buffer full".
       outOfSpace: (disk["outOfSpace"] as? Bool) ?? false
     )
   }
 
-  /// Pojemnosc konta Google Drive, prosto od rclone.
+  /// Google Drive account capacity, straight from rclone.
   ///
-  /// NIKT tego dotad nie sprawdzal. `machines.json` ma pola `drive_total_gb`
-  /// i `limit_gb`, ale nie uzywa ich ani jedna linia kodu poza samym modelem -
-  /// to byl budzet na papierze. Tymczasem wyczerpanie miejsca na Dysku jest dla
-  /// rclone bledem FATALNYM (`--drive-stop-on-upload-limit` +
-  /// `storageQuotaExceeded`): montowanie znika, a Time Machine traci cel.
-  /// Przy przyroscie rzedu 600 MB na cykl godzinowy to nie jest problem
-  /// odlegly, tylko kwestia daty.
+  /// NOBODY checked this until now. `machines.json` has the fields
+  /// `drive_total_gb` and `limit_gb`, but not a single line of code outside the
+  /// model itself uses them - it was a budget on paper. Meanwhile running out of
+  /// space on Drive is a FATAL error for rclone (`--drive-stop-on-upload-limit` +
+  /// `storageQuotaExceeded`): the mount disappears and Time Machine loses its
+  /// destination. With growth of around 600 MB per hourly cycle this is not a
+  /// distant problem, only a matter of the date.
   public static func remoteQuota() async -> (used: UInt64, total: UInt64, free: UInt64)? {
     guard
       let result = try? await CMTooling.runRclone(
@@ -343,26 +343,25 @@ public enum DriveBufferService {
       if let v = json[key] as? NSNumber, v.int64Value >= 0 { return UInt64(v.int64Value) }
       return nil
     }
-    // `total` bywa nieobecne (konta bez limitu) - wtedy nie ma czego pilnowac.
+    // `total` is sometimes absent (accounts without a limit) - then there is nothing to watch.
     guard let total = bytes("total"), total > 0 else { return nil }
     let used = bytes("used") ?? 0
     let free = bytes("free") ?? (total > used ? total - used : 0)
     return (used, total, free)
   }
 
-  /// Czeka, az rclone przestanie cokolwiek wysylac. Operacje `hdiutil` na
-  /// montowaniu FUSE-T sa stabilne tylko przy pustej kolejce - patrz
+  /// Waits until rclone stops uploading anything. `hdiutil` operations on a
+  /// FUSE-T mount are stable only with an empty queue - see
   /// `BackupImageService.retryingFlakyMount`.
   ///
-  /// Warunkiem jest `isIdle`, a NIE `isQuiet`: pasma porzucone przez rclone
-  /// zostaja w `erroredFiles` do konca zycia procesu, wiec czekanie na
-  /// `isQuiet` nigdy by sie nie doczekalo i kazde podpiecie placilo by pelny
-  /// limit czasu za nic.
+  /// The condition is `isIdle`, NOT `isQuiet`: bands abandoned by rclone stay in
+  /// `erroredFiles` until the process ends, so waiting for `isQuiet` would never
+  /// finish and every attach would pay the full time limit for nothing.
   ///
-  /// Zwraca odczyt kolejki z chwili uciszenia - `nil`, gdy nie ucichla w czasie
-  /// albo gdy rclone nie odpowiedzial. Wolajacy dostaje go po to, zeby moc
-  /// sprawdzic `erroredFiles` bez zadawania rclone tego samego pytania drugi
-  /// raz (kosztuje do 60 s - patrz `queueStats`).
+  /// Returns the queue reading from the moment it went quiet - `nil` when it did
+  /// not go quiet in time or rclone did not answer. The caller gets it so that it
+  /// can check `erroredFiles` without asking rclone the same question a second
+  /// time (costs up to 60 s - see `queueStats`).
   @discardableResult
   public static func statsWhenIdle(timeout: TimeInterval = 180) async -> QueueStats? {
     let deadline = Date().addingTimeInterval(timeout)
@@ -373,58 +372,61 @@ public enum DriveBufferService {
     return nil
   }
 
-  /// Jak `statsWhenIdle`, gdy wolajacego interesuje wylacznie "doczekalem sie".
+  /// Like `statsWhenIdle`, when the caller only cares about "it got there".
   @discardableResult
   public static func waitUntilIdle(timeout: TimeInterval = 180) async -> Bool {
     await statsWhenIdle(timeout: timeout) != nil
   }
 
-  /// Przesuwa termin wysylki wszystkich czekajacych pozycji na "teraz".
+  /// Moves the upload deadline of all waiting items to "now".
   ///
-  /// Potrzebne przy KAZDYM wygaszaniu. Pozycja trafia do kolejki zaraz po
-  /// zapisie - widac ja w `vfs/queue` od razu - ale z terminem wymagalnosci
-  /// `writeBackSeconds` w przod. Bez przesuniecia odpiecie czekaloby cale te
-  /// dziesiec minut, a `prepare-shutdown` przed restartem Maca stalby sie nie
-  /// do zniesienia. To nie jest kosmetyka: uzytkownik, ktory nie chce czekac,
-  /// wylaczy Maca bez `prepare-shutdown`, a to juz raz zostawilo Time Machine
-  /// bez celu na cala noc.
+  /// Needed on EVERY shutdown. An item enters the queue right after the write -
+  /// it is visible in `vfs/queue` immediately - but with a due date
+  /// `writeBackSeconds` ahead. Without moving it a detach would wait those whole
+  /// ten minutes, and `prepare-shutdown` before a Mac restart would become
+  /// unbearable. This is not cosmetic: a user who does not want to wait will
+  /// shut down the Mac without `prepare-shutdown`, and that has already once left
+  /// Time Machine without a destination for a whole night.
   ///
-  /// Wolac PO tym, jak zapisy z odpiecia zdazyly trafic do kolejki - pozycje
-  /// dolozone pozniej nie zostana ruszone.
+  /// Call AFTER the writes from the detach have had time to reach the queue -
+  /// items added later will not be touched.
   ///
-  /// Zwraca `ExpiryOutcome` - ile pozycji ZASTALISMY i ilu udalo sie przesunac
-  /// termin - albo `nil`, gdy rclone nie odpowiedzial na pytanie o kolejke.
+  /// Returns `ExpiryOutcome` - how many items we FOUND and for how many the
+  /// deadline was moved - or `nil` when rclone did not answer the question about
+  /// the queue.
   ///
-  /// `nil` i `0` to DWIE ROZNE RZECZY i dlatego typ jest opcjonalny. Do 23
-  /// wrzesnia 2026 obie sytuacje - "kolejka byla pusta" i "nie dostalismy
-  /// odpowiedzi" - wychodzily stad jako `0`, wiec `detach` milczal w logu
-  /// dokladnie w tym przypadku, w ktorym terminow NIE przesunieto i drenaz
-  /// mogl potrwac cale `writeBackSeconds` (dziesiec minut) zamiast chwili.
+  /// `nil` and `0` are TWO DIFFERENT THINGS, and that is why the type is
+  /// optional. Until 23 September 2026 both situations - "the queue was empty"
+  /// and "we got no answer" - came out of here as `0`, so `detach` stayed silent
+  /// in the log in exactly the case where the deadlines were NOT moved and the
+  /// drain could take the whole `writeBackSeconds` (ten minutes) instead of a
+  /// moment.
   ///
-  /// Sama liczba przesunietych pozycji nie wystarcza, bo TRZECI przypadek
-  /// wyglada jak pierwszy: gdy kolejka ma pozycje, ale kazde
-  /// `vfs/queue-set-expiry` padnie, "przesunieto 0" bylo nieodroznialne od
-  /// "nie bylo czego przesuwac". Dlatego `queued` i `moved` sa osobno - patrz
+  /// The number of moved items alone is not enough, because a THIRD case looks
+  /// like the first: when the queue has items but every `vfs/queue-set-expiry`
+  /// fails, "moved 0" was indistinguishable from "there was nothing to move".
+  /// That is why `queued` and `moved` are separate - see
   /// `BackupImageService.expiryLogLine`.
   ///
-  /// Limit na samo listowanie kolejki podniesiony z 30 s do 60 s: ten sam plik
-  /// dokumentuje pomiar **36,7 s** dla LZEJSZEGO `vfs/stats` przy zapchanym
-  /// buforze (patrz `queueStats`), a `vfs/queue` wypisuje wtedy setki pozycji.
-  /// Przy 30 s odpowiedz nie zdazala przyjsc dokladnie wtedy, gdy przesuniecie
-  /// terminow bylo najbardziej potrzebne.
+  /// The limit for listing the queue itself raised from 30 s to 60 s: this same
+  /// file documents a measurement of **36.7 s** for the LIGHTER `vfs/stats` with
+  /// a clogged buffer (see `queueStats`), and `vfs/queue` lists hundreds of items
+  /// at such times. With 30 s the answer failed to arrive exactly when moving
+  /// the deadlines was needed most.
   ///
-  /// Limit pojedynczego `queue-set-expiry` zostaje na 30 s CELOWO: tamto jedno
-  /// wywolanie decyduje o calej funkcji, a to jest jedno z setek i jego strata
-  /// kosztuje jedna pozycje. Przy kilkuset pozycjach sufit 60 s na sztuke
-  /// zamienilby odpiecie w operacje bez gornego ograniczenia czasu.
-  /// Ile pozycji do przyspieszenia bylo w kolejce i ilu FAKTYCZNIE przesunieto
-  /// termin. Dwa pola, nie jedno, bo "zero" znaczy cos innego w zaleznosci od
-  /// tego, ile bylo prob - patrz `expireQueuedUploads`.
+  /// The limit for a single `queue-set-expiry` stays at 30 s ON PURPOSE: that
+  /// one call decides the whole function, while this is one of hundreds and
+  /// losing it costs one item. With several hundred items a 60 s ceiling per
+  /// item would turn the detach into an operation without an upper time bound.
+  /// How many items to speed up were in the queue and for how many the deadline
+  /// was ACTUALLY moved. Two fields, not one, because "zero" means something
+  /// different depending on how many attempts there were - see
+  /// `expireQueuedUploads`.
   public struct ExpiryOutcome: Sendable, Equatable {
-    /// Pozycje zastane w kolejce, ktore dalo sie przyspieszyc (bez tych juz
-    /// wysylanych - patrz `parseQueueIDs`).
+    /// Items found in the queue that could be sped up (without those already
+    /// uploading - see `parseQueueIDs`).
     public var queued: Int
-    /// Ile z nich rclone potwierdzil.
+    /// How many of them rclone confirmed.
     public var moved: Int
 
     public init(queued: Int, moved: Int) {
@@ -444,7 +446,7 @@ public enum DriveBufferService {
 
     var moved = 0
     for id in ids {
-      // Duza liczba ujemna zamiast zera - tak opisuje to samo rclone.
+      // A large negative number instead of zero - that is how rclone itself describes it.
       let response = try? await CMTooling.runRclone(
         ["rc", "--url", rcAddress, "vfs/queue-set-expiry", "id=\(id)", "expiry=-1000000000"],
         timeout: 30)
@@ -453,9 +455,9 @@ public enum DriveBufferService {
     return ExpiryOutcome(queued: ids.count, moved: moved)
   }
 
-  /// Czysta wersja: numery pozycji z odpowiedzi `vfs/queue`, ktorym da sie
-  /// przesunac termin. `nil` = odpowiedzi nie da sie odczytac, `[]` = kolejka
-  /// jest pusta. Wydzielone, zeby to rozroznienie dalo sie sprawdzic testem.
+  /// Pure version: IDs of items from the `vfs/queue` response whose deadline can
+  /// be moved. `nil` = the response cannot be read, `[]` = the queue is empty.
+  /// Split out so that this distinction can be tested.
   static func parseQueueIDs(_ raw: String) -> [Int]? {
     guard
       let data = raw.data(using: .utf8),
@@ -464,37 +466,37 @@ public enum DriveBufferService {
     else { return nil }
 
     return queue.compactMap { item in
-      // Pozycji juz wysylanej nie da sie przyspieszyc - rclone to ignoruje,
-      // wiec nie marnujemy na nia wywolania.
+      // An item already uploading cannot be sped up - rclone ignores it, so we
+      // do not waste a call on it.
       if (item["uploading"] as? Bool) == true { return nil }
       return (item["id"] as? NSNumber)?.intValue
     }
   }
 
-  /// MIEJSCE ZAJETE NA DYSKU przez katalog bufora. `nil` = NIE ZMIERZONO.
+  /// DISK SPACE TAKEN by the buffer directory. `nil` = NOT MEASURED.
   ///
-  /// Normalnie rozmiar cache'a podaje samo rclone (`QueueStats.bytesUsed`):
-  /// obchod katalogu to 6504 wywolania stat, a przy odswiezaniu co 10 sekund
-  /// niepotrzebne obciazenie dysku, na ktory akurat leci backup.
+  /// Normally rclone itself reports the cache size (`QueueStats.bytesUsed`):
+  /// walking the directory is 6504 stat calls, and with a refresh every 10
+  /// seconds needless load on the disk the backup is going to.
   ///
-  /// UWAGA: to NIE jest zapas dla miary, na ktorej dozorca podejmuje decyzje,
-  /// i nie wolno go tam podstawiac. Dwa powody, oba zmierzone:
+  /// NOTE: this is NOT a fallback for the measure the watchdog makes decisions
+  /// on, and must not be substituted there. Two reasons, both measured:
   ///
-  /// 1. Ta funkcja liczy MIEJSCE ZAJETE NA DYSKU (`totalFileAllocatedSize`),
-  ///    czyli wielkosc NIEPOROWNYWALNA z limitem `--vfs-cache-max-size` -
-  ///    potrafi go przekroczyc. Stad "bufor 155 GB" przy limicie 100 GB
-  ///    w jedynej linii PAUZA w calym dzienniku (23.09.2026 03:34). Godzine
-  ///    pozniej czujka zapisala "Interfejs sterujacy rclone nie odpowiada":
-  ///    brak odpowiedzi zamieniono na liczbe z INNEJ miary, i ta liczba
-  ///    uruchomila nieodwracalna pauze.
-  /// 2. Gdy obchod padnie (odmowa praw, znikniete `~/.cloudmachine`), wynik
-  ///    `0` wyglada jak PUSTY bufor, czyli jak spelniony warunek wznowienia
-  ///    Time Machine wstrzymanego dlatego, ze bufor byl pelny. Dokladnie ten
-  ///    wzorzec zamknal `BufferGuardService.freeGB()` dla `statfs` - stad
-  ///    tutaj `nil`, a nie zero.
+  /// 1. This function counts DISK SPACE TAKEN (`totalFileAllocatedSize`), a
+  ///    quantity NOT COMPARABLE with the `--vfs-cache-max-size` limit - it can
+  ///    exceed it. Hence "buffer 155 GB" with a 100 GB limit in the only PAUSE
+  ///    line in the whole journal (23.09.2026 03:34). An hour later the monitor
+  ///    wrote "rclone remote control is not answering": a missing answer was
+  ///    replaced with a number from a DIFFERENT measure, and that number
+  ///    triggered an irreversible pause.
+  /// 2. When the walk fails (permission denied, `~/.cloudmachine` gone), the
+  ///    result `0` looks like an EMPTY buffer, i.e. like a met condition for
+  ///    resuming a Time Machine that was paused because the buffer was full.
+  ///    Exactly this pattern was closed by `BufferGuardService.freeGB()` for
+  ///    `statfs` - hence `nil` here, not zero.
   ///
-  /// Zostaje wiec do JEDNEGO: powiedzenia czlowiekowi, ile miejsca na dysku
-  /// zajmuje cache. Zadna decyzja tego nie czyta.
+  /// So it is left for ONE thing: telling a person how much disk space the
+  /// cache takes. No decision reads it.
   public static func cacheSizeBytesByWalk() -> UInt64? {
     guard
       let enumerator = FileManager.default.enumerator(
@@ -509,38 +511,39 @@ public enum DriveBufferService {
     return total
   }
 
-  /// Czy rclone stanal na dobowym limicie Google Drive (750 GB/dobe).
+  /// Whether rclone stopped on the Google Drive daily limit (750 GB/day).
   ///
-  /// Rozpoznajemy to po ZACHOWANIU rclone, nie po tresci bledu. Powod jest
-  /// konkretny: `403 userRateLimitExceeded` to chwilowe dlawienie tempa, ktore
-  /// rclone ponawia sam ("will retry in 1m0s"), ale opisuje je komunikatem
-  /// "Received upload limit error" - nie do odroznienia po samym tekscie od
-  /// limitu dobowego. Pierwsza wersja tej funkcji lapala wlasnie to i
-  /// wstrzymala backup po 109 GiB wyslanych, czyli przy siodmej czesci limitu.
+  /// We recognise it by rclone's BEHAVIOUR, not by the error text. The reason is
+  /// concrete: `403 userRateLimitExceeded` is a momentary rate throttle that
+  /// rclone retries by itself ("will retry in 1m0s"), but it describes it with
+  /// the message "Received upload limit error" - indistinguishable by text alone
+  /// from the daily limit. The first version of this function caught exactly
+  /// that and paused the backup after 109 GiB uploaded, i.e. at a seventh of the
+  /// limit.
   ///
-  /// Prawdziwy limit jest dla rclone fatalny (`--drive-stop-on-upload-limit`
-  /// dziala dokladnie dla `storageQuotaExceeded` i `teamDriveFileLimitExceeded`),
-  /// wiec proces konczy prace i montowanie znika.
+  /// The real limit is fatal for rclone (`--drive-stop-on-upload-limit` acts
+  /// exactly on `storageQuotaExceeded` and `teamDriveFileLimitExceeded`), so the
+  /// process exits and the mount disappears.
   ///
-  /// UWAGA: NIE wolno dokladac tu warunku "tylko gdy montowanie lezy". Taka
-  /// wersja tu byla i byla martwa: agent `gdrive-buffer` ma `KeepAlive`
-  /// z `ThrottleInterval` 30 s, wiec launchd podnosi rclone z powrotem szybciej,
-  /// niz dozorca bufora zdazy tyknac (co 30 s). Okno, w ktorym montowania
-  /// faktycznie nie ma, jest krotsze od okresu odpytywania - wykrycie limitu
-  /// bylo rzutem moneta, a w praktyce nie zdarzalo sie wcale. Rozpoznanie po
-  /// SWIEZYM wpisie w logu dziala niezaleznie od tego, czy launchd zdazyl juz
-  /// wskrzesic montowanie.
+  /// NOTE: do NOT add a condition "only when the mount is down" here. Such a
+  /// version was here and it was dead: the `gdrive-buffer` agent has `KeepAlive`
+  /// with a `ThrottleInterval` of 30 s, so launchd brings rclone back faster than
+  /// the buffer watchdog manages to tick (every 30 s). The window in which the
+  /// mount is actually gone is shorter than the polling period - detecting the
+  /// limit was a coin toss, and in practice never happened at all. Recognising
+  /// it by a FRESH log entry works regardless of whether launchd has already
+  /// resurrected the mount.
   ///
-  /// Chwilowa przepustnica (`userRateLimitExceeded`) nadal NIE jest tu lapana -
-  /// patrz `logMentionsUploadLimit`. To ona kiedys wstrzymala backup po
-  /// 109 GiB i to jej dotyczyla ostroznosc, nie stanu montowania.
+  /// The momentary throttle (`userRateLimitExceeded`) is still NOT caught here -
+  /// see `logMentionsUploadLimit`. That is what once paused the backup after
+  /// 109 GiB, and that is what the caution was about, not the mount state.
   ///
-  /// `nil` = LOGU NIE DA SIE PRZECZYTAC, co jest czyms innym niz "nie ma
-  /// sladu limitu". Wczesniej oba przypadki wychodzily stad jako `false`,
-  /// czyli jako odpowiedz "nie ma problemu" na pytanie, na ktore nie bylo
-  /// odpowiedzi - a dozorca nie wstrzymuje wtedy backupu na brak miejsca na
-  /// Dysku. To nie jest teoretyczne: log rclone ma prawa `-rw-r-----`,
-  /// a przy starcie jest przenoszony na `.1` (patrz `rotateLogIfLarge`).
+  /// `nil` = THE LOG CANNOT BE READ, which is something else than "no trace of
+  /// the limit". Previously both cases came out of here as `false`, i.e. as the
+  /// answer "no problem" to a question that had no answer - and the watchdog
+  /// then does not pause the backup for lack of space on Drive. This is not
+  /// theoretical: the rclone log has `-rw-r-----` permissions, and at start-up
+  /// it is moved to `.1` (see `rotateLogIfLarge`).
   public static func hitStorageQuotaState(logFile: URL? = nil) -> Bool? {
     guard let text = recentLog(bytes: 256 * 1024, from: logFile ?? Self.logFile) else {
       return nil
@@ -548,105 +551,105 @@ public enum DriveBufferService {
     return logMentionsUploadLimit(text, now: Date(), within: 30)
   }
 
-  /// Wersja DO POKAZANIA CZLOWIEKOWI, gdzie trzeciego stanu nie ma gdzie
-  /// wstawic (`BufferStatus.driveFull`, `UploadState.from`).
+  /// Version FOR SHOWING TO A PERSON, where there is no place to put a third
+  /// state (`BufferStatus.driveFull`, `UploadState.from`).
   ///
-  /// ZADNA DECYZJA nie ma prawa jej uzywac: `?? false` to dokladnie to
-  /// podstawienie, ktore opisuje komentarz wyzej. Dozorca bufora czyta
-  /// `hitStorageQuotaState()` i sam rozstrzyga, co zrobic z "nie wiem".
-  /// Trzeci stan w interfejsie wymaga zmiany `BufferStatus` i
-  /// `CloudMachineController` - to osobna zmiana, poza ta galezia.
+  /// NO DECISION may use it: `?? false` is exactly the substitution described in
+  /// the comment above. The buffer watchdog reads `hitStorageQuotaState()` and
+  /// decides itself what to do with "I do not know". A third state in the
+  /// interface requires changing `BufferStatus` and `CloudMachineController` -
+  /// that is a separate change, outside this branch.
   public static func hitStorageQuota() -> Bool { hitStorageQuotaState() ?? false }
 
-  /// Czy wysylka faktycznie STOI - rozpoznane po zachowaniu, nie po tresci.
+  /// Whether the upload is actually STALLED - recognised by behaviour, not by
+  /// text.
   ///
-  /// Dobowy limit uploadu Google (750 GB) zglasza sie jako `403
-  /// userRateLimitExceeded`, czyli DOKLADNIE tym samym kodem, co zwykle
-  /// chwilowe dlawienie tempa. Po tekscie rozroznic sie ich nie da i nie
-  /// nalezy probowac - pierwsza wersja `logMentionsUploadLimit` probowala
-  /// i wstrzymala backup po 109 GiB z 750 GB.
+  /// Google's daily upload limit (750 GB) reports itself as `403
+  /// userRateLimitExceeded`, i.e. with EXACTLY the same code as an ordinary
+  /// momentary rate throttle. They cannot be told apart by text and one should
+  /// not try - the first version of `logMentionsUploadLimit` tried and paused the
+  /// backup after 109 GiB of 750 GB.
   ///
-  /// Rozroznia je natomiast STOSUNEK sukcesow do bledow w oknie czasowym.
-  /// Zmierzone na wlasnym logu:
-  ///   - dlawienie:  11 wrz 14h -> 4833, 12 wrz 09h -> 1,07, 15 wrz 08h -> 2,39
-  ///   - realny zator: 12 wrz 10-12h -> 0,002-0,011, 15 wrz 09h -> 0,003
-  /// Miedzy jednym a drugim leza DWA RZEDY WIELKOSCI, wiec prog 0,1 ma zapas
-  /// w obie strony.
+  /// What does tell them apart is the RATIO of successes to errors in a time
+  /// window. Measured on our own log:
+  ///   - throttling:  11 Sep 14h -> 4833, 12 Sep 09h -> 1.07, 15 Sep 08h -> 2.39
+  ///   - real jam: 12 Sep 10-12h -> 0.002-0.011, 15 Sep 09h -> 0.003
+  /// TWO ORDERS OF MAGNITUDE lie between one and the other, so the 0.1 threshold
+  /// has margin both ways.
   ///
-  /// `minErrors` chroni przed cisza: w oknie bez ruchu jest zero bledow
-  /// i zero sukcesow, a to nie jest zator.
+  /// `minErrors` protects against silence: a window without traffic has zero
+  /// errors and zero successes, and that is not a jam.
   ///
-  /// `nil` = LOGU NIE DA SIE PRZECZYTAC. Rozroznienie jest tu grozniejsze niz
-  /// przy samym pomiarze: `false` szedl dalej do `reportUploadStall`, ktore
-  /// USUWALO znacznik zatoru i zapisywalo "Wysylka na Google Drive ruszyla
-  /// z powrotem" - twierdzenie o zdarzeniu, ktorego nikt nie sprawdzil, na
-  /// podstawie pliku, ktorego nikt nie przeczytal.
+  /// `nil` = THE LOG CANNOT BE READ. The distinction is more dangerous here than
+  /// for the measurement itself: `false` went on to `reportUploadStall`, which
+  /// REMOVED the jam marker and wrote "Upload to Google Drive has resumed" - a
+  /// claim about an event nobody checked, based on a file nobody read.
   public static func uploadStalledState(logFile: URL? = nil) -> Bool? {
-    // Wieksze okno niz przy tescie tekstowym: w trakcie zatoru log rosnie
-    // o okolo 90 KB na minute, wiec 256 KB pokazaloby tylko ostatnie trzy
-    // minuty i stosunek liczylby sie z probki bez ani jednego sukcesu.
+    // A bigger window than for the text test: during a jam the log grows by
+    // about 90 KB per minute, so 256 KB would show only the last three minutes
+    // and the ratio would be computed from a sample without a single success.
     guard let text = recentLog(bytes: 4 * 1024 * 1024, from: logFile ?? Self.logFile) else {
       return nil
     }
     return logShowsUploadStalled(text, now: Date(), within: 30)
   }
 
-  /// Wersja do pokazania czlowiekowi - patrz `hitStorageQuota()`, ten sam
-  /// powod i to samo ostrzezenie: zadna decyzja nie czyta tej wersji.
+  /// Version for showing to a person - see `hitStorageQuota()`, same reason and
+  /// same warning: no decision reads this version.
   public static func uploadStalled() -> Bool { uploadStalledState() ?? false }
 
-  /// Zbiorcza odpowiedz "wysylka na Dysk nie idzie" - do pokazania
-  /// uzytkownikowi. Dozorca bufora NIE uzywa tej funkcji, bo dla niego roznica
-  /// miedzy jednym a drugim jest zasadnicza: brak miejsca nie minie sam,
-  /// a limit dobowy mija w kilka godzin.
+  /// Combined answer "the upload to Drive is not going" - for showing to the
+  /// user. The buffer watchdog does NOT use this function, because for it the
+  /// difference between the two is fundamental: lack of space will not pass by
+  /// itself, while the daily limit passes within a few hours.
   public static func hitDailyQuota() -> Bool {
     hitStorageQuota() || uploadStalled()
   }
 
-  /// Ogon logu rclone jako tekst. `nil` = pliku NIE DA SIE PRZECZYTAC: nie ma
-  /// go, nie ma do niego prawa albo odczyt padl.
+  /// Tail of the rclone log as text. `nil` = the file CANNOT BE READ: it does not
+  /// exist, there is no permission for it, or the read failed.
   ///
-  /// Wolajacy MUSI oddac to `nil` dalej jako "nie wiem". Brak wpisow o limicie
-  /// i brak dostepu do logu to dwie rozne rzeczy, a tylko pierwsza znaczy "nie
-  /// ma problemu". Plik bierzemy z parametru, zeby oba pytania zadawane temu
-  /// logowi dalo sie sprawdzic testem na wlasnym pliku - bez `~/.cloudmachine`
-  /// i bez zgadywania praw.
+  /// The caller MUST pass that `nil` on as "I do not know". No limit entries and
+  /// no access to the log are two different things, and only the first means "no
+  /// problem". The file is taken from a parameter so that both questions asked of
+  /// this log can be tested on our own file - without `~/.cloudmachine` and
+  /// without guessing permissions.
   private static func recentLog(bytes: UInt64, from file: URL) -> String? {
     guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
     defer { try? handle.close() }
     let size = (try? handle.seekToEnd()) ?? 0
     try? handle.seek(toOffset: size > bytes ? size - bytes : 0)
     guard let data = try? handle.readToEnd() else { return nil }
-    // Ogon prawie zawsze zaczyna sie w polowie znaku wielobajtowego, wiec
-    // dekodujemy stratnie - inaczej caly odczyt przepadalby przez jeden bajt.
+    // The tail almost always starts in the middle of a multi-byte character, so
+    // we decode lossily - otherwise the whole read would be lost to one byte.
     return String(decoding: data, as: UTF8.self)
   }
 
-  /// Locale, ktorym czytamy znaczniki czasu z logu rclone.
+  /// The locale we read rclone log timestamps with.
   ///
-  /// `en_US_POSIX`, a NIE `Locale.current`. `DateFormatter` z ustalonym
-  /// `dateFormat` i domyslnym locale bierze z tego locale kalendarz: na
-  /// maszynie z kalendarzem buddyjskim (`th_TH`) "2026" znaczy rok buddyjski,
-  /// czyli gregorianski 1483, a przy kalendarzu perskim albo hidzri wychodzi
-  /// jeszcze inna data. Znacznik parsuje sie wtedy BEZ BLEDU i wypada 543 lata
-  /// za wczesnie, wiec `stamp < cutoff` konczy petle na pierwszej linii,
-  /// `errors` zostaje zerem i `uploadStalled()` melduje "nie ma zatoru"
-  /// dokladnie wtedy, gdy zator trwa - a dozorca bufora na tej podstawie nie
-  /// wstrzymuje Time Machine.
+  /// `en_US_POSIX`, NOT `Locale.current`. A `DateFormatter` with a fixed
+  /// `dateFormat` and the default locale takes the calendar from that locale: on
+  /// a machine with the Buddhist calendar (`th_TH`) "2026" means the Buddhist
+  /// year, i.e. Gregorian 1483, and with the Persian or Hijri calendar yet
+  /// another date comes out. The timestamp then parses WITHOUT AN ERROR and lands
+  /// 543 years too early, so `stamp < cutoff` ends the loop on the first line,
+  /// `errors` stays zero and `uploadStalled()` reports "no jam" exactly when the
+  /// jam is going on - and on that basis the buffer watchdog does not pause Time
+  /// Machine.
   ///
-  /// Ta sama klasa bledu, co `LC_ALL=C` wymuszane w `CMLock` (patrz tam opis
-  /// realnego incydentu): tekst maszynowy czyta sie ustawieniami maszyny, nie
-  /// czlowieka.
+  /// The same class of bug as `LC_ALL=C` forced in `CMLock` (see the description
+  /// of the real incident there): machine text is read with the machine's
+  /// settings, not the person's.
   public static let rcloneLogLocale = Locale(identifier: "en_US_POSIX")
 
-  /// Czysta wersja rozpoznania zatoru - liczy sukcesy i bledy w oknie.
+  /// Pure version of jam detection - counts successes and errors in the window.
   ///
-  /// Sukcesem jest linia `... : Copied (...)`, bledem `Received upload limit
-  /// error`. Oba pochodza z tego samego logu i tego samego zdarzenia, wiec
-  /// stosunek nie wymaga zadnej kalibracji miedzy maszynami.
+  /// A success is a `... : Copied (...)` line, an error `Received upload limit
+  /// error`. Both come from the same log and the same event, so the ratio needs
+  /// no calibration between machines.
   ///
-  /// `locale` istnieje wylacznie po to, zeby test mogl wstrzyknac ZNANY ZLY
-  /// kalendarz - patrz `rcloneLogLocale`. Kod produkcyjny go nie podaje.
+  /// `locale` exists only so that a test can inject a KNOWN BAD calendar - see
+  /// `rcloneLogLocale`. Production code does not pass it.
   public static func logShowsUploadStalled(
     _ text: String, now: Date, within minutes: Int,
     minErrors: Int = 300, maxSuccessRatio: Double = 0.1,
@@ -664,8 +667,8 @@ public enum DriveBufferService {
       guard line.count > 19, let stamp = formatter.date(from: String(line.prefix(19))) else {
         continue
       }
-      // Log jest chronologiczny, wiec pierwsza linia starsza od okna konczy
-      // liczenie - dalej sa juz same starsze.
+      // The log is chronological, so the first line older than the window ends
+      // the counting - everything further back is older still.
       if stamp < cutoff { break }
       let lower = line.lowercased()
       if lower.contains("received upload limit error") {
@@ -679,13 +682,13 @@ public enum DriveBufferService {
     return Double(successes) < maxSuccessRatio * Double(errors)
   }
 
-  /// Szuka sladu limitu tylko w swiezych wpisach. Bez ograniczenia czasowego
-  /// raz zapalony alarm nigdy by nie zgasl, bo wpis zostaje w logu na zawsze -
-  /// backup wpadlby w cykl pauza-wznowienie-pauza.
+  /// Looks for a trace of the limit only in fresh entries. Without a time bound
+  /// an alarm once raised would never go out, because the entry stays in the log
+  /// forever - the backup would fall into a pause-resume-pause cycle.
   ///
-  /// Czysta wersja, zeby dalo sie ja sprawdzic testem bez pliku i bez zegara.
+  /// A pure version, so that it can be tested without a file and without a clock.
   ///
-  /// `locale` jak w `logShowsUploadStalled` - tylko dla testu.
+  /// `locale` as in `logShowsUploadStalled` - for tests only.
   public static func logMentionsUploadLimit(
     _ text: String, now: Date, within minutes: Int,
     locale: Locale = DriveBufferService.rcloneLogLocale
@@ -702,8 +705,9 @@ public enum DriveBufferService {
       }
       if stamp < cutoff { return false }
       let lower = line.lowercased()
-      // userRateLimitExceeded celowo POMINIETE - to zwykla przepustnica, ktora
-      // rclone ponawia sam. Lapanie jej wstrzymalo backup przy 109 GiB z 750 GB.
+      // userRateLimitExceeded deliberately SKIPPED - it is an ordinary throttle
+      // that rclone retries by itself. Catching it paused the backup at 109 GiB of
+      // 750 GB.
       if lower.contains("storagequotaexceeded") || lower.contains("teamdrivefilelimitexceeded") {
         return true
       }

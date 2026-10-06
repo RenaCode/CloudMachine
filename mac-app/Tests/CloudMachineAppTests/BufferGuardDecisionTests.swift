@@ -2,46 +2,46 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Decyzje dozorcy bufora przechodzone CALA sciezka - przez `step()`, ze
-/// zmiana stanu wlacznie - a nie tylko przez czyste funkcje pomocnicze.
+/// Buffer watchdog decisions walked through the WHOLE path - via `step()`,
+/// state change included - and not only through the pure helper functions.
 ///
-/// Powod: wszystkie trzy awarie naprawione 23.09.2026 (wyrzucany wynik
-/// `stopbackup`, wspolna galaz wznowienia dla braku miejsca na Dysku,
-/// zmyslone zero z nieudanego `statfs`) siedzialy w SEKWENCJI krokow, a nie
-/// w pojedynczym wyrazeniu. Test czystego predykatu przeszedlby dla kazdej
-/// z nich. Dlatego `BufferGuardService` ma teraz wstrzykiwalne `Probes` -
-/// ten sam zabieg, co `preferencesFile` w `BackupHealth.currentReport`.
+/// Reason: all three failures fixed on 23.09.2026 (the discarded `stopbackup`
+/// result, the shared resume branch for lack of space on Drive, the made-up
+/// zero from a failed `statfs`) lived in a SEQUENCE of steps, not in a single
+/// expression. A test of the pure predicate would have passed for each of
+/// them. That is why `BufferGuardService` now has injectable `Probes` - the
+/// same trick as `preferencesFile` in `BackupHealth.currentReport`.
 ///
-/// Piec awarii naprawionych 25.09.2026 (miara bufora, trzeci stan rozmiaru,
-/// martwa ochrona dysku w pauzie, pauza na jeden przebieg, nieczytelny log
-/// czytany jako "nie ma problemu") siedzialo tam samo i tez wymagalo calej
-/// sekwencji: kazda z nich objawia sie dopiero w DRUGIM albo TRZECIM kroku,
-/// po zmianie stanu.
+/// The five failures fixed on 25.09.2026 (the buffer measure, the third state
+/// of the size, dead disk protection during a pause, a pause for one run, an
+/// unreadable log read as "no problem") lived in the same place and also
+/// needed the whole sequence: each of them shows up only in the SECOND or
+/// THIRD step, after a state change.
 final class BufferGuardDecisionTests: XCTestCase {
 
-  /// Zapisuje, co dozorca zrobil, i pozwala sterowac tym, co "widzi".
-  /// Klasa, nie struktura, bo te same wartosci czyta i zmienia kilka domkniec.
-  private final class Atrapa: @unchecked Sendable {
+  /// Records what the watchdog did and lets us control what it "sees".
+  /// A class, not a struct, because several closures read and change the same values.
+  private final class Fake: @unchecked Sendable {
     private let lock = NSLock()
 
-    /// ZALEGLOSC NIEWYSLANA w GB. Atrapa przeklada ja na POZYCJE w kolejce,
-    /// bo dokladnie tak widzi ja dozorca (`backlogGB` szacuje gigabajty
-    /// z liczby pozycji po 32 MiB). Podanie jej wprost w GB pozwalalo
-    /// atrapie udawac, ze rclone podaje bajty - a nie podaje.
+    /// UNSENT BACKLOG in GB. The fake translates it into queue ITEMS, because
+    /// that is exactly how the watchdog sees it (`backlogGB` estimates gigabytes
+    /// from the number of 32 MiB items). Giving it directly in GB let the fake
+    /// pretend that rclone reports bytes - and it does not.
     private var _backlogGB = 0
-    /// Rozmiar cache'a rclone. Trzymany OSOBNO od zaleglosci, bo na tym
-    /// rozroznieniu stoi cala poprawka: cache przy `--vfs-cache-max-age 9999h`
-    /// siedzi pod limitem stale (na produkcji 281 pomiarow, minimum 99 GB),
-    /// niezaleznie od tego, ile zostalo do wyslania. Domyslnie wiec 100.
+    /// rclone cache size. Kept SEPARATE from the backlog, because the whole fix
+    /// rests on that distinction: with `--vfs-cache-max-age 9999h` the cache sits
+    /// at the limit permanently (281 measurements in production, minimum 99 GB),
+    /// regardless of how much is left to upload. Hence 100 by default.
     private var _cacheGB: Int? = 100
-    /// Czy interfejs sterujacy rclone odpowiada. `false` = `vfs/stats` oddaje
-    /// `nil`, czyli produkcyjny przebieg z 23.09.2026.
+    /// Whether rclone's remote control answers. `false` = `vfs/stats` returns
+    /// `nil`, i.e. the production run of 23.09.2026.
     private var _statsAvailable = true
     private var _outOfSpace = false
     private var _freeGB: Int? = 500
     private var _running: Bool? = true
-    /// `nil` = logu rclone NIE DA SIE PRZECZYTAC (prawa `-rw-r-----`,
-    /// przeniesienie na `.1` przy starcie).
+    /// `nil` = the rclone log CANNOT BE READ (`-rw-r-----` permissions, moved to
+    /// `.1` at start-up).
     private var _quotaHit: Bool? = false
     private var _stalled: Bool? = false
     private var _driveFreeBytes: UInt64? = 1_000 * 1_073_741_824
@@ -49,8 +49,9 @@ final class BufferGuardDecisionTests: XCTestCase {
     private var _stopCalls = 0
     private var _startCalls = 0
     private var _log: [String] = []
-    /// Co dozorca zglosil o zatorze. `Bool?`, bo "nie wiem" MUSI dojsc do
-    /// zgloszenia jako "nie wiem" - inaczej gasi znacznik zatoru.
+    /// What the watchdog reported about the jam. `Bool?`, because "I do not
+    /// know" MUST reach the report as "I do not know" - otherwise it clears the
+    /// jam marker.
     private var _stallReports: [Bool?] = []
 
     private func read<T>(_ body: () -> T) -> T {
@@ -115,8 +116,8 @@ final class BufferGuardDecisionTests: XCTestCase {
           guard statsAvailable else { return nil }
           return DriveBufferService.QueueStats(
             uploadsInProgress: 0,
-            // 1 GiB zaleglosci to 32 pasma po 32 MiB - tak samo, jak liczy to
-            // `BufferGuardService.backlogGB`.
+            // 1 GiB of backlog is 32 bands of 32 MiB - the same way
+            // `BufferGuardService.backlogGB` computes it.
             uploadsQueued: max(0, backlogGB) * 32,
             files: 0, erroredFiles: 0,
             bytesUsed: UInt64(max(0, cacheGB ?? 0)) * 1_073_741_824,
@@ -137,62 +138,63 @@ final class BufferGuardDecisionTests: XCTestCase {
           write { _startCalls += 1 }
           return true
         },
-        // Zgloszenie zatoru dotyka pliku znacznika w katalogu uzytkownika
-        // i pokazuje powiadomienie - w tescie zapisujemy tylko, CO uslyszalo.
+        // Reporting a jam touches a marker file in the user's directory and shows
+        // a notification - in the test we only record WHAT it heard.
         reportStall: { [self] value in write { _stallReports.append(value) } },
         log: { [self] line in write { _log.append(line) } })
     }
   }
 
-  /// Progi jak na produkcji po 25.09.2026: liczone od ZALEGLOSCI niewyslanej
-  /// i lezace PONIZEJ rozmiaru cache'a (100 GB).
-  private let progi = BufferGuardService.Thresholds(
+  /// Thresholds as in production after 25.09.2026: computed from the UNSENT
+  /// backlog and lying BELOW the cache size (100 GB).
+  private let thresholds = BufferGuardService.Thresholds(
     highGB: 50, lowGB: 10, minFreeGB: 80, minDriveFreeGB: 30)
 
-  /// Doprowadza dozorce do stanu `.running` - punkt wyjscia dla reszty.
-  private func nadzorujacy(_ atrapa: Atrapa) async -> BufferGuardService {
-    let dozorca = BufferGuardService(thresholds: progi, probes: atrapa.probes())
-    atrapa.backlogGB = 2
-    atrapa.running = true
-    await dozorca.step()
-    let stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .running, "Punkt wyjscia: dozorca ma nadzorowac trwajacy backup.")
-    return dozorca
+  /// Brings the watchdog to the `.running` state - the starting point for the rest.
+  private func supervising(_ fake: Fake) async -> BufferGuardService {
+    let watchdog = BufferGuardService(thresholds: thresholds, probes: fake.probes())
+    fake.backlogGB = 2
+    fake.running = true
+    await watchdog.step()
+    let state = await watchdog.currentState()
+    XCTAssertEqual(
+      state, .running, "Starting point: the watchdog has to supervise a running backup.")
+    return watchdog
   }
 
-  /// Doprowadza dozorce do pauzy za zaleglosc - punkt wyjscia dla testow pauzy.
-  private func wstrzymany(_ atrapa: Atrapa) async -> BufferGuardService {
-    let dozorca = await nadzorujacy(atrapa)
-    atrapa.backlogGB = 200
-    await dozorca.step()
-    let stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .pausedForBuffer, "Punkt wyjscia: dozorca ma stac w pauzie.")
-    return dozorca
+  /// Brings the watchdog to a backlog pause - the starting point for the pause tests.
+  private func paused(_ fake: Fake) async -> BufferGuardService {
+    let watchdog = await supervising(fake)
+    fake.backlogGB = 200
+    await watchdog.step()
+    let state = await watchdog.currentState()
+    XCTAssertEqual(state, .pausedForBuffer, "Starting point: the watchdog has to be paused.")
+    return watchdog
   }
 
-  // MARK: - Ustalenie 1: miara bufora i progi
+  // MARK: - Finding 1: the buffer measure and the thresholds
 
-  /// Progi MUSZA lezec ponizej rozmiaru cache'a, bo odnosza sie do zaleglosci
-  /// niewyslanej - czyli do tej czesci cache'a, ktorej rclone nie moze usunac.
-  /// Stara para (150/40) odnosila sie do rozmiaru CALEGO cache'a i dlatego
-  /// prog pauzy byl nieosiagalny bez siegania po inna miare, a prog wznowienia
-  /// nieosiagalny w ogole.
-  func testProgiOdnoszaSieDoZaleglosciILezaPonizejRozmiaruBufora() {
-    let domyslne = BufferGuardService.Thresholds()
-    XCTAssertEqual(domyslne.highGB, DriveBufferService.cacheSizeGB / 2)
-    XCTAssertEqual(domyslne.lowGB, DriveBufferService.cacheSizeGB / 10)
+  /// The thresholds MUST lie below the cache size, because they refer to the
+  /// unsent backlog - i.e. the part of the cache that rclone cannot evict. The
+  /// old pair (150/40) referred to the size of the WHOLE cache, which is why the
+  /// pause threshold was unreachable without reaching for another measure, and
+  /// the resume threshold unreachable at all.
+  func testThresholdsReferToTheBacklogAndLieBelowTheBufferSize() {
+    let defaults = BufferGuardService.Thresholds()
+    XCTAssertEqual(defaults.highGB, DriveBufferService.cacheSizeGB / 2)
+    XCTAssertEqual(defaults.lowGB, DriveBufferService.cacheSizeGB / 10)
     XCTAssertLessThan(
-      domyslne.highGB, DriveBufferService.cacheSizeGB,
-      "Prog pauzy powyzej rozmiaru cache'a jest osiagalny tylko przez pomiar INNEJ wielkosci.")
+      defaults.highGB, DriveBufferService.cacheSizeGB,
+      "A pause threshold above the cache size is reachable only by measuring a DIFFERENT quantity.")
     XCTAssertLessThan(
-      domyslne.lowGB, domyslne.highGB,
-      "Bez histerezy dozorca przelaczalby stan przy niemal kazdym tyknieciu.")
+      defaults.lowGB, defaults.highGB,
+      "Without hysteresis the watchdog would switch state on almost every tick.")
   }
 
-  /// Zaleglosc liczy sie z POZYCJI w kolejce, bo `vfs/stats` nie podaje
-  /// niewyslanych bajtow. Kontrola na produkcyjnej liczbie: 462 pozycje
-  /// z 23.09.2026, ktore wlasciciel oszacowal na "okolo 15 GB".
-  func testSzacunekZaleglosciLiczySieZPozycjiKolejki() {
+  /// The backlog is computed from queue ITEMS, because `vfs/stats` does not
+  /// report unsent bytes. Check against a production number: 462 items from
+  /// 23.09.2026, which the owner estimated at "about 15 GB".
+  func testBacklogEstimateIsComputedFromQueueItems() {
     func stats(queued: Int, inProgress: Int = 0, cacheGB: Int = 100)
       -> DriveBufferService.QueueStats
     {
@@ -204,463 +206,464 @@ final class BufferGuardDecisionTests: XCTestCase {
     XCTAssertEqual(BufferGuardService.backlogGB(stats: stats(queued: 462)), 14)
     XCTAssertEqual(BufferGuardService.backlogGB(stats: stats(queued: 32)), 1)
     XCTAssertEqual(BufferGuardService.backlogGB(stats: stats(queued: 0)), 0)
-    // Pozycja w trakcie wysylki tez jeszcze nie jest na Dysku.
+    // An item being uploaded is not on Drive yet either.
     XCTAssertEqual(BufferGuardService.backlogGB(stats: stats(queued: 16, inProgress: 16)), 1)
-    // Pelny cache przy pustej kolejce to ZERO zaleglosci - to jest cala
-    // roznica miedzy stara i nowa miara.
+    // A full cache with an empty queue is ZERO backlog - that is the whole
+    // difference between the old and the new measure.
     XCTAssertEqual(BufferGuardService.backlogGB(stats: stats(queued: 0, cacheGB: 100)), 0)
     XCTAssertNil(
       BufferGuardService.backlogGB(stats: nil),
-      "Brak odpowiedzi rclone to nie zero pozycji.")
+      "No answer from rclone is not zero items.")
   }
 
-  /// TA awaria, ta z dziennika: JEDNA linia PAUZA i ZERO linii WZNOWIENIE.
+  /// THE failure, the one from the journal: ONE PAUSE line and ZERO RESUME lines.
   ///
-  /// Prog wznowienia 40 GB odnosil sie do rozmiaru cache'a, a ten stoi pod
-  /// limitem 100 GB caly czas - takze wtedy, gdy kolejka jest juz pusta, bo
-  /// rclone trzyma w cache'u dane dawno wyslane (`--vfs-cache-max-age 9999h`).
-  /// Warunek wznowienia nie mial wiec jak zachodzic i dozorca zostawal
-  /// w pauzie do restartu procesu.
-  func testWznowienieNastepujeGdyKolejkaOpustialaChocCacheStoiPodLimitem() async {
-    let atrapa = Atrapa()
-    let dozorca = await wstrzymany(atrapa)
+  /// The 40 GB resume threshold referred to the cache size, and that sits at the
+  /// 100 GB limit all the time - also when the queue is already empty, because
+  /// rclone keeps long-uploaded data in the cache (`--vfs-cache-max-age 9999h`).
+  /// So the resume condition had no way of being met and the watchdog stayed
+  /// paused until the process restarted.
+  func testResumesWhenTheQueueIsEmptyEvenThoughTheCacheSitsAtTheLimit() async {
+    let fake = Fake()
+    let watchdog = await paused(fake)
 
-    // Wysylka nadgonila: kolejka pusta. Cache nadal pelny - i to jest
-    // dokladnie stan, w ktorym stara wersja nie wznawiala nigdy.
-    atrapa.backlogGB = 0
-    atrapa.cacheGB = 100
-    await dozorca.step()
+    // The upload caught up: queue empty. The cache is still full - and that is
+    // exactly the state in which the old version never resumed.
+    fake.backlogGB = 0
+    fake.cacheGB = 100
+    await watchdog.step()
 
-    let stan = await dozorca.currentState()
+    let state = await watchdog.currentState()
     XCTAssertEqual(
-      stan, .running,
-      "Pusta kolejka to nadgoniona wysylka - pelny cache nie ma prawa trzymac pauzy.")
-    XCTAssertEqual(atrapa.startCalls, 1)
+      state, .running,
+      "An empty queue means the upload caught up - a full cache has no right to hold the pause.")
+    XCTAssertEqual(fake.startCalls, 1)
   }
 
-  // MARK: - Ustalenie 6: rozmiar bufora potrzebuje trzeciego stanu
+  // MARK: - Finding 6: the buffer size needs a third state
 
-  /// TA awaria, odtworzona z produkcji krok po kroku (23.09.2026 03:34).
+  /// THE failure, reproduced from production step by step (23.09.2026 03:34).
   ///
-  /// rclone nie odpowiada -> dozorca schodzi na obchod katalogu -> obchod
-  /// oddaje 155 GB, bo liczy MIEJSCE ZAJETE NA DYSKU (miare, ktora limit
-  /// cache'a potrafi przekroczyc) -> 155 >= prog -> nieodwracalna pauza.
-  /// Godzine pozniej czujka zapisala "Interfejs sterujacy rclone nie
-  /// odpowiada", czyli pauza stala na liczbie wzietej stad, ze pomiaru nie
-  /// bylo.
+  /// rclone does not answer -> the watchdog falls back to the directory walk ->
+  /// the walk returns 155 GB, because it counts DISK SPACE TAKEN (a measure the
+  /// cache limit can exceed) -> 155 >= threshold -> irreversible pause. An hour
+  /// later the monitor wrote "rclone remote control is not answering", i.e. the
+  /// pause rested on a number taken from the fact that there was no measurement.
   ///
-  /// Po poprawce ta liczba moze sie pojawic w LOGU, ale nie w decyzji.
-  func testBrakOdpowiedziRcloneNieWstrzymujeBackupu() async {
-    let atrapa = Atrapa()
-    let dozorca = await nadzorujacy(atrapa)
+  /// After the fix this number may appear in the LOG, but not in the decision.
+  func testNoAnswerFromRcloneDoesNotPauseTheBackup() async {
+    let fake = Fake()
+    let watchdog = await supervising(fake)
 
-    atrapa.statsAvailable = false
-    atrapa.cacheGB = 155  // dokladnie liczba z tamtej jedynej linii PAUZA
-    atrapa.freeGB = 300  // dysku nic nie grozi, wiec pauza moglaby wyjsc TYLKO z tej liczby
-    await dozorca.step()
+    fake.statsAvailable = false
+    fake.cacheGB = 155  // exactly the number from that single PAUSE line
+    fake.freeGB = 300  // the disk is in no danger, so a pause could come ONLY from this number
+    await watchdog.step()
 
-    let stan = await dozorca.currentState()
+    let state = await watchdog.currentState()
     XCTAssertEqual(
-      stan, .running,
-      "Brak odpowiedzi rclone zamieniony na liczbe z innej miary uruchamial pauze.")
-    XCTAssertEqual(atrapa.stopCalls, 0)
+      state, .running,
+      "No answer from rclone turned into a number from another measure triggered a pause.")
+    XCTAssertEqual(fake.stopCalls, 0)
     XCTAssertTrue(
-      atrapa.log.contains { $0.contains("interfejs sterujacy rclone nie odpowiada") },
-      "...ale milczec tez nie wolno: dozorca wlasnie przestal umiec wstrzymac backup.")
+      fake.log.contains { $0.contains("rclone remote control is not answering") },
+      "...but staying silent is not allowed either: the watchdog has just lost the ability to pause the backup."
+    )
     XCTAssertTrue(
-      atrapa.log.contains { $0.contains("155 GB") && $0.contains("MIEJSCE NA DYSKU") },
-      "Skoro podajemy te liczbe, musi byc nazwana jako CO INNEGO niz zaleglosc.")
+      fake.log.contains { $0.contains("155 GB") && $0.contains("DISK SPACE") },
+      "Since we give this number, it has to be named as SOMETHING ELSE than the backlog.")
   }
 
-  /// Zgloszenie raz na epizod - jak dla `freeGB()`. Przy awarii trwajacej
-  /// 53 godziny linia co 30 sekund zatopilaby log.
-  func testOstrzezenieOBrakuOdpowiedziLogujeSieRaz() async {
-    let atrapa = Atrapa()
-    let dozorca = await nadzorujacy(atrapa)
+  /// Reported once per episode - as for `freeGB()`. With a failure lasting
+  /// 53 hours a line every 30 seconds would flood the log.
+  func testNoAnswerWarningIsLoggedOnce() async {
+    let fake = Fake()
+    let watchdog = await supervising(fake)
 
-    atrapa.statsAvailable = false
-    await dozorca.step()
-    await dozorca.step()
-    await dozorca.step()
+    fake.statsAvailable = false
+    await watchdog.step()
+    await watchdog.step()
+    await watchdog.step()
 
-    let ostrzezenia = atrapa.log.filter { $0.contains("interfejs sterujacy rclone nie odpowiada") }
-    XCTAssertEqual(ostrzezenia.count, 1, "dostalem: \(atrapa.log)")
+    let warnings = fake.log.filter { $0.contains("rclone remote control is not answering") }
+    XCTAssertEqual(warnings.count, 1, "got: \(fake.log)")
   }
 
-  /// Druga strona tego samego klamstwa. Gdy obchod katalogu PADL, oddawal `0`,
-  /// a zero wygladalo jak pusty bufor - czyli zdejmowalo pauze zalozona
-  /// dlatego, ze bufor byl pelny.
-  func testBrakOdpowiedziRcloneNieZdejmujePauzy() async {
-    let atrapa = Atrapa()
-    let dozorca = await wstrzymany(atrapa)
+  /// The other side of the same lie. When the directory walk FAILED, it returned
+  /// `0`, and zero looked like an empty buffer - i.e. it lifted a pause put in
+  /// place because the buffer was full.
+  func testNoAnswerFromRcloneDoesNotLiftThePause() async {
+    let fake = Fake()
+    let watchdog = await paused(fake)
 
-    atrapa.statsAvailable = false
-    atrapa.cacheGB = nil  // obchod katalogu tez sie nie udal
-    atrapa.freeGB = 900  // wszystko inne sprzyja wznowieniu
-    await dozorca.step()
+    fake.statsAvailable = false
+    fake.cacheGB = nil  // the directory walk failed too
+    fake.freeGB = 900  // everything else favours resuming
+    await watchdog.step()
 
-    let stan = await dozorca.currentState()
+    let state = await watchdog.currentState()
     XCTAssertEqual(
-      stan, .pausedForBuffer,
-      "Wznowienie wymaga dowodu, ze wysylka nadgonila - brak pomiaru dowodem nie jest.")
-    XCTAssertEqual(atrapa.startCalls, 0)
+      state, .pausedForBuffer,
+      "Resuming needs proof that the upload caught up - a missing measurement is no proof.")
+    XCTAssertEqual(fake.startCalls, 0)
   }
 
-  // MARK: - Ustalenie 1a: ochrona dysku dziala w KAZDYM stanie
+  // MARK: - Finding 1a: disk protection works in EVERY state
 
-  /// TA awaria. `stats?.outOfSpace`, prog i `lowDisk` siedzialy WYLACZNIE
-  /// w galezi `.running`. Po jednej pauzie dozorca przestawal patrzyc na dysk,
-  /// a galaz pauzy sprawdzala tylko warunek wznowienia - wiec rclone moglo
-  /// krzyczec "nie mam gdzie odlozyc danych", a dozorca w tej samej chwili
-  /// wznawial Time Machine, bo kolejka akurat zeszla.
-  func testRcloneBezMiejscaNieDajeSieZignorowacWPauzie() async {
-    let atrapa = Atrapa()
-    let dozorca = await wstrzymany(atrapa)
+  /// THE failure. `stats?.outOfSpace`, the threshold and `lowDisk` sat ONLY in
+  /// the `.running` branch. After one pause the watchdog stopped looking at the
+  /// disk, and the pause branch checked only the resume condition - so rclone
+  /// could shout "I have nowhere to put data", and at the same moment the
+  /// watchdog resumed Time Machine because the queue happened to drain.
+  func testRcloneOutOfSpaceCannotBeIgnoredDuringAPause() async {
+    let fake = Fake()
+    let watchdog = await paused(fake)
 
-    atrapa.backlogGB = 0  // kolejka zeszla, czyli warunek wznowienia spelniony
-    atrapa.freeGB = 900
-    atrapa.outOfSpace = true  // ...ale rclone nie ma gdzie odlozyc danych
-    await dozorca.step()
+    fake.backlogGB = 0  // the queue drained, i.e. the resume condition is met
+    fake.freeGB = 900
+    fake.outOfSpace = true  // ...but rclone has nowhere to put data
+    await watchdog.step()
 
-    let stan = await dozorca.currentState()
+    let state = await watchdog.currentState()
     XCTAssertEqual(
-      stan, .pausedForBuffer,
-      "outOfSpace to twardszy fakt niz nasz prog i nie przestaje nim byc w pauzie.")
-    XCTAssertEqual(atrapa.startCalls, 0)
+      state, .pausedForBuffer,
+      "outOfSpace is a harder fact than our threshold and does not stop being one during a pause.")
+    XCTAssertEqual(fake.startCalls, 0)
   }
 
-  /// To samo w pauzie za brak miejsca na Dysku Google: dowod z `rclone about`
-  /// nie ma prawa zdjac pauzy, gdy BUFOR jest pod sciana.
-  func testRcloneBezMiejscaNieDajeSieZignorowacWPauzieZaDyskGoogle() async {
-    let atrapa = Atrapa()
-    let dozorca = await nadzorujacy(atrapa)
+  /// The same in a pause for lack of space on Google Drive: proof from
+  /// `rclone about` has no right to lift the pause when the BUFFER is against the
+  /// wall.
+  func testRcloneOutOfSpaceCannotBeIgnoredDuringAGoogleDrivePause() async {
+    let fake = Fake()
+    let watchdog = await supervising(fake)
 
-    atrapa.quotaHit = true
-    await dozorca.step()
-    var stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .pausedForQuota)
+    fake.quotaHit = true
+    await watchdog.step()
+    var state = await watchdog.currentState()
+    XCTAssertEqual(state, .pausedForQuota)
 
-    atrapa.quotaHit = false  // wpisy w logu rclone sie zestarzaly
-    atrapa.backlogGB = 0
-    atrapa.freeGB = 900
-    atrapa.driveFreeBytes = 500 * 1_073_741_824  // miejsce na Dysku faktycznie sie znalazlo
-    atrapa.outOfSpace = true  // ale bufor nie ma gdzie odlozyc danych
-    await dozorca.step()
+    fake.quotaHit = false  // the entries in the rclone log have aged
+    fake.backlogGB = 0
+    fake.freeGB = 900
+    fake.driveFreeBytes = 500 * 1_073_741_824  // space on Drive really did appear
+    fake.outOfSpace = true  // but the buffer has nowhere to put data
+    await watchdog.step()
 
-    stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .pausedForQuota, "Dowod o Dysku nie jest dowodem o buforze.")
-    XCTAssertEqual(atrapa.startCalls, 0)
+    state = await watchdog.currentState()
+    XCTAssertEqual(state, .pausedForQuota, "Proof about Drive is not proof about the buffer.")
+    XCTAssertEqual(fake.startCalls, 0)
   }
 
-  /// Konczace sie miejsce na dysku musi wstrzymywac takze wtedy, gdy backup
-  /// wlasnie nie trwa: macOS zaczyna kolejny co godzine, a galaz `.idle`
-  /// patrzyla dotad wylacznie na to, czy backup ruszyl.
-  func testMaloMiejscaNaDyskuWstrzymujeTakzeGdyBackupNieTrwa() async {
-    let atrapa = Atrapa()
-    let dozorca = BufferGuardService(thresholds: progi, probes: atrapa.probes())
-    atrapa.running = false  // czuwanie, nie nadzor
-    atrapa.freeGB = 10  // ponizej minFreeGB
-    await dozorca.step()
+  /// Running out of disk space has to pause also when no backup is running at
+  /// the moment: macOS starts another one every hour, and the `.idle` branch
+  /// used to look only at whether a backup had started.
+  func testLowDiskSpacePausesAlsoWhenNoBackupIsRunning() async {
+    let fake = Fake()
+    let watchdog = BufferGuardService(thresholds: thresholds, probes: fake.probes())
+    fake.running = false  // keeping watch, not supervising
+    fake.freeGB = 10  // below minFreeGB
+    await watchdog.step()
 
-    let stan = await dozorca.currentState()
+    let state = await watchdog.currentState()
     XCTAssertEqual(
-      stan, .pausedForBuffer,
-      "Dysk zapelnia sie niezaleznie od tego, czy backup trwa w tej sekundzie.")
-    XCTAssertTrue(atrapa.log.contains { $0.contains("malo wolnego miejsca na dysku") })
-    // Nie ma czego wstrzymywac, wiec `stopbackup` nie leci - i slusznie:
-    // jego porazka kazalaby dozorcy zameldowac "Time Machine PISZE DALEJ".
-    XCTAssertEqual(atrapa.stopCalls, 0)
+      state, .pausedForBuffer,
+      "The disk fills up regardless of whether a backup is running this second.")
+    XCTAssertTrue(fake.log.contains { $0.contains("little free disk space") })
+    // There is nothing to pause, so `stopbackup` is not sent - and rightly so:
+    // its failure would make the watchdog report "Time Machine KEEPS WRITING".
+    XCTAssertEqual(fake.stopCalls, 0)
   }
 
-  // MARK: - Ustalenie 2: pauza trwa tyle, ile ja podtrzymujemy
+  // MARK: - Finding 2: a pause lasts as long as we keep it up
 
-  /// TA awaria. `tmutil stopbackup` anuluje TRWAJACY backup i nie rusza
-  /// harmonogramu, a `stopBackup()` wolalo sie wylacznie przy ZMIANIE stanu.
-  /// Godzine po pauzie macOS startowal kolejny backup, dozorca go nie
-  /// zatrzymywal - a w logu stalo "czekam na wysylke". Stan trwal 53 godziny,
-  /// wstrzymanie zapisu jeden przebieg.
-  func testWstrzymanieJestPonawianeWKazdymTyknieciuPauzy() async {
-    let atrapa = Atrapa()
-    let dozorca = await wstrzymany(atrapa)
-    XCTAssertEqual(atrapa.stopCalls, 1)
+  /// THE failure. `tmutil stopbackup` cancels the RUNNING backup and does not
+  /// touch the schedule, and `stopBackup()` was called only on a state CHANGE.
+  /// An hour after the pause macOS started another backup, the watchdog did not
+  /// stop it - and the log said "waiting for the upload". The state lasted 53
+  /// hours, the pause of writes one run.
+  func testPauseIsRepeatedOnEveryTickOfThePause() async {
+    let fake = Fake()
+    let watchdog = await paused(fake)
+    XCTAssertEqual(fake.stopCalls, 1)
 
-    // Time Machine ruszyl sam w swoim cyklu godzinowym, zaleglosc nadal duza.
-    atrapa.running = true
-    await dozorca.step()
-    XCTAssertEqual(atrapa.stopCalls, 2, "Kolejne tykniecie MUSI ponowic wstrzymanie.")
-    await dozorca.step()
-    XCTAssertEqual(atrapa.stopCalls, 3)
+    // Time Machine started by itself in its hourly cycle, the backlog is still large.
+    fake.running = true
+    await watchdog.step()
+    XCTAssertEqual(fake.stopCalls, 2, "The next tick MUST repeat the pause.")
+    await watchdog.step()
+    XCTAssertEqual(fake.stopCalls, 3)
 
-    let stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .pausedForBuffer)
-    XCTAssertEqual(atrapa.startCalls, 0)
+    let state = await watchdog.currentState()
+    XCTAssertEqual(state, .pausedForBuffer)
+    XCTAssertEqual(fake.startCalls, 0)
     XCTAssertTrue(
-      atrapa.log.contains { $0.contains("ponawiam wstrzymanie") },
-      "Ponowne wstrzymanie to zdarzenie warte sladu - znaczy, ze backup ruszyl w pauzie.")
+      fake.log.contains { $0.contains("repeating the pause") },
+      "Repeating the pause is an event worth a trace - it means a backup started during the pause.")
   }
 
-  /// ...ale bez potrzeby nie ponawiamy. Gdy tmutil mowi wprost, ze backup nie
-  /// trwa, nie ma czego wstrzymywac - dwa procesy co 30 sekund przez 53
-  /// godziny to ponad 12 tysiecy wywolan za nic.
-  func testWstrzymanieNieJestPonawianeGdyBackupNieTrwa() async {
-    let atrapa = Atrapa()
-    let dozorca = await wstrzymany(atrapa)
-    XCTAssertEqual(atrapa.stopCalls, 1)
+  /// ...but we do not repeat without need. When tmutil says plainly that no
+  /// backup is running, there is nothing to pause - two processes every 30
+  /// seconds for 53 hours is over 12 thousand calls for nothing.
+  func testPauseIsNotRepeatedWhenNoBackupIsRunning() async {
+    let fake = Fake()
+    let watchdog = await paused(fake)
+    XCTAssertEqual(fake.stopCalls, 1)
 
-    atrapa.running = false
-    await dozorca.step()
-    await dozorca.step()
-    XCTAssertEqual(atrapa.stopCalls, 1)
+    fake.running = false
+    await watchdog.step()
+    await watchdog.step()
+    XCTAssertEqual(fake.stopCalls, 1)
 
-    // "Nie wiem" to NIE jest "nie trwa" - brak odpowiedzi tmutil liczy sie
-    // jak trwajacy backup.
-    atrapa.running = nil
-    await dozorca.step()
-    XCTAssertEqual(atrapa.stopCalls, 2)
+    // "I do not know" is NOT "not running" - no answer from tmutil counts as
+    // a running backup.
+    fake.running = nil
+    await watchdog.step()
+    XCTAssertEqual(fake.stopCalls, 2)
   }
 
-  // MARK: - Ustalenie 7: nieczytelny log rclone
+  // MARK: - Finding 7: unreadable rclone log
 
-  /// TA awaria, w jej najgrozniejszej czesci. `recentLog` oddaje `nil` przy
-  /// nieotwieralnym pliku, a `uploadStalled()` zamienialo to na `false`;
-  /// `false` znaczy "zator minal", wiec `reportStall` USUWAL znacznik i pisal
-  /// "Wysylka na Google Drive ruszyla z powrotem" - o zdarzeniu, ktorego nikt
-  /// nie sprawdzil. Log rclone ma prawa `-rw-r-----`, a przy starcie jest
-  /// przenoszony na `.1`, wiec to nie jest przypadek teoretyczny.
-  func testNieWiemNieGasiZnacznikaZatoru() {
+  /// THE failure, in its most dangerous part. `recentLog` returns `nil` for an
+  /// unopenable file, and `uploadStalled()` turned that into `false`; `false`
+  /// means "the jam is over", so `reportStall` DELETED the marker and wrote
+  /// "Upload to Google Drive has resumed" - about an event nobody checked. The
+  /// rclone log has `-rw-r-----` permissions, and at start-up it is moved to
+  /// `.1`, so this is not a theoretical case.
+  func testIDoNotKnowDoesNotClearTheJamMarker() {
     XCTAssertEqual(
       BufferGuardService.stallAction(stalled: nil, markerExists: true), .doNothing,
-      "Nieczytelny log nie jest dowodem, ze zator minal.")
+      "An unreadable log is no proof that the jam is over.")
     XCTAssertEqual(
       BufferGuardService.stallAction(stalled: nil, markerExists: false), .doNothing)
-    // Zmierzone odpowiedzi dzialaja jak dotad - inaczej "naprawa" polegajaca
-    // na wylaczeniu zgloszen przeszlaby niezauwazona.
+    // Measured answers work as before - otherwise a "fix" consisting of
+    // switching off the reports would go unnoticed.
     XCTAssertEqual(BufferGuardService.stallAction(stalled: true, markerExists: false), .raise)
     XCTAssertEqual(BufferGuardService.stallAction(stalled: false, markerExists: true), .clear)
     XCTAssertEqual(BufferGuardService.stallAction(stalled: true, markerExists: true), .doNothing)
     XCTAssertEqual(BufferGuardService.stallAction(stalled: false, markerExists: false), .doNothing)
   }
 
-  /// "Nie wiem" musi DOJSC do zgloszenia jako "nie wiem". Podstawienie `false`
-  /// juz w sondzie zamykalo sprawe, zanim ktokolwiek zdazyl sie zastanowic.
-  func testNieczytelnyLogIdzieDoZgloszeniaJakoNieWiem() async {
-    let atrapa = Atrapa()
-    let dozorca = await nadzorujacy(atrapa)
+  /// "I do not know" has to REACH the report as "I do not know". Substituting
+  /// `false` already in the probe closed the matter before anyone had a chance
+  /// to think about it.
+  func testUnreadableLogReachesTheReportAsIDoNotKnow() async {
+    let fake = Fake()
+    let watchdog = await supervising(fake)
 
-    atrapa.stalled = nil
-    await dozorca.step()
+    fake.stalled = nil
+    await watchdog.step()
 
-    XCTAssertEqual(atrapa.stallReports.count, 2)
-    XCTAssertEqual(atrapa.stallReports.first, .some(false))
+    XCTAssertEqual(fake.stallReports.count, 2)
+    XCTAssertEqual(fake.stallReports.first, .some(false))
     XCTAssertNil(
-      atrapa.stallReports.last!, "Brak odczytu logu nie ma prawa zglosic 'zator minal'.")
+      fake.stallReports.last!, "A failed log read has no right to report 'the jam is over'.")
   }
 
-  /// Nieczytelny log nie wstrzymuje backupu (bo nie jest dowodem awarii), ale
-  /// nie wolno o nim milczec: dozorca wlasnie przestal umiec rozpoznac brak
-  /// miejsca na Dysku Google.
-  func testNieczytelnyLogAniNieWstrzymujeAniNieMilczy() async {
-    let atrapa = Atrapa()
-    let dozorca = await nadzorujacy(atrapa)
+  /// An unreadable log does not pause the backup (as it is no proof of a
+  /// failure), but it must not be kept quiet: the watchdog has just lost the
+  /// ability to recognise lack of space on Google Drive.
+  func testUnreadableLogNeitherPausesNorStaysSilent() async {
+    let fake = Fake()
+    let watchdog = await supervising(fake)
 
-    atrapa.quotaHit = nil
-    atrapa.stalled = nil
-    await dozorca.step()
-    await dozorca.step()
+    fake.quotaHit = nil
+    fake.stalled = nil
+    await watchdog.step()
+    await watchdog.step()
 
-    let stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .running)
-    XCTAssertEqual(atrapa.stopCalls, 0)
-    let ostrzezenia = atrapa.log.filter { $0.contains("nie da sie przeczytac logu rclone") }
-    XCTAssertEqual(ostrzezenia.count, 1, "Raz na epizod - dostalem: \(atrapa.log)")
+    let state = await watchdog.currentState()
+    XCTAssertEqual(state, .running)
+    XCTAssertEqual(fake.stopCalls, 0)
+    let warnings = fake.log.filter { $0.contains("cannot read the rclone log") }
+    XCTAssertEqual(warnings.count, 1, "Once per episode - got: \(fake.log)")
   }
 
-  // MARK: - Punkt 2 z 23.09: nieudane wstrzymanie NIE jest pauza
+  // MARK: - Point 2 of 23.09: a failed pause is NOT a pause
 
-  /// TA awaria. `tmutil stopbackup` pada (brak uprawnien albo limit czasu),
-  /// a dozorca i tak przechodzil w `.pausedForBuffer`. Poniewaz wstrzymanie
-  /// wola sie wylacznie przy ZMIANIE stanu, nie ponawial go juz nigdy:
-  /// Time Machine pisal dalej, dozorca czekal na drenaz, dysk zapelnial sie
-  /// do konca, a w logu stalo "PAUZA ... czekam na wysylke".
-  func testNieudaneWstrzymanieNieZmieniaStanuIJestPonawiane() async {
-    let atrapa = Atrapa()
-    let dozorca = await nadzorujacy(atrapa)
+  /// THE failure. `tmutil stopbackup` fails (no permissions or a timeout), and
+  /// the watchdog moved to `.pausedForBuffer` anyway. Since the pause is called
+  /// only on a state CHANGE, it never retried it: Time Machine kept writing, the
+  /// watchdog waited for the drain, the disk filled up completely, and the log
+  /// said "PAUSE ... waiting for the upload".
+  func testFailedPauseDoesNotChangeTheStateAndIsRetried() async {
+    let fake = Fake()
+    let watchdog = await supervising(fake)
 
-    atrapa.stopSucceeds = false
-    atrapa.backlogGB = 200  // powyzej progu pauzy
-    await dozorca.step()
+    fake.stopSucceeds = false
+    fake.backlogGB = 200  // above the pause threshold
+    await watchdog.step()
 
-    var stan = await dozorca.currentState()
+    var state = await watchdog.currentState()
     XCTAssertEqual(
-      stan, .running,
-      "Nieudane 'tmutil stopbackup' NIE jest pauza - Time Machine nadal pisze.")
-    XCTAssertEqual(atrapa.stopCalls, 1)
+      state, .running,
+      "A failed 'tmutil stopbackup' is NOT a pause - Time Machine is still writing.")
+    XCTAssertEqual(fake.stopCalls, 1)
     XCTAssertTrue(
-      atrapa.log.contains { $0.contains("NIE UDALO SIE wstrzymac") },
-      "Cicha porazka jest gorsza od glosnej - musi byc slad w logu.")
+      fake.log.contains { $0.contains("FAILED to pause") },
+      "A silent failure is worse than a loud one - there has to be a trace in the log.")
 
-    // Kolejny krok MUSI sprobowac jeszcze raz - bez tego jedna nieudana proba
-    // zostawiala backup bez nadzoru az do restartu agenta.
-    await dozorca.step()
-    XCTAssertEqual(atrapa.stopCalls, 2, "Dozorca ma ponawiac wstrzymanie przy kazdym kroku.")
-    stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .running)
+    // The next step MUST try again - without that one failed attempt left the
+    // backup unsupervised until the agent restarted.
+    await watchdog.step()
+    XCTAssertEqual(fake.stopCalls, 2, "The watchdog has to retry the pause on every step.")
+    state = await watchdog.currentState()
+    XCTAssertEqual(state, .running)
 
-    // Gdy wreszcie sie uda - dopiero wtedy stan sie zmienia.
-    atrapa.stopSucceeds = true
-    await dozorca.step()
-    stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .pausedForBuffer)
-    XCTAssertEqual(atrapa.stopCalls, 3)
+    // When it finally succeeds - only then does the state change.
+    fake.stopSucceeds = true
+    await watchdog.step()
+    state = await watchdog.currentState()
+    XCTAssertEqual(state, .pausedForBuffer)
+    XCTAssertEqual(fake.stopCalls, 3)
   }
 
-  // MARK: - Punkt 3 z 23.09: pauza za brak miejsca na Dysku wymaga DOWODU
+  // MARK: - Point 3 of 23.09: a pause for lack of space on Drive needs PROOF
 
-  /// TA awaria. `hitStorageQuota()` patrzy na wpisy z ostatnich 30 minut logu
-  /// rclone. Po wstrzymaniu Time Machine nowe pasma nie powstaja, rclone
-  /// przestaje probowac, wpisy sie starzeja - i funkcja zaczyna zwracac
-  /// `false`, mimo ze na Dysku jak nie bylo miejsca, tak nie ma. Wspolna
-  /// galaz wznowienia patrzyla wtedy wylacznie na bufor i wolne miejsce
-  /// LOKALNE, czyli na dwie liczby, ktore o Dysku Google nie wiedza nic,
-  /// i zdejmowala pauze natychmiast.
-  func testPauzaZaBrakMiejscaNaDyskuNieMijaSama() async {
-    let atrapa = Atrapa()
-    let dozorca = await nadzorujacy(atrapa)
+  /// THE failure. `hitStorageQuota()` looks at entries from the last 30 minutes
+  /// of the rclone log. After Time Machine is paused no new bands are created,
+  /// rclone stops trying, the entries age - and the function starts returning
+  /// `false`, even though Drive has as little space as before. The shared resume
+  /// branch then looked only at the buffer and LOCAL free space, i.e. at two
+  /// numbers that know nothing about Google Drive, and lifted the pause
+  /// immediately.
+  func testPauseForLackOfSpaceOnDriveDoesNotPassByItself() async {
+    let fake = Fake()
+    let watchdog = await supervising(fake)
 
-    atrapa.quotaHit = true
-    await dozorca.step()
-    var stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .pausedForQuota)
+    fake.quotaHit = true
+    await watchdog.step()
+    var state = await watchdog.currentState()
+    XCTAssertEqual(state, .pausedForQuota)
 
-    // Wpisy w logu sie zestarzaly, kolejka zeszla, dysk lokalny pusty -
-    // czyli DOKLADNIE sytuacja, w ktorej stara wersja wznawiala backup.
-    atrapa.quotaHit = false
-    atrapa.backlogGB = 1
-    atrapa.freeGB = 900
+    // The log entries have aged, the queue drained, the local disk is empty -
+    // i.e. EXACTLY the situation in which the old version resumed the backup.
+    fake.quotaHit = false
+    fake.backlogGB = 1
+    fake.freeGB = 900
 
-    // 1. rclone nie odpowiada: "nie wiem" NIE jest zgoda na wznowienie.
-    atrapa.driveFreeBytes = nil
-    await dozorca.step()
-    stan = await dozorca.currentState()
+    // 1. rclone does not answer: "I do not know" is NOT consent to resume.
+    fake.driveFreeBytes = nil
+    await watchdog.step()
+    state = await watchdog.currentState()
     XCTAssertEqual(
-      stan, .pausedForQuota,
-      "Brak odpowiedzi o pojemnosci Dysku ma PODTRZYMAC pauze, nie ja zniesc.")
-    XCTAssertEqual(atrapa.startCalls, 0)
+      state, .pausedForQuota,
+      "No answer about Drive capacity has to KEEP the pause, not lift it.")
+    XCTAssertEqual(fake.startCalls, 0)
 
-    // 2. rclone odpowiada, ale miejsca nadal praktycznie nie ma.
-    atrapa.driveFreeBytes = 2 * 1_073_741_824
-    await dozorca.step()
-    stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .pausedForQuota, "2 GB to nie jest miejsce na dalsze kopie.")
-    XCTAssertEqual(atrapa.startCalls, 0)
+    // 2. rclone answers, but there is still practically no space.
+    fake.driveFreeBytes = 2 * 1_073_741_824
+    await watchdog.step()
+    state = await watchdog.currentState()
+    XCTAssertEqual(state, .pausedForQuota, "2 GB is no room for further backups.")
+    XCTAssertEqual(fake.startCalls, 0)
 
-    // 3. Miejsce faktycznie sie znalazlo - dopiero to jest dowod.
-    atrapa.driveFreeBytes = 500 * 1_073_741_824
-    await dozorca.step()
-    stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .running)
-    XCTAssertEqual(atrapa.startCalls, 1)
+    // 3. Space really did appear - only that is proof.
+    fake.driveFreeBytes = 500 * 1_073_741_824
+    await watchdog.step()
+    state = await watchdog.currentState()
+    XCTAssertEqual(state, .running)
+    XCTAssertEqual(fake.startCalls, 1)
   }
 
-  /// Pauza z powodu ZALEGLOSCI nie potrzebuje niczego od Dysku Google -
-  /// inaczej nieosiagalny rclone blokowalby kazde wznowienie w systemie.
-  func testPauzaZaZaleglocWznawiaSieBezPytaniaODysk() async {
-    let atrapa = Atrapa()
-    let dozorca = await wstrzymany(atrapa)
+  /// A pause because of the BACKLOG needs nothing from Google Drive - otherwise
+  /// an unreachable rclone would block every resume in the system.
+  func testBacklogPauseResumesWithoutAskingDrive() async {
+    let fake = Fake()
+    let watchdog = await paused(fake)
 
-    atrapa.backlogGB = 2
-    atrapa.driveFreeBytes = nil  // rclone milczy, ale to nie ta pauza
-    await dozorca.step()
-    let stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .running)
+    fake.backlogGB = 2
+    fake.driveFreeBytes = nil  // rclone is silent, but this is not that pause
+    await watchdog.step()
+    let state = await watchdog.currentState()
+    XCTAssertEqual(state, .running)
   }
 
-  // MARK: - Punkt 4 z 23.09: nieudany pomiar wolnego miejsca
+  // MARK: - Point 4 of 23.09: failed free-space measurement
 
-  /// TA awaria. `freeGB()` zwracalo `0`, gdy `statfs` zawiodl. Zero spelnialo
-  /// warunek pauzy (`free <= minFreeGB`) natychmiast i NIGDY nie spelnialo
-  /// warunku wznowienia (`free > minFreeGB`) - dozorca wstrzymywal Time
-  /// Machine na podstawie liczby, ktorej nie zmierzyl, i nie wznawial go juz
-  /// nigdy.
-  func testNieudanyPomiarWolnegoMiejscaNieWstrzymujeBackupu() async {
-    let atrapa = Atrapa()
-    let dozorca = await nadzorujacy(atrapa)
+  /// THE failure. `freeGB()` returned `0` when `statfs` failed. Zero met the
+  /// pause condition (`free <= minFreeGB`) immediately and NEVER met the resume
+  /// condition (`free > minFreeGB`) - the watchdog paused Time Machine based on
+  /// a number it did not measure, and never resumed it again.
+  func testFailedFreeSpaceMeasurementDoesNotPauseTheBackup() async {
+    let fake = Fake()
+    let watchdog = await supervising(fake)
 
-    atrapa.freeGB = nil
-    atrapa.backlogGB = 2  // zaleglosc w porzadku, wiec jedyny powod pauzy to dysk
-    await dozorca.step()
+    fake.freeGB = nil
+    fake.backlogGB = 2  // backlog is fine, so the only reason to pause is the disk
+    await watchdog.step()
 
-    let stan = await dozorca.currentState()
+    let state = await watchdog.currentState()
     XCTAssertEqual(
-      stan, .running,
-      "Brak pomiaru to nie jest pomiar zerowy - nie wolno na nim wstrzymywac backupu.")
-    XCTAssertEqual(atrapa.stopCalls, 0)
+      state, .running,
+      "No measurement is not a zero measurement - the backup must not be paused on it.")
+    XCTAssertEqual(fake.stopCalls, 0)
     XCTAssertTrue(
-      atrapa.log.contains { $0.contains("nie da sie zmierzyc wolnego miejsca") },
-      "...ale nie wolno tez o tym milczec: to awaria samej ochrony dysku.")
+      fake.log.contains { $0.contains("cannot measure free disk space") },
+      "...but it must not be kept quiet either: this is a failure of the disk protection itself.")
   }
 
-  /// Zmierzone zero to co INNEGO niz brak pomiaru - i musi pauzowac.
-  /// Bez tego testu "naprawa" polegajaca na zignorowaniu wolnego miejsca
-  /// w ogole przeszlaby niezauwazona.
-  func testZmierzoneZeroNadalWstrzymujeBackup() async {
-    let atrapa = Atrapa()
-    let dozorca = await nadzorujacy(atrapa)
+  /// A measured zero is SOMETHING ELSE than no measurement - and it has to pause.
+  /// Without this test a "fix" consisting of ignoring free space altogether
+  /// would go unnoticed.
+  func testMeasuredZeroStillPausesTheBackup() async {
+    let fake = Fake()
+    let watchdog = await supervising(fake)
 
-    atrapa.freeGB = 0
-    await dozorca.step()
+    fake.freeGB = 0
+    await watchdog.step()
 
-    let stan = await dozorca.currentState()
-    XCTAssertEqual(stan, .pausedForBuffer)
-    XCTAssertEqual(atrapa.stopCalls, 1)
+    let state = await watchdog.currentState()
+    XCTAssertEqual(state, .pausedForBuffer)
+    XCTAssertEqual(fake.stopCalls, 1)
   }
 
-  /// Brak pomiaru nie moze tez UDAWAC zgody na wznowienie.
-  func testNieudanyPomiarNieWznawiaBackupu() async {
-    let atrapa = Atrapa()
-    let dozorca = await wstrzymany(atrapa)
+  /// No measurement must not PRETEND to be consent to resume either.
+  func testFailedMeasurementDoesNotResumeTheBackup() async {
+    let fake = Fake()
+    let watchdog = await paused(fake)
 
-    atrapa.backlogGB = 1
-    atrapa.freeGB = nil
-    await dozorca.step()
-    let stan = await dozorca.currentState()
+    fake.backlogGB = 1
+    fake.freeGB = nil
+    await watchdog.step()
+    let state = await watchdog.currentState()
     XCTAssertEqual(
-      stan, .pausedForBuffer,
-      "Wznowienie wymaga dowodu, ze miejsce JEST - brak pomiaru dowodem nie jest.")
-    XCTAssertEqual(atrapa.startCalls, 0)
+      state, .pausedForBuffer,
+      "Resuming needs proof that the space IS there - a missing measurement is no proof.")
+    XCTAssertEqual(fake.startCalls, 0)
   }
 
-  /// `freeGB()` na prawdziwym systemie ma oddawac to samo, co `df`, i ma to
-  /// byc wartosc OPCJONALNA. Sciezka udana - odpowiednik dawnego
-  /// `testFreeSpaceMatchesStatfs`, ktory jako jedyny testowal te funkcje.
-  func testPomiarWolnegoMiejscaZgadzaSieZeStatfs() {
+  /// `freeGB()` on the real system has to return the same as `df`, and it has to
+  /// be an OPTIONAL value. The successful path - the counterpart of the old
+  /// `testFreeSpaceMatchesStatfs`, which was the only test of this function.
+  func testFreeSpaceMeasurementMatchesStatfs() {
     var stats = statfs()
     XCTAssertEqual(statfs("/System/Volumes/Data", &stats), 0)
-    let oczekiwane = Int(UInt64(stats.f_bavail) * UInt64(stats.f_bsize) / 1_073_741_824)
-    XCTAssertEqual(BufferGuardService.freeGB(), oczekiwane)
+    let expected = Int(UInt64(stats.f_bavail) * UInt64(stats.f_bsize) / 1_073_741_824)
+    XCTAssertEqual(BufferGuardService.freeGB(), expected)
   }
 
-  // MARK: - Czyste predykaty
+  // MARK: - Pure predicates
 
-  func testWznowienieWymagaObuWarunkowIPomiaru() {
-    // Wysylka nadgonila i miejsce jest - jedyny przypadek, ktory wznawia.
+  func testResumeNeedsBothConditionsAndAMeasurement() {
+    // The upload caught up and there is space - the only case that resumes.
     XCTAssertTrue(
-      BufferGuardService.canResumeLocally(backlog: 2, free: 500, thresholds: progi))
-    // Wysylka nadgonila, ale dysk nadal pelny.
+      BufferGuardService.canResumeLocally(backlog: 2, free: 500, thresholds: thresholds))
+    // The upload caught up, but the disk is still full.
     XCTAssertFalse(
-      BufferGuardService.canResumeLocally(backlog: 2, free: 10, thresholds: progi))
-    // Dysk pusty, ale zaleglosc jeszcze nie zeszla.
+      BufferGuardService.canResumeLocally(backlog: 2, free: 10, thresholds: thresholds))
+    // The disk is empty, but the backlog has not drained yet.
     XCTAssertFalse(
-      BufferGuardService.canResumeLocally(backlog: 100, free: 500, thresholds: progi))
-    // Brak pomiaru wolnego miejsca - nie wiadomo, wiec nie wznawiamy.
+      BufferGuardService.canResumeLocally(backlog: 100, free: 500, thresholds: thresholds))
+    // No free-space measurement - unknown, so we do not resume.
     XCTAssertFalse(
-      BufferGuardService.canResumeLocally(backlog: 2, free: nil, thresholds: progi))
-    // Brak odpowiedzi o zaleglosci - to samo.
+      BufferGuardService.canResumeLocally(backlog: 2, free: nil, thresholds: thresholds))
+    // No answer about the backlog - the same.
     XCTAssertFalse(
-      BufferGuardService.canResumeLocally(backlog: nil, free: 500, thresholds: progi))
+      BufferGuardService.canResumeLocally(backlog: nil, free: 500, thresholds: thresholds))
   }
 
-  func testMiejsceNaDyskuLiczySieTylkoGdyJestZmierzone() {
+  func testDriveSpaceCountsOnlyWhenMeasured() {
     XCTAssertFalse(BufferGuardService.driveHasRoom(freeBytes: nil, minGB: 30))
     XCTAssertFalse(BufferGuardService.driveHasRoom(freeBytes: 0, minGB: 30))
     XCTAssertFalse(
@@ -669,32 +672,33 @@ final class BufferGuardDecisionTests: XCTestCase {
       BufferGuardService.driveHasRoom(freeBytes: 30 * 1_073_741_824, minGB: 30))
   }
 
-  /// Galaz "nie wiem" w czujce MUSI byc zywa.
+  /// The "I do not know" branch in the monitor MUST be alive.
   ///
-  /// Przeglad zlapal moment, w ktorym `BackupHealth` porownywal do `nil`
-  /// wartosc nieopcjonalna - takie porownanie zawsze daje falsz, wiec galaz
-  /// byla martwa, a kod i tak sie kompilowal i testy przechodzily. Ten test
-  /// sprawdza SAMA galaz, nie typ: przy braku pomiaru ma powstac problem,
-  /// przy pomiarze - nie.
-  func testBrakPomiaruDyskuJestZglaszanyPrzezCzujke() {
-    let brak = BackupHealth.unmeasuredLocalDiskProblems(localFreeGB: nil)
-    XCTAssertEqual(brak.count, 1, "Nieudany statfs to awaria ochrony dysku, nie cisza.")
-    // `first`, nie `[0]`: przy porazce tej asercji indeks przerwalby CALY
-    // przebieg fatal errorem zamiast zglosic jeden nieudany test.
-    XCTAssertEqual(brak.first?.summary, "Nie da sie zmierzyc wolnego miejsca na dysku Maca")
+  /// A review caught the moment when `BackupHealth` compared a non-optional
+  /// value to `nil` - such a comparison always gives false, so the branch was
+  /// dead, and the code still compiled and the tests passed. This test checks
+  /// THE BRANCH ITSELF, not the type: with no measurement a problem has to
+  /// appear, with a measurement - not.
+  func testMissingDiskMeasurementIsReportedByTheMonitor() {
+    let problems = BackupHealth.unmeasuredLocalDiskProblems(localFreeGB: nil)
+    XCTAssertEqual(
+      problems.count, 1, "A failed statfs is a failure of the disk protection, not silence.")
+    // `first`, not `[0]`: if this assertion failed, the index would abort the
+    // WHOLE run with a fatal error instead of reporting one failed test.
+    XCTAssertEqual(problems.first?.summary, "Cannot measure free space on the Mac's disk")
 
     XCTAssertTrue(
       BackupHealth.unmeasuredLocalDiskProblems(localFreeGB: 400).isEmpty,
-      "Udany pomiar nie ma prawa niczego zglaszac.")
-    // Zmierzone zero to WYNIK, a nie brak wyniku - o niskim stanie mowi
-    // osobny prog w `evaluate`, nie ta funkcja.
+      "A successful measurement has no right to report anything.")
+    // A measured zero is a RESULT, not a lack of one - a low level is reported
+    // by a separate threshold in `evaluate`, not by this function.
     XCTAssertTrue(BackupHealth.unmeasuredLocalDiskProblems(localFreeGB: 0).isEmpty)
   }
 
-  /// Prog wolnego miejsca na Dysku jest ten sam, ktory `BackupHealth` uznaje
-  /// za ostrzegawczy - jedno zrodlo prawdy, zeby czujka i dozorca nie mogly
-  /// twierdzic czegos innego o tej samej liczbie.
-  func testProgMiejscaNaDyskuZgadzaSieZCzujka() {
+  /// The Drive free-space threshold is the same one `BackupHealth` treats as a
+  /// warning - one source of truth, so that the monitor and the watchdog cannot
+  /// claim different things about the same number.
+  func testDriveSpaceThresholdMatchesTheMonitor() {
     XCTAssertEqual(
       BufferGuardService.Thresholds().minDriveFreeGB, BackupHealth.driveFreeWarningGB)
   }

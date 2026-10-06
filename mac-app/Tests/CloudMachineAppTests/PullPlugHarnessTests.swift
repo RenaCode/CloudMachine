@@ -4,112 +4,115 @@ import XCTest
 @testable import CloudMachineCore
 @testable import cloudmachine_poc
 
-/// Czy harness `pullplug` odroznia "nie zmierzylem" od "zmierzylem i jest OK".
+/// Whether the `pullplug` harness tells "I did not measure" apart from "I
+/// measured and it is OK".
 ///
-/// Harness mierzy zachowanie hdiutil i FUSE-T, ale SPOSOB, w jaki zdaje z tego
-/// relacje, jest zwyklym kodem - i psul sie dokladnie tak, jak reszta tego
-/// projektu: przez zlanie braku wyniku z wynikiem. Zaden test tutaj nie tworzy
-/// obrazu dyskowego; dotykaja wylacznie czystych czesci.
+/// The harness measures the behaviour of hdiutil and FUSE-T, but the WAY it
+/// reports on it is ordinary code - and it broke exactly like the rest of this
+/// project: by merging a missing result with a result. No test here creates a
+/// disk image; they touch only the pure parts.
 final class PullPlugHarnessTests: XCTestCase {
 
-  // MARK: - Proba zapisu: "nie zaczalem" to nie "przerwano"
+  // MARK: - Test write: "never started" is not "interrupted"
 
-  /// TA usterka. `writeUntilItBreaks` zwracalo `false` takze wtedy, gdy
-  /// `createFile`/`FileHandle` padly od razu - a harness drukowal na to "zapis
-  /// przerwany, zgodnie z oczekiwaniem" i konczyl "Obraz przezyl kazde wyrwanie
-  /// podlogi", nie napisawszy ani jednego bajtu.
-  func testZapisKtoryNieMialGdzieSieZaczacNieJestPrzerwanym() {
-    let nieistniejacy = URL(fileURLWithPath: "/nie/ma/takiego/katalogu/obciazenie.bin")
-    let wynik = writeUntilItBreaks(to: nieistniejacy, megabytes: 1)
+  /// THE bug. `writeUntilItBreaks` returned `false` also when
+  /// `createFile`/`FileHandle` failed immediately - and the harness printed
+  /// "write interrupted, as expected" for it and ended with "The image survived
+  /// every floor pull", without having written a single byte.
+  func testWriteThatHadNowhereToStartIsNotInterrupted() {
+    let nonexistent = URL(fileURLWithPath: "/no/such/directory/load.bin")
+    let result = writeUntilItBreaks(to: nonexistent, megabytes: 1)
 
-    guard case .neverStarted(let powod) = wynik else {
-      return XCTFail("zapis, ktory sie nie zaczal, nie moze wygladac jak przerwany: \(wynik)")
+    guard case .neverStarted(let reason) = result else {
+      return XCTFail("a write that never started must not look interrupted: \(result)")
     }
     XCTAssertTrue(
-      powod.contains("obciazenie.bin"), "powod ma nazwac plik, o ktory chodzi: \(powod)")
-    XCTAssertNotEqual(wynik, .interrupted(megabytesWritten: 0))
+      reason.contains("load.bin"), "the reason has to name the file in question: \(reason)")
+    XCTAssertNotEqual(result, .interrupted(megabytesWritten: 0))
   }
 
-  /// Druga strona tej samej poprawki: zapis, ktory PRZESZEDL cale zamowienie,
-  /// tez nie jest sukcesem testu - podloga zniknela juz po nim, wiec runda nic
-  /// nie zmierzyla. To ten sam blad, przed ktorym ostrzega komentarz o
-  /// `arc4random_buf`, tylko widziany od strony raportu.
-  func testZapisDoKoncaJestRozpoznawalnyJakoBrakPomiaru() throws {
-    let katalog = FileManager.default.temporaryDirectory
+  /// The other side of the same fix: a write that GOT THROUGH the whole order
+  /// is not a test success either - the floor disappeared only after it, so the
+  /// round measured nothing. It is the same bug the comment about
+  /// `arc4random_buf` warns about, only seen from the report's side.
+  func testWriteToTheEndIsRecognizableAsNoMeasurement() throws {
+    let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("cm-pullplug-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: katalog, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: katalog) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
 
-    let wynik = writeUntilItBreaks(
-      to: katalog.appendingPathComponent("obciazenie.bin"), megabytes: 1)
-    XCTAssertEqual(wynik, .completed(megabytesWritten: 1))
+    let result = writeUntilItBreaks(
+      to: directory.appendingPathComponent("load.bin"), megabytes: 1)
+    XCTAssertEqual(result, .completed(megabytesWritten: 1))
   }
 
-  // MARK: - fsck: "nie udalo sie sprawdzic" to nie "niespojny"
+  // MARK: - fsck: "could not check" is not "inconsistent"
 
-  func testWynikFsckZeroToSpojny() {
+  func testFsckExitZeroIsConsistent() {
     XCTAssertEqual(
       PullPlugCommand.classify(fsck: ProcessResult(stdout: "ok", stderr: "", exitCode: 0)),
       .consistent)
   }
 
-  func testNiezerowyKodFsckToNiespojnosc() {
+  func testNonZeroFsckExitIsInconsistency() {
     XCTAssertEqual(
       PullPlugCommand.classify(
         fsck: ProcessResult(stdout: "", stderr: "corrupt", exitCode: 1)),
       .inconsistent)
   }
 
-  /// Wzorzec z `BackupImageService.verifyLocked()`: nieuruchomiony `fsck_apfs`
-  /// (brak binarki, ubity proces, wyrwane urzadzenie) dawal to samo `false`, co
-  /// `fsck_apfs`, ktory znalazl uszkodzenie - harness meldowal wtedy "backup
-  /// stracony" i liczyl nieodwracalna strate, nie majac ani jednego wyniku.
-  func testBrakWynikuFsckToNieNiespojnosc() {
-    let wynik = PullPlugCommand.classify(fsck: nil)
-    XCTAssertNotEqual(wynik, .inconsistent, "brak wyniku nie moze udawac uszkodzenia")
-    guard case .notChecked = wynik else { return XCTFail("dostalem: \(wynik)") }
+  /// The pattern from `BackupImageService.verifyLocked()`: a `fsck_apfs` that
+  /// never ran (missing binary, killed process, pulled device) gave the same
+  /// `false` as a `fsck_apfs` that found damage - the harness then reported
+  /// "backup lost" and counted an irreversible loss without having a single
+  /// result.
+  func testMissingFsckResultIsNotInconsistency() {
+    let result = PullPlugCommand.classify(fsck: nil)
+    XCTAssertNotEqual(result, .inconsistent, "a missing result must not pretend to be damage")
+    guard case .notChecked = result else { return XCTFail("got: \(result)") }
   }
 
-  // MARK: - Ostatnie zdanie przebiegu
+  // MARK: - The last sentence of the run
 
-  func testPrzebiegBezStratIBezDziurOrzekaPrzezycie() {
-    let linie = PullPlugCommand.summary(
+  func testRunWithoutLossesOrGapsDeclaresSurvival() {
+    let lines = PullPlugCommand.summary(
       requestedRounds: 3, executedRounds: 3, lost: 0, unmeasured: 0)
     XCTAssertTrue(
-      linie.contains { $0.contains("przezyl kazde wyrwanie podlogi") }, "dostalem: \(linie)")
+      lines.contains { $0.contains("survived every floor pull") }, "got: \(lines)")
   }
 
-  /// Sedno punktu 14: przebieg, w ktorym cokolwiek nie zostalo zmierzone, NIE
-  /// MA PRAWA orzekac, ze obraz przezyl. Harness nie wie, czy probowal go zabic.
-  func testPrzebiegZRundaBezPomiaruNieOrzekaPrzezycia() {
-    let linie = PullPlugCommand.summary(
+  /// The core of point 14: a run in which anything went unmeasured HAS NO
+  /// RIGHT to declare that the image survived. The harness does not know
+  /// whether it tried to kill it.
+  func testRunWithAnUnmeasuredRoundDoesNotDeclareSurvival() {
+    let lines = PullPlugCommand.summary(
       requestedRounds: 3, executedRounds: 3, lost: 0, unmeasured: 1)
     XCTAssertFalse(
-      linie.contains { $0.contains("przezyl") },
-      "runda bez pomiaru nie moze konczyc sie zdaniem o przezyciu: \(linie)")
+      lines.contains { $0.contains("survived") },
+      "a round without a measurement must not end with a sentence about survival: \(lines)")
     XCTAssertTrue(
-      linie.contains { $0.contains("NIC NIE DOWODZI") }, "dostalem: \(linie)")
+      lines.contains { $0.contains("PROVES NOTHING") }, "got: \(lines)")
     XCTAssertTrue(
-      linie.contains { $0.contains("rund bez pomiaru: 1") }, "dostalem: \(linie)")
+      lines.contains { $0.contains("rounds without a measurement: 1") }, "got: \(lines)")
   }
 
-  /// Zero wykonanych rund tez nie jest sukcesem - a przy `rounds: 0` w liczniku
-  /// dawnego podsumowania wychodzilo "nieodwracalnych strat: 0", czyli
-  /// "przezyl".
-  func testPrzebiegBezAniJednejRundyNiczegoNieOrzeka() {
-    let linie = PullPlugCommand.summary(
+  /// Zero executed rounds is not a success either - and with `rounds: 0` the
+  /// counter of the old summary came out as "irreversible losses: 0", i.e.
+  /// "survived".
+  func testRunWithoutASingleRoundDeclaresNothing() {
+    let lines = PullPlugCommand.summary(
       requestedRounds: 3, executedRounds: 0, lost: 0, unmeasured: 0)
-    XCTAssertFalse(linie.contains { $0.contains("przezyl") }, "dostalem: \(linie)")
-    XCTAssertTrue(linie.contains { $0.contains("NIC NIE ZMIERZYL") }, "dostalem: \(linie)")
+    XCTAssertFalse(lines.contains { $0.contains("survived") }, "got: \(lines)")
+    XCTAssertTrue(lines.contains { $0.contains("MEASURED NOTHING") }, "got: \(lines)")
   }
 
-  /// Stwierdzona strata jest wynikiem i ma byc widoczna nawet obok dziur -
-  /// inaczej "poprawka" zamienilaby falszywy sukces na przemilczana awarie.
-  func testStwierdzonaStrataNieZnikaZaBrakiemPomiaru() {
-    let linie = PullPlugCommand.summary(
+  /// A detected loss is a result and has to stay visible even next to gaps -
+  /// otherwise the "fix" would turn a false success into a hushed-up failure.
+  func testDetectedLossDoesNotHideBehindMissingMeasurement() {
+    let lines = PullPlugCommand.summary(
       requestedRounds: 3, executedRounds: 3, lost: 1, unmeasured: 1)
     XCTAssertTrue(
-      linie.contains { $0.contains("architektura gubi backup") }, "dostalem: \(linie)")
-    XCTAssertFalse(linie.contains { $0.contains("przezyl") }, "dostalem: \(linie)")
+      lines.contains { $0.contains("architecture loses the backup") }, "got: \(lines)")
+    XCTAssertFalse(lines.contains { $0.contains("survived") }, "got: \(lines)")
   }
 }

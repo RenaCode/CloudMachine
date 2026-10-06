@@ -37,7 +37,7 @@ final class MachinesConfigTests: XCTestCase {
       remoteRootFolder: "CloudMachine",
       machines: [MachineEntry(key: "mac-1", displayName: "Mac 1", limitGB: 1900)]
     )
-    // safeBudgetGB = 1800, allocatedGB = 1900 -> nad budzetem
+    // safeBudgetGB = 1800, allocatedGB = 1900 -> over budget
     XCTAssertTrue(config.isOverBudget)
   }
 
@@ -53,10 +53,10 @@ final class MachinesConfigTests: XCTestCase {
   }
 
   // MARK: - Codable round-trip
-  // machines.json trzyma maszyny jako SLOWNIK kluczowany po "key" (nie
-  // tablice), zeby recznie edytowany JSON byl czytelny - kodowanie/dekodowanie
-  // konwertuje to w obie strony do/z [MachineEntry]. Regresja tutaj oznacza
-  // ciche gubienie lub duplikowanie wpisow maszyn przy kazdym zapisie configu.
+  // machines.json keeps the machines as a DICTIONARY keyed by "key" (not an
+  // array), so that hand-edited JSON is readable - encoding/decoding converts
+  // it both ways to/from [MachineEntry]. A regression here means silently
+  // losing or duplicating machine entries on every config save.
 
   func testCodable_roundTripPreservesData() throws {
     let original = MachinesConfig(
@@ -77,8 +77,8 @@ final class MachinesConfigTests: XCTestCase {
     XCTAssertEqual(decoded.safetyMarginPercent, original.safetyMarginPercent)
     XCTAssertEqual(decoded.remoteName, original.remoteName)
     XCTAssertEqual(decoded.remoteRootFolder, original.remoteRootFolder)
-    // Dekodowanie sortuje po kluczu (patrz init(from:)) - deterministyczna
-    // kolejnosc w UI niezaleznie od kolejnosci kluczy w surowym JSON-ie.
+    // Decoding sorts by key (see init(from:)) - a deterministic order in the
+    // UI regardless of the key order in the raw JSON.
     XCTAssertEqual(decoded.machines, original.machines.sorted { $0.key < $1.key })
     XCTAssertEqual(decoded.machines.map(\.key), ["alpha-mac", "zebra-mac"])
   }
@@ -91,15 +91,15 @@ final class MachinesConfigTests: XCTestCase {
           "remote_name": "gdrive-cloudmachine",
           "remote_root_folder": "CloudMachine",
           "machines": {
-              "marcin-mac-studio": { "display_name": "Marcin's Mac Studio", "limit_gb": 3000 }
+              "alex-mac-studio": { "display_name": "Alex's Mac Studio", "limit_gb": 3000 }
           }
       }
       """.data(using: .utf8)!
 
     let config = try JSONDecoder().decode(MachinesConfig.self, from: json)
     XCTAssertEqual(config.machines.count, 1)
-    XCTAssertEqual(config.machines.first?.key, "marcin-mac-studio")
-    XCTAssertEqual(config.machines.first?.displayName, "Marcin's Mac Studio")
+    XCTAssertEqual(config.machines.first?.key, "alex-mac-studio")
+    XCTAssertEqual(config.machines.first?.displayName, "Alex's Mac Studio")
     XCTAssertEqual(config.machines.first?.limitGB, 3000)
   }
 
@@ -110,8 +110,8 @@ final class MachinesConfigTests: XCTestCase {
       driveTotalGB: 5000, safetyMarginPercent: 10, remoteName: "gdrive-cloudmachine",
       remoteRootFolder: "CloudMachine", machines: [])
     XCTAssertEqual(
-      config.remotePath(forMachineKey: "marcin-mac-studio"),
-      "gdrive-cloudmachine:CloudMachine/marcin-mac-studio")
+      config.remotePath(forMachineKey: "alex-mac-studio"),
+      "gdrive-cloudmachine:CloudMachine/alex-mac-studio")
   }
 
   func testLimitGB_returnsLimitForKnownMachine() {
@@ -126,16 +126,16 @@ final class MachinesConfigTests: XCTestCase {
     let config = MachinesConfig(
       driveTotalGB: 5000, safetyMarginPercent: 10, remoteName: "gdrive-cloudmachine",
       remoteRootFolder: "CloudMachine", machines: [])
-    XCTAssertNil(config.limitGB(forMachineKey: "nieznana-maszyna"))
+    XCTAssertNil(config.limitGB(forMachineKey: "unknown-machine"))
   }
 
   // MARK: - config/machines.example.json
 
-  /// Dekoduje PRAWDZIWY plik z repo (nie fixture w tescie) - regresja tutaj
-  /// oznaczaloby, ze wlasny przykladowy config projektu przestal sie parsowac
-  /// (np. po zmianie schematu bez zaktualizowania pliku). Sprawdza tez, ze
-  /// dodatkowe, nierozpoznane pole `_comment` jest bezpiecznie ignorowane
-  /// przez niestandardowy `init(from:)`.
+  /// Decodes the REAL file from the repo (not a fixture in the test) - a
+  /// regression here would mean the project's own example config stopped
+  /// parsing (e.g. after a schema change without updating the file). It also
+  /// checks that the extra, unrecognized `_comment` field is safely ignored by
+  /// the custom `init(from:)`.
   func testDecode_realExampleConfigFileParsesCorrectly() throws {
     let exampleConfigPath = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()  // CloudMachineAppTests
@@ -150,6 +150,6 @@ final class MachinesConfigTests: XCTestCase {
     XCTAssertEqual(config.remoteName, "gdrive-cloudmachine")
     XCTAssertEqual(config.remoteRootFolder, "CloudMachine")
     XCTAssertEqual(config.machines.count, 2)
-    XCTAssertEqual(config.machines.map(\.key).sorted(), ["imac-domowy", "macbook-pro-marcin"])
+    XCTAssertEqual(config.machines.map(\.key).sorted(), ["imac-home", "macbook-pro"])
   }
 }

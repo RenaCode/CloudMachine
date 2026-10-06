@@ -1,15 +1,15 @@
 import Foundation
 
-/// Obraz backupu lezacy na Google Drive - port `gdrive/create-image.sh`,
-/// `attach-image.sh` i `verify-image.sh`.
+/// The backup image living on Google Drive - a port of `gdrive/create-image.sh`,
+/// `attach-image.sh` and `verify-image.sh`.
 ///
-/// Time Machine dostaje do reki podpiety, zwykly wolumen APFS i nie wie, ze
-/// pasma obrazu leza w chmurze. Dzieki temu w sciezce zapisu nie ma sieciowego
-/// systemu plikow - odpada SMB i cala klasa awarii, ktore trapia backupy
-/// sieciowe.
+/// Time Machine is handed an attached, ordinary APFS volume and does not know
+/// that the image's bands live in the cloud. Thanks to that there is no network
+/// file system in the write path - SMB is gone, and with it a whole class of
+/// failures that plague network backups.
 public enum BackupImageService {
 
-  // MARK: - Sciezki
+  // MARK: - Paths
 
   public static let imageName = "mac-studio"
   public static let volumeName = "CloudMachine"
@@ -18,73 +18,79 @@ public enum BackupImageService {
     DriveBufferService.mountPoint.appendingPathComponent("\(imageName).sparsebundle")
   }
 
-  /// Punkt montowania celu.
+  /// The destination's mount point.
   ///
-  /// `/Volumes` jest sciezka, ktora Time Machine na pewno przyjmuje - i to jest
-  /// jedyny powod, dla ktorego tu siedzi. Cena: po nieczystym odpieciu katalog
-  /// `/Volumes/<nazwa>` zostaje jako osierocony i blokuje ponowne podpiecie.
-  /// Nalezy do uzytkownika, ale lezy w `/Volumes` nalezacym do roota, wiec
-  /// `rmdir` odmawia - agent dzialajacy jako uzytkownik nie posprzata po sobie
-  /// sam. Alternatywa (katalog w calosci nasz, samonaprawialny) jest
-  /// nieprzetestowana: nie wiadomo, czy `tmutil setdestination` przyjmie cel
-  /// spoza `/Volumes`.
+  /// `/Volumes` is a path Time Machine is sure to accept - and that is the only
+  /// reason it is here. The price: after an unclean detach the
+  /// `/Volumes/<name>` directory is left behind orphaned and blocks the next
+  /// attach. It belongs to the user, but lives in root-owned `/Volumes`, so
+  /// `rmdir` refuses - an agent running as the user cannot clean up after
+  /// itself. The alternative (a directory wholly ours, self-healing) is
+  /// untested: it is unknown whether `tmutil setdestination` accepts a
+  /// destination outside `/Volumes`.
   public static var targetPath: URL {
     URL(fileURLWithPath: "/Volumes/\(volumeName)")
   }
 
-  /// 32 MB na pasmo, w sektorach po 512 B. Wybrane pomiarem - patrz
-  /// `cloudmachine-poc amplification` i tabela w `gdrive/README.md`.
+  /// 32 MB per band, in 512 B sectors. Chosen by measurement - see
+  /// `cloudmachine-poc amplification` and the table in `gdrive/README.md`.
   ///
-  /// Dwie sily ciagna w przeciwne strony. Google Drive przepuszcza okolo dwoch
-  /// operacji na plik na sekunde, wiec male pasma wydluzaja pierwsza wysylke.
-  /// Ale kazda zmiana brudzi cale pasmo, wiec duze pasma mnoza transfer przy
-  /// kazdym przyroscie - zmierzone 768 MB przy 64 MB wobec 384 MB przy 8 MB na
-  /// te same 300 MB realnej zmiany. 32 MB to punkt, w ktorym pierwsza wysylka
-  /// przestaje byc ograniczona tempem operacji, a zaczyna pasmem lacza.
+  /// Two forces pull in opposite directions. Google Drive lets through about
+  /// two operations per file per second, so small bands lengthen the first
+  /// upload. But every change dirties the whole band, so large bands multiply
+  /// the transfer on every increment - measured 768 MB at 64 MB versus 384 MB
+  /// at 8 MB for the same 300 MB of real change. 32 MB is the point where the
+  /// first upload stops being limited by the operation rate and starts being
+  /// limited by link bandwidth.
   ///
-  /// Dziala tylko przy tworzeniu obrazu - pozniej wymaga backupu od zera.
+  /// Only takes effect when the image is created - changing it later requires a
+  /// backup from scratch.
   public static let bandSectors = 65536
 
   private static let fsckPath =
     "/System/Library/Filesystems/apfs.fs/Contents/Resources/fsck_apfs"
 
-  // MARK: - Wzajemne wykluczenie
+  // MARK: - Mutual exclusion
 
-  /// Nazwa blokady, pod ktora chodza WSZYSTKIE operacje zmieniajace stan
-  /// obrazu: `create`, `attach`, `detach`, `verify`.
+  /// Name of the lock under which ALL operations that change the image's state
+  /// run: `create`, `attach`, `detach`, `verify`.
   ///
-  /// Do 23 wrzesnia 2026 nie wykluczaly sie nawzajem niczym - `CMLock` istnial,
-  /// ale `withCMLock` nie bylo wolane z ani jednego miejsca w repo. Realny
-  /// przebieg, ktory to ujawnil: `detach` czeka na drenaz (35 s przerwy na
-  /// zapelnienie kolejki + do 600 s na cisze, czyli okno do 10,5 minuty),
-  /// a agent `gdrive-attach` tyka co 900 s. Agent regularnie wchodzil w to
-  /// okno, widzial obraz jako odpiety - bo `hdiutil detach` juz przeszedl -
-  /// i podpinal go z powrotem w srodku cudzego odpinania.
+  /// Until 23 September 2026 they did not exclude each other at all - `CMLock`
+  /// existed, but `withCMLock` was not called from a single place in the repo.
+  /// The real run that exposed it: `detach` waits for the drain (35 s pause for
+  /// the queue to fill + up to 600 s for quiet, i.e. a window of up to 10.5
+  /// minutes), and the `gdrive-attach` agent ticks every 900 s. The agent
+  /// regularly hit that window, saw the image as detached - because
+  /// `hdiutil detach` had already gone through - and attached it back in the
+  /// middle of someone else's detach.
   ///
-  /// Drugi wariant tego samego wyscigu: `purgeStaleDevices()` z tiku agenta
-  /// robi `hdiutil detach -force` na urzadzeniu, na ktorym akurat chodzi
-  /// `fsck_apfs` z `verify` - i `verify` meldowal "Obraz NIESPOJNY" o calym
-  /// backupie (patrz komentarz przy `verify`).
+  /// A second variant of the same race: `purgeStaleDevices()` from the agent's
+  /// tick runs `hdiutil detach -force` on the device that `fsck_apfs` from
+  /// `verify` is running on at that moment - and `verify` reported "Image
+  /// INCONSISTENT" about the whole backup (see the comment at `verify`).
   public static let lockName = "image"
 
-  /// Wynik operacji, ktora sie NIE WYDARZYLA, bo obraz zajmuje inna operacja.
+  /// Result of an operation that DID NOT HAPPEN, because another operation
+  /// holds the image.
   ///
-  /// `withCMLock` oddaje wtedy `nil` i to `nil` nie moze przejsc jako sukces:
-  /// `attach`, ktorego nie bylo, zameldowalby "Podpiete", a `detach`, ktorego
-  /// nie bylo - "wszystko wyslane na Google Drive".
-  private static func busyResult(_ what: String) -> CMActionResult {
-    CMLogger.log("\(what): blokade '\(lockName)' trzyma inna operacja na obrazie - nie robie nic")
+  /// `withCMLock` then returns `nil`, and that `nil` must not pass as success:
+  /// an `attach` that never happened would report "Attached", and a `detach`
+  /// that never happened - "everything uploaded to Google Drive".
+  ///
+  /// `operation` goes to the log, `displayName` to the person.
+  private static func busyResult(_ operation: String, displayName: String) -> CMActionResult {
+    CMLogger.log(
+      "\(operation): lock '\(lockName)' is held by another image operation - doing nothing")
     return CMActionResult(
       succeeded: false,
-      message: """
-        \(what): inna operacja na obrazie jest w toku (tworzenie, podpinanie, \
-        odpinanie albo sprawdzanie) - NIE zrobiono nic. Sprobuj za chwile.
-        """,
-      // Nie awaria, tylko "nie teraz" - patrz `CMActionResult.Disposition`.
+      message: L10n.tr(
+        "%@: another image operation is in progress (creating, attaching, detaching or verifying) - NOTHING was done. Try again shortly.",
+        displayName),
+      // Not a failure, just "not now" - see `CMActionResult.Disposition`.
       didNotRun: true)
   }
 
-  // MARK: - Stan
+  // MARK: - State
 
   public static var exists: Bool {
     var isDir: ObjCBool = false
@@ -92,21 +98,22 @@ public enum BackupImageService {
     return ok && isDir.boolValue
   }
 
-  /// Czy wolumen figuruje w tablicy montowan.
+  /// Whether the volume is in the mount table.
   ///
-  /// UWAGA: to mowi tylko, ze `hdiutil` kiedys podpial obraz - NIE, ze obraz
-  /// oddaje dane. Martwe urzadzenie (patrz `ImageProbe`) siedzi w tej tablicy
-  /// tak samo jak zywe. Do pytania "czy Time Machine ma gdzie pisac" sluzy
-  /// `attachment`; `isAttached` zostaje tam, gdzie chodzi o samo odpiecie.
+  /// NOTE: this only says that `hdiutil` attached the image at some point - NOT
+  /// that the image returns data. A dead device (see `ImageProbe`) sits in that
+  /// table just like a live one. The question "does Time Machine have somewhere
+  /// to write" is answered by `attachment`; `isAttached` stays where only the
+  /// detach itself matters.
   public static var isAttached: Bool { attachedState() ?? false }
 
-  /// Jak `isAttached`, ale `nil` = tablicy montowan NIE UDALO SIE odczytac.
+  /// Like `isAttached`, but `nil` = the mount table COULD NOT be read.
   ///
-  /// Ta sama zmiana, co w `DriveBufferService.mountPoints()` i z tego samego
-  /// powodu: dotad szlo to przez `/sbin/mount` bez limitu czasu, a pyta o
-  /// wolumen, ktory bywa MARTWY - czyli dokladnie o ten, na ktorym taki odczyt
-  /// potrafi zawisnac. Teraz idzie przez tablice jadra, bez procesu i bez
-  /// dotykania systemu plikow.
+  /// The same change as in `DriveBufferService.mountPoints()` and for the same
+  /// reason: until now this went through `/sbin/mount` without a time limit,
+  /// and it asks about a volume that is sometimes DEAD - that is, exactly the
+  /// one on which such a read can hang. Now it goes through the kernel table,
+  /// without a process and without touching the file system.
   public static func attachedState() -> Bool? {
     guard let points = DriveBufferService.mountPoints() else { return nil }
     return points.contains(targetPath.path)
@@ -115,53 +122,54 @@ public enum BackupImageService {
   public enum Attachment: Equatable, Sendable {
     case detached
     case attached
-    /// W tablicy montowan, ale odczyt pada z podanym `errno`. Time Machine
-    /// widzi ten stan jako "dysk odlaczony" i nie zrobi ani jednej kopii,
-    /// dopoki obraz nie zostanie odpiety i podpiety na nowo.
+    /// In the mount table, but reads fail with the given `errno`. Time Machine
+    /// sees this state as "disk disconnected" and will not make a single
+    /// backup until the image is detached and attached again.
     case dead(errno: Int32)
-    /// O stanie obrazu NIE WIADOMO nic. To nie jest `.detached`: `.detached`
-    /// to twierdzenie ("sprawdzilem, nie ma"), a tu nie bylo czego sprawdzic.
+    /// NOTHING is known about the image's state. This is not `.detached`:
+    /// `.detached` is a claim ("I checked, it is not there"), while here there
+    /// was nothing to check.
     ///
-    /// Dwie przyczyny, obie prowadzace do tej samej decyzji (wstrzymaj, nie
-    /// ruszaj obrazu):
+    /// Two causes, both leading to the same decision (hold off, do not touch
+    /// the image):
     ///
-    /// 1. Tablicy montowan nie udalo sie odczytac. Po przejsciu na
-    ///    `getmntinfo(MNT_NOWAIT)` skrajnie malo prawdopodobne - to odczyt
-    ///    z pamieci jadra, ktory nie ma jak zawisnac ani pojsc do sieci.
-    /// 2. Obraz JEST w tablicy montowan, ale sonda czytelnosci nie
-    ///    odpowiedziala w `ImageProbe.probeTimeout` (od 26.09.2026 - wczesniej
-    ///    nie odpowiadala w nieskonczonosc i zabierala ze soba wolajacego).
+    /// 1. The mount table could not be read. Since the switch to
+    ///    `getmntinfo(MNT_NOWAIT)` extremely unlikely - it is a read from
+    ///    kernel memory that has no way to hang or go to the network.
+    /// 2. The image IS in the mount table, but the readability probe did not
+    ///    answer within `ImageProbe.probeTimeout` (since 26.09.2026 - before
+    ///    that it did not answer forever and took the caller down with it).
     ///
-    /// Osobnego, piatego stanu na drugi przypadek NIE ma swiadomie: kazda
-    /// decyzja podejmowana na tym typie jest w obu przypadkach identyczna,
-    /// a rozdzielenie ich zachecaloby do rozjechania sie tych drog. Kto
-    /// pisze do czlowieka i musi podac przyczyne, bierze ja z
+    /// There is deliberately NO separate, fifth state for the second case:
+    /// every decision made on this type is identical in both cases, and
+    /// separating them would invite those paths to drift apart. Whoever writes
+    /// to a person and has to give the cause takes it from
     /// `attachmentReading()`.
     case unknown
 
-    /// Czy Time Machine ma gdzie pisac. `.unknown` swiadomie daje `false` -
-    /// to jest pytanie "czy MOGE na tym polegac", a na niewiadomej polegac
-    /// nie mozna.
+    /// Whether Time Machine has somewhere to write. `.unknown` deliberately
+    /// gives `false` - the question is "CAN I rely on this", and you cannot
+    /// rely on an unknown.
     public var isUsable: Bool { self == .attached }
   }
 
-  /// Stan podpiecia z uwzglednieniem tego, czy urzadzenie ZYJE.
+  /// Attachment state taking into account whether the device is ALIVE.
   ///
-  /// `async`, a nie wlasciwosc obliczana, odkad sonda czytelnosci ma limit
-  /// czasu: czekanie na nia nie moze blokowac watku wolajacego (patrz
-  /// `ImageProbe` - `@MainActor` panelu i czujka bez `KeepAlive` placily za to
-  /// zamrozonym interfejsem i cisza).
+  /// `async` rather than a computed property ever since the readability probe
+  /// got a time limit: waiting for it must not block the calling thread (see
+  /// `ImageProbe` - the panel's `@MainActor` and the monitor without
+  /// `KeepAlive` paid for that with a frozen interface and silence).
   public static func attachment() async -> Attachment {
     await attachmentReading().attachment
   }
 
-  /// Jak `attachment()`, ale mowi TEZ, czy "nie wiem" wzielo sie z sondy,
-  /// ktora nie odpowiedziala w czasie.
+  /// Like `attachment()`, but ALSO says whether "I do not know" came from a
+  /// probe that did not answer in time.
   ///
-  /// Dla decyzji ta roznica nie ma znaczenia (oba przypadki wstrzymuja), ale
-  /// dla KOMUNIKATU ma ogromne: "nie udalo sie odczytac tablicy montowan" kaze
-  /// czlowiekowi sprawdzic zupelnie co innego niz "obraz jest w tablicy, ale
-  /// odczyt z niego nie wraca".
+  /// For the decision the difference does not matter (both cases hold off),
+  /// but for the MESSAGE it matters a lot: "could not read the mount table"
+  /// tells a person to check something entirely different than "the image is
+  /// in the table, but reads from it do not come back".
   public static func attachmentReading() async -> (attachment: Attachment, probeTimedOut: Bool) {
     switch attachedState() {
     case .none: return (.unknown, false)
@@ -170,8 +178,8 @@ public enum BackupImageService {
       switch await ImageProbe.probe(volume: targetPath) {
       case .dead(let errno): return (.dead(errno: errno), false)
       case .readable, .nothingToProbe: return (.attached, false)
-      // NIE `.dead`: `.dead` znaczy "urzadzenie odpowiedzialo bledem
-      // urzadzenia", a tu urzadzenie nie odpowiedzialo wcale.
+      // NOT `.dead`: `.dead` means "the device answered with a device error",
+      // while here the device did not answer at all.
       case .timedOut: return (.unknown, true)
       }
     }
@@ -179,40 +187,41 @@ public enum BackupImageService {
 
   public static func describe(_ attachment: Attachment, probeTimedOut: Bool = false) -> String {
     switch attachment {
-    case .detached: return "BRAK"
+    case .detached: return L10n.tr("NOT ATTACHED")
     case .attached: return "OK  (\(targetPath.path))"
     case .dead(let errno):
-      return
-        "MARTWY - w tablicy montowan, ale odczyt pada (errno \(errno)); attach-image podpina na nowo"
+      return L10n.tr(
+        "DEAD - in the mount table, but reads fail (errno %@); attach-image attaches it again",
+        "\(errno)")
     case .unknown where probeTimedOut:
-      return
-        "NIE WIADOMO - w tablicy montowan, ale sonda czytelnosci nie odpowiedziala w \(Int(ImageProbe.probeTimeout)) s"
+      return L10n.tr(
+        "UNKNOWN - in the mount table, but the readability probe did not answer within %@ s",
+        "\(Int(ImageProbe.probeTimeout))")
     case .unknown:
-      return "NIE WIADOMO - nie udalo sie odczytac tablicy montowan"
+      return L10n.tr("UNKNOWN - could not read the mount table")
     }
   }
 
-  /// Punkty montowania przegladanych migawek backupu.
+  /// Mount points of browsed backup snapshots.
   ///
-  /// Czysta wersja, zeby dalo sie ja sprawdzic testem bez montowania
-  /// czegokolwiek - wczesniej to samo wychodzilo z parsowania wydruku
-  /// `/sbin/mount` (`" on "` ... `" ("`), wiec nie bylo do czego podstawic
-  /// probki.
+  /// A pure version, so that it can be tested without mounting anything -
+  /// previously the same thing came from parsing `/sbin/mount` output
+  /// (`" on "` ... `" ("`), so there was nothing to substitute a sample for.
   static func browsedSnapshotMounts(_ points: [String]) -> [String] {
     points.filter { $0.hasPrefix("/Volumes/.timemachine/") }
   }
 
-  // MARK: - Zawieszone urzadzenia
+  // MARK: - Hung devices
 
-  /// Urzadzenia `/dev/diskN` podpiete pod wskazany obraz.
+  /// `/dev/diskN` devices attached to the given image.
   ///
-  /// Po wymuszonym odpieciu urzadzenie potrafi zostac w systemie jako zombie.
-  /// Ponowne podpiecie konczy sie wtedy bledem "no mountable file systems",
-  /// albo - gorzej - zwraca martwy uchwyt, na ktorym `fsck_apfs` melduje
-  /// "failed to read container superblock" z UUID z samych zer. Wyglada to jak
-  /// skasowany backup, a jest tylko nieczytelnym urzadzeniem: wczesniejsza
-  /// wersja testu wyrywania podlogi trzy razy z rzedu orzekla na tej podstawie
-  /// utrate danych, ktore byly cale.
+  /// After a forced detach a device can remain in the system as a zombie.
+  /// A new attach then ends with a "no mountable file systems" error, or -
+  /// worse - returns a dead handle on which `fsck_apfs` reports "failed to read
+  /// container superblock" with an all-zero UUID. It looks like a deleted
+  /// backup, but is only an unreadable device: an earlier version of the
+  /// pull-the-floor test concluded three times in a row, on that basis, that
+  /// data was lost which was in fact intact.
   public static func devicesForImage(_ image: URL = imagePath) async -> [String] {
     guard let result = try? await ProcessRunner.run("/usr/bin/hdiutil", ["info"], timeout: 60),
       result.succeeded
@@ -220,8 +229,8 @@ public enum BackupImageService {
     return parseDevices(hdiutilInfo: result.stdout, imagePath: image.path)
   }
 
-  /// Czysta wersja parsera - `hdiutil info` grupuje wpisy w bloki, gdzie po
-  /// linii `image-path` naleza wszystkie kolejne linie `/dev/diskN`.
+  /// Pure version of the parser - `hdiutil info` groups entries into blocks,
+  /// where all `/dev/diskN` lines after an `image-path` line belong to it.
   public static func parseDevices(hdiutilInfo: String, imagePath: String) -> [String] {
     var devices: [String] = []
     var currentImage: String?
@@ -236,12 +245,12 @@ public enum BackupImageService {
       }
       guard line.hasPrefix("/dev/disk"), currentImage == imagePath else { continue }
       let device = String(line.prefix(while: { !$0.isWhitespace }))
-      // Interesuje nas urzadzenie nadrzedne (/dev/disk7), nie partycja
-      // (/dev/disk7s1) - odpiecie nadrzednego zabiera ze soba partycje.
+      // We want the parent device (/dev/disk7), not the partition
+      // (/dev/disk7s1) - detaching the parent takes the partitions with it.
       //
-      // UWAGA: kuszace `!device.contains("s")` jest BLEDNE, bo "disk" tez
-      // zawiera "s" i odrzuca wszystko. Sprawdzamy, czy po prefiksie zostaly
-      // same cyfry.
+      // NOTE: the tempting `!device.contains("s")` is WRONG, because "disk"
+      // contains an "s" too and it rejects everything. We check whether only
+      // digits are left after the prefix.
       let suffix = device.dropFirst("/dev/disk".count)
       guard !suffix.isEmpty, suffix.allSatisfy(\.isNumber) else { continue }
       if !devices.contains(device) {
@@ -258,16 +267,16 @@ public enum BackupImageService {
     }
   }
 
-  // MARK: - Tworzenie
+  // MARK: - Creation
 
-  /// Tworzy obraz NA MIEJSCU, na zamontowanym Drive.
+  /// Creates the image IN PLACE, on the mounted Drive.
   ///
-  /// Utworzenie go lokalnie i przeniesienie daje obraz, ktorego `hdiutil`
-  /// pozniej nie otwiera ("CBSDBackingStore::newProbe stat() failed"), mimo ze
-  /// wszystkie pliki i pasma sa na swoim miejscu i daja sie czytac.
+  /// Creating it locally and moving it gives an image that `hdiutil` later
+  /// does not open ("CBSDBackingStore::newProbe stat() failed"), even though
+  /// all files and bands are in place and readable.
   public static func create(sizeGB: Int) async -> CMActionResult {
     await withCMLock(lockName) { await createLocked(sizeGB: sizeGB) }
-      ?? busyResult("Tworzenie obrazu")
+      ?? busyResult("Image creation", displayName: L10n.tr("Image creation"))
   }
 
   private static func createLocked(sizeGB: Int) async -> CMActionResult {
@@ -276,38 +285,37 @@ public enum BackupImageService {
       break
     case .some(false):
       return CMActionResult(
-        succeeded: false, message: "Drive nie jest zamontowany - najpierw uruchom bufor.")
+        succeeded: false, message: L10n.tr("Drive is not mounted - start the buffer first."))
     case .none:
-      // Nie `isMounted`: tworzenie obrazu jest NIEODWRACALNE, wiec "nie wiem"
-      // nie moze tu przejsc jako "nie zamontowany" ani tym bardziej dalej.
+      // Not `isMounted`: creating the image is IRREVERSIBLE, so "I do not
+      // know" must not pass here as "not mounted", let alone go any further.
       return CMActionResult(
         succeeded: false,
-        message: """
-          Nie udalo sie odczytac tablicy montowan - NIE WIADOMO, czy bufor jest \
-          zamontowany. NIE tworze obrazu.
-          """)
+        message: L10n.tr(
+          "Could not read the mount table - it is UNKNOWN whether the buffer is mounted. NOT creating the image."
+        ))
     }
 
-    // Straznik "obraz juz istnieje" czyta cache FUSE, a rclone wystawia
-    // montowanie ZANIM wczyta z Dysku zawartosc katalogu - w tym oknie
-    // `exists` mowi "nie ma obrazu" o obrazie, ktory jest. `attach-image`
-    // czeka tu na `BufferReadiness.wait` od 13 wrzesnia 2026, `create` nie
-    // czekalo wcale. Dla `attach` przegapienie okna kosztuje jedno nieudane
-    // podpiecie; dla `create` - `hdiutil create` idzie na sciezke istniejacego
-    // backupu, i to z pieciokrotnym ponawianiem.
+    // The "image already exists" guard reads the FUSE cache, and rclone
+    // exposes the mount BEFORE it loads the directory contents from Drive - in
+    // that window `exists` says "no image" about an image that is there.
+    // `attach-image` has waited here on `BufferReadiness.wait` since
+    // 13 September 2026, `create` did not wait at all. For `attach` missing the
+    // window costs one failed attach; for `create` - `hdiutil create` goes to
+    // the path of an existing backup, and with five retries at that.
     //
-    // Czekamy na UDANE listowanie punktu montowania, a nie na samo
-    // `isMounted`: na to drugie odpowiedzial juz straznik wyzej, wiec probka
-    // przechodzilaby natychmiast i czekanie nie robiloby NIC. Listowanie
-    // korzenia przy zimnym `--dir-cache-time` idzie po dane do Google, wiec
-    // jego powodzenie znaczy "rclone faktycznie obsluguje ten katalog";
-    // dopoki FUSE nie zaczelo serwowac, konczy sie bledem urzadzenia.
+    // We wait for a SUCCESSFUL listing of the mount point, not just for
+    // `isMounted`: the guard above has already answered the latter, so the
+    // probe would pass immediately and the wait would do NOTHING. Listing the
+    // root with a cold `--dir-cache-time` goes to Google for data, so its
+    // success means "rclone is actually serving this directory"; until FUSE
+    // has started serving, it ends with a device error.
     //
-    // UWAGA co do zasiegu: to czekanie usuwa okno "FUSE jeszcze nie odpowiada",
-    // ale NIE dowodzi nieobecnosci obrazu - puste listowanie wyglada tak samo
-    // przy pustym koncie i przy niewczytanym katalogu. Dowodem jest dopiero
-    // `remoteImagePresence()` nizej i to on, a nie to czekanie, wstrzymuje
-    // operacje nieodwracalna.
+    // NOTE on scope: this wait removes the "FUSE is not answering yet" window,
+    // but does NOT prove the image is absent - an empty listing looks the same
+    // for an empty account and for a directory not yet loaded. The proof is
+    // `remoteImagePresence()` below, and it, not this wait, holds back the
+    // irreversible operation.
     let ready = await BufferReadiness.wait(
       sleep: { seconds in
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -320,38 +328,37 @@ public enum BackupImageService {
     guard ready else {
       return CMActionResult(
         succeeded: false,
-        message:
-          "Bufor nie stanal w \(Int(BufferReadiness.defaultTimeout / 60)) min - NIE tworze obrazu.")
+        message: L10n.tr(
+          "The buffer did not come up within %@ min - NOT creating the image.",
+          "\(Int(BufferReadiness.defaultTimeout / 60))"))
     }
 
     guard !exists else {
       return CMActionResult(
         succeeded: false,
-        message: "Obraz juz istnieje. Usuniecie go kasuje caly backup - zrob to swiadomie.")
+        message: L10n.tr(
+          "The image already exists. Deleting it erases the whole backup - do it deliberately."))
     }
 
-    // Cache FUSE juz raz sklamal, wiec pytamy jeszcze raz ZDALNEGO, z
-    // pominieciem montowania. To jest operacja NIEODWRACALNA: brak pewnosci
-    // musi ja PRZERWAC, a nie tylko wypisac ostrzezenie, ktore i tak nikt nie
-    // czyta przed zatwierdzeniem.
+    // The FUSE cache has already lied once, so we ask the REMOTE again,
+    // bypassing the mount. This is an IRREVERSIBLE operation: lack of certainty
+    // must ABORT it, not just print a warning that nobody reads before
+    // confirming anyway.
     switch await remoteImagePresence() {
     case .absent:
       break
     case .present:
       return CMActionResult(
         succeeded: false,
-        message: """
-          Obraz juz istnieje na Google Drive (cache montowania go nie pokazywal, \
-          ale zdalny go ma). Usuniecie go kasuje caly backup - zrob to swiadomie.
-          """)
+        message: L10n.tr(
+          "The image already exists on Google Drive (the mount cache did not show it, but the remote has it). Deleting it erases the whole backup - do it deliberately."
+        ))
     case .unknown(let why):
       return CMActionResult(
         succeeded: false,
-        message: """
-          Nie udalo sie potwierdzic na Google Drive, ze obrazu tam jeszcze nie ma \
-          (\(why)) - PRZERYWAM. Tworzenie obrazu na istniejacym backupie jest \
-          nieodwracalne, wiec bez tej odpowiedzi nie zaczynam.
-          """)
+        message: L10n.tr(
+          "Could not confirm on Google Drive that the image is not there yet (%@) - ABORTING. Creating the image over an existing backup is irreversible, so I do not start without that answer.",
+          why))
     }
 
     await DriveBufferService.waitUntilIdle(timeout: 180)
@@ -372,46 +379,51 @@ public enum BackupImageService {
     guard result?.succeeded == true else {
       return CMActionResult(
         succeeded: false,
-        message: "Nie udalo sie utworzyc obrazu: \(result?.stderr ?? "nieznany blad")")
+        message: L10n.tr(
+          "Could not create the image: %@", result?.stderr ?? L10n.tr("unknown error")))
     }
     return CMActionResult(
       succeeded: true,
-      message: "Utworzono obraz \(sizeGB) GB, pasmo \(bandSectors * 512 / 1024 / 1024) MB.")
+      message: L10n.tr(
+        "Created a %@ GB image, band size %@ MB.", "\(sizeGB)",
+        "\(bandSectors * 512 / 1024 / 1024)"))
   }
 
-  // MARK: - Obraz na zdalnym
+  // MARK: - Image on the remote
 
-  /// Czy obraz lezy na Google Drive - pytane BEZ posrednictwa montowania.
+  /// Whether the image is on Google Drive - asked WITHOUT going through the mount.
   public enum RemotePresence: Equatable {
     case present
     case absent
-    /// Nie wiadomo. `why` idzie do komunikatu, zeby uzytkownik wiedzial,
-    /// czego dokladnie zabraklo.
+    /// Unknown. `why` goes into the message, so that the user knows what
+    /// exactly was missing.
     case unknown(String)
   }
 
-  /// Pyta `rclone lsf` prosto o zdalny katalog backupu.
+  /// Asks `rclone lsf` directly about the remote backup directory.
   ///
-  /// Sens jest w tym, ze omija cache FUSE - a to wlasnie cache FUSE mowi
-  /// "nie ma obrazu" przez pierwsze sekundy po wystawieniu montowania.
+  /// The point is that it bypasses the FUSE cache - and it is precisely the
+  /// FUSE cache that says "no image" during the first seconds after the mount
+  /// is exposed.
   public static func remoteImagePresence() async -> RemotePresence {
     let remote = "\(DriveBufferService.remoteName):\(DriveBufferService.remotePath)"
     guard
       let result = try? await CMTooling.runRclone(["lsf", "--dirs-only", remote], timeout: 120)
     else {
-      return .unknown("rclone nie odpowiedzial")
+      return .unknown(L10n.tr("rclone did not answer"))
     }
     return classifyRemoteListing(
       succeeded: result.succeeded, stdout: result.stdout, stderr: result.stderr)
   }
 
-  /// Czysta wersja - zeby dalo sie ja sprawdzic testem bez sieci i bez konta.
+  /// Pure version - so that it can be tested without a network and without an
+  /// account.
   ///
-  /// Nieudane `lsf` z komunikatem "directory not found" NIE jest brakiem
-  /// odpowiedzi, tylko odpowiedzia "nie ma tam niczego": tak wyglada pierwsze
-  /// uruchomienie, zanim cokolwiek zostalo na Dysk wyslane. Gdybysmy zaliczyli
-  /// to do `.unknown`, `create` nie dalby sie wykonac ANI RAZU - straznik
-  /// blokowalby dokladnie ten przypadek, dla ktorego istnieje.
+  /// A failed `lsf` with the message "directory not found" is NOT a missing
+  /// answer, but the answer "there is nothing there": that is what the first
+  /// run looks like, before anything has been uploaded to Drive. If we counted
+  /// it as `.unknown`, `create` could not run EVEN ONCE - the guard would block
+  /// exactly the case it exists for.
   static func classifyRemoteListing(succeeded: Bool, stdout: String, stderr: String)
     -> RemotePresence
   {
@@ -421,11 +433,11 @@ public enum BackupImageService {
     if stderr.lowercased().contains("directory not found") { return .absent }
     let reason = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
     return .unknown(
-      reason.isEmpty ? "rclone lsf zakonczylo sie bledem" : String(reason.suffix(200)))
+      reason.isEmpty ? L10n.tr("rclone lsf ended with an error") : String(reason.suffix(200)))
   }
 
-  /// `rclone lsf --dirs-only` konczy nazwy katalogow ukosnikiem, ale nie
-  /// polegamy na tym - przyjmujemy obie postacie.
+  /// `rclone lsf --dirs-only` ends directory names with a slash, but we do not
+  /// rely on it - we accept both forms.
   static func listingContainsImage(_ listing: String) -> Bool {
     let wanted = "\(imageName).sparsebundle"
     return listing.components(separatedBy: .newlines)
@@ -433,10 +445,11 @@ public enum BackupImageService {
       .contains { $0 == wanted || $0 == wanted + "/" }
   }
 
-  // MARK: - Podpinanie
+  // MARK: - Attaching
 
   public static func attach() async -> CMActionResult {
-    await withCMLock(lockName) { await attachLocked() } ?? busyResult("Podpinanie obrazu")
+    await withCMLock(lockName) { await attachLocked() }
+      ?? busyResult("Image attach", displayName: L10n.tr("Image attach"))
   }
 
   private static func attachLocked() async -> CMActionResult {
@@ -444,70 +457,70 @@ public enum BackupImageService {
     case .some(true):
       break
     case .some(false):
-      return CMActionResult(succeeded: false, message: "Drive nie jest zamontowany.")
+      return CMActionResult(succeeded: false, message: L10n.tr("Drive is not mounted."))
     case .none:
-      // Podpiecie obrazu na NIEZAMONTOWANYM buforze konczy sie obrazem
-      // wiszacym na pustym katalogu, wiec "nie wiem" ma tu wstrzymac, a nie
-      // przepuscic. Tik agenta sprobuje znowu za 900 s.
+      // Attaching the image on an UNMOUNTED buffer ends with an image hanging
+      // on an empty directory, so "I do not know" must hold off here, not let
+      // it through. The agent's tick will try again in 900 s.
       return CMActionResult(
         succeeded: false,
-        message: """
-          Nie udalo sie odczytac tablicy montowan - NIE WIADOMO, czy bufor jest \
-          zamontowany. NIE podpinam obrazu.
-          """)
+        message: L10n.tr(
+          "Could not read the mount table - it is UNKNOWN whether the buffer is mounted. NOT attaching the image."
+        ))
     }
     guard exists else {
-      return CMActionResult(succeeded: false, message: "Brak obrazu - najpierw go utworz.")
+      return CMActionResult(
+        succeeded: false, message: L10n.tr("No image - create it first."))
     }
     let reading = await attachmentReading()
     switch reading.attachment {
     case .attached:
-      return CMActionResult(succeeded: true, message: "Juz podpiete: \(targetPath.path)")
+      return CMActionResult(
+        succeeded: true, message: L10n.tr("Already attached: %@", targetPath.path))
     case .unknown:
-      // Nie `.detached`, bo nastepnym krokiem bylby `hdiutil attach` na
-      // obrazie, ktory moze byc juz podpiety - a wczesniej jeszcze
-      // `purgeStaleDevices()`, czyli `detach -force` na cudzym, zywym
-      // urzadzeniu. "Nie wiem" nie moze uruchamiac ani jednego, ani drugiego.
+      // Not `.detached`, because the next step would be `hdiutil attach` on an
+      // image that may already be attached - and before that
+      // `purgeStaleDevices()`, i.e. `detach -force` on someone else's live
+      // device. "I do not know" must not trigger either of them.
       //
-      // Dotyczy to TAKZE sondy, ktora nie odpowiedziala w czasie. Cena jest
-      // realna i wybrana swiadomie: jesli obraz jest naprawde martwy, a odczyt
-      // z niego wisi, ta funkcja go nie naprawi i tik agenta sprobuje znowu za
-      // 900 s. Odwrotna pomylka jest jednak nieodwracalna - `detach -force` na
-      // wolnym, ale ZYWYM urzadzeniu porzuca zapisy, ktore nie doleciely na
-      // Dysk. O tym, ze stan jest nieznany, melduje czujka `backup-health`;
-      // milczenia tu nie ma.
+      // This ALSO applies to a probe that did not answer in time. The price is
+      // real and chosen deliberately: if the image really is dead and reads
+      // from it hang, this function will not fix it, and the agent's tick will
+      // try again in 900 s. The opposite mistake, however, is irreversible -
+      // `detach -force` on a slow but LIVE device drops writes that have not
+      // reached Drive. The `backup-health` monitor reports that the state is
+      // unknown; there is no silence here.
       if reading.probeTimedOut {
         return CMActionResult(
           succeeded: false,
-          message: """
-            Obraz jest w tablicy montowan, ale sonda czytelnosci nie odpowiedziala w \
-            \(Int(ImageProbe.probeTimeout)) s - NIE WIADOMO, czy urzadzenie zyje. NIE \
-            odpinam na sile i NIE podpinam.
-            """)
+          message: L10n.tr(
+            "The image is in the mount table, but the readability probe did not answer within %@ s - it is UNKNOWN whether the device is alive. NOT force-detaching and NOT attaching.",
+            "\(Int(ImageProbe.probeTimeout))"))
       }
       return CMActionResult(
         succeeded: false,
-        message: """
-          Nie udalo sie odczytac tablicy montowan - NIE WIADOMO, czy obraz jest \
-          podpiety. NIE podpinam.
-          """)
+        message: L10n.tr(
+          "Could not read the mount table - it is UNKNOWN whether the image is attached. NOT attaching."
+        ))
     case .dead(let errno):
-      // Obraz jest w tablicy montowan, ale nie oddaje danych. Do 22 wrz 2026
-      // ta funkcja mowila wtedy "Juz podpiete" i wychodzila - agent podpinajacy
-      // powtarzal to co 15 minut przez 15 godzin, a Time Machine nie mial celu.
-      // Jedyna droga jest odpiecie (musi byc `-force`, zwykle odmawia na
-      // martwym urzadzeniu) i podpiecie od nowa. Czekanie na wysylke zostaje:
-      // to, co zdazylo trafic do bufora rclone, nadal ma doleciec na Dysk.
-      CMLogger.log("Obraz martwy (errno \(errno)) - odpinam na sile i podpinam od nowa")
-      // `detachLocked`, nie `detach`: blokade 'image' trzymamy juz my,
-      // a `CMLock` nie jest wznawialna - wejscie przez publiczna `detach`
-      // zobaczyloby wlasna, zywa blokade i odmowilo samo sobie.
+      // The image is in the mount table, but returns no data. Until 22 Sep 2026
+      // this function then said "Already attached" and returned - the attaching
+      // agent repeated that every 15 minutes for 15 hours, and Time Machine had
+      // no destination. The only way is to detach (it has to be `-force`, a
+      // plain one refuses on a dead device) and attach again. The wait for the
+      // upload stays: whatever made it into the rclone buffer still has to
+      // reach Drive.
+      CMLogger.log("Image dead (errno \(errno)) - force-detaching and attaching again")
+      // `detachLocked`, not `detach`: we already hold the 'image' lock, and
+      // `CMLock` is not reentrant - going through the public `detach` would see
+      // our own live lock and refuse itself.
       let detached = await detachLocked(force: true)
-      CMLogger.log("Odpiecie martwego obrazu: \(detached.message)")
+      CMLogger.log("Detaching the dead image: \(detached.message)")
       guard !isAttached else {
         return CMActionResult(
           succeeded: false,
-          message: "Obraz martwy (errno \(errno)) i nie dal sie odpiac: \(detached.message)")
+          message: L10n.tr(
+            "Image dead (errno %@) and could not be detached: %@", "\(errno)", detached.message))
       }
     case .detached:
       break
@@ -515,32 +528,31 @@ public enum BackupImageService {
 
     await purgeStaleDevices()
 
-    // Osierocony punkt montowania blokuje podpiecie. Jesli lezy w /Volumes,
-    // usuniecie wymaga roota - mowimy wiec dokladnie, co uruchomic, zamiast
-    // ponawiac bez konca.
+    // An orphaned mount point blocks the attach. If it is in /Volumes, removing
+    // it needs root - so we say exactly what to run, instead of retrying
+    // forever.
     if FileManager.default.fileExists(atPath: targetPath.path) {
       do {
         try FileManager.default.removeItem(at: targetPath)
       } catch {
         return CMActionResult(
           succeeded: false,
-          message: """
-            Osierocony punkt montowania blokuje podpiecie: \(targetPath.path)
-            Usun go i sprobuj ponownie:  sudo rmdir '\(targetPath.path)'
-            """)
+          message: L10n.tr(
+            "An orphaned mount point blocks the attach: %@\nRemove it and try again:  sudo rmdir '%@'",
+            targetPath.path, targetPath.path))
       }
     }
 
-    // Cisza w kolejce nie jest tu wygoda, tylko warunkiem powodzenia:
-    // `hdiutil` na wolumenie FUSE-T odrzuca montowanie tym czesciej, im
-    // bardziej rclone jest zajety (patrz `retryingFlakyMount`). Przy
-    // `writeBackSeconds` liczonym w minutach kolejka sama nie opustoszeje
-    // w ponizszym limicie czasu, wiec najpierw wymuszamy wysylke - inaczej
-    // podpiecie po kazdym starcie bylo by loteria.
+    // A quiet queue is not a convenience here but a condition for success:
+    // `hdiutil` on a FUSE-T volume rejects the mount the more often, the busier
+    // rclone is (see `retryingFlakyMount`). With `writeBackSeconds` counted in
+    // minutes the queue will not empty by itself within the time limit below,
+    // so we force the upload first - otherwise attaching after every start-up
+    // would be a lottery.
     //
-    // Czekamy, dopoki wysylka robi postep, a nie sztywne 120 s - po restarcie
-    // bez `prepare-shutdown` zaleglosc siega kilkunastu GB (patrz
-    // `UploadDrain`).
+    // We wait as long as the upload makes progress, not a fixed 120 s - after a
+    // restart without `prepare-shutdown` the backlog reaches a dozen or more GB
+    // (see `UploadDrain`).
     let drain = await UploadDrain.wait(
       sleep: { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) },
       expire: { _ = await DriveBufferService.expireQueuedUploads() },
@@ -549,13 +561,13 @@ public enum BackupImageService {
     case .idle:
       break
     case .stalled(let unsent):
-      CMLogger.log("Podpinanie: wysylka stoi (\(unsent) pozycji w kolejce) - podpinam mimo to")
+      CMLogger.log("Attach: upload stalled (\(unsent) items queued) - attaching anyway")
     case .timedOut(let unsent):
       CMLogger.log(
-        "Podpinanie: zaleglosc nie zeszla w \(Int(UploadDrain.defaultMaxTotal / 60)) min (\(unsent) pozycji) - podpinam mimo to"
+        "Attach: backlog did not drain within \(Int(UploadDrain.defaultMaxTotal / 60)) min (\(unsent) items) - attaching anyway"
       )
     case .noAnswer:
-      CMLogger.log("Podpinanie: rclone nie odpowiada o stan kolejki - podpinam na oslep")
+      CMLogger.log("Attach: rclone does not answer about the queue state - attaching blind")
     }
 
     let result = await retryingFlakyMount(attempts: 5) {
@@ -568,26 +580,27 @@ public enum BackupImageService {
     guard result?.succeeded == true else {
       return CMActionResult(
         succeeded: false,
-        message: "Nie udalo sie podpiac obrazu: \(result?.stderr ?? "nieznany blad")")
+        message: L10n.tr(
+          "Could not attach the image: %@", result?.stderr ?? L10n.tr("unknown error")))
     }
-    return CMActionResult(succeeded: true, message: "Podpiete: \(targetPath.path)")
+    return CMActionResult(succeeded: true, message: L10n.tr("Attached: %@", targetPath.path))
   }
 
-  /// Odpina obraz i CZEKA, az wszystko doleci na Google Drive.
+  /// Detaches the image and WAITS until everything has reached Google Drive.
   ///
-  /// Czekanie nie jest ostroznoscia na zapas. Samo odpiecie zapisuje metadane
-  /// APFS do pasm, a `--vfs-write-back` odklada ich wyslanie o kilkadziesiat
-  /// sekund. Utrata bufora w tym oknie nie kosztuje "ostatnich zmian" - zabiera
-  /// katalog glowny wolumenu. Zaobserwowane na zywo: 367 MiB pasm lezalo juz na
-  /// Dysku, a obraz po ponownym podpieciu byl pusty, bo trzy pasma z metadanymi
-  /// zostaly zabite w kolejce.
+  /// The wait is not extra caution. The detach itself writes APFS metadata to
+  /// the bands, and `--vfs-write-back` delays uploading them by tens of
+  /// seconds. Losing the buffer in that window does not cost "the latest
+  /// changes" - it takes the volume's root directory. Observed live: 367 MiB of
+  /// bands were already on Drive, and the image was empty after re-attaching,
+  /// because three bands with metadata were killed in the queue.
   ///
-  /// Dlatego kazda sciezka wygaszania - odpiecie, zatrzymanie bufora,
-  /// wylaczenie Maca - musi przepuscic drenaz do konca.
+  /// That is why every shutdown path - detach, stopping the buffer, turning off
+  /// the Mac - must let the drain run to the end.
   public static func detach(force: Bool = false, waitForUpload: Bool = true) async -> CMActionResult
   {
     await withCMLock(lockName) { await detachLocked(force: force, waitForUpload: waitForUpload) }
-      ?? busyResult("Odpinanie obrazu")
+      ?? busyResult("Image detach", displayName: L10n.tr("Image detach"))
   }
 
   private static func detachLocked(force: Bool = false, waitForUpload: Bool = true) async
@@ -599,127 +612,128 @@ public enum BackupImageService {
     if force { args.append("-force") }
     let result = try? await ProcessRunner.run("/usr/bin/hdiutil", args, timeout: 120)
     guard result?.succeeded == true else {
-      // Podajemy powod, jesli go znamy. `hdiutil` mowi tylko "resource busy"
-      // i ani slowa o tym, co trzyma urzadzenie - a to prawie zawsze
-      // przegladana migawka backupu.
+      // We give the reason if we know it. `hdiutil` only says "resource busy"
+      // and not a word about what holds the device - and that is almost always
+      // a browsed backup snapshot.
       guard stillMounted.isEmpty else {
         return CMActionResult(
           succeeded: false,
-          message: """
-            Nie udalo sie odpiac - obraz trzymaja przegladane migawki backupu, \
-            ktorych nie dalo sie odmontowac:
-            \(stillMounted.joined(separator: "\n"))
-            Zamknij okno Time Machine / Findera na backupie i sprobuj ponownie.
-            """)
+          message: L10n.tr(
+            "Could not detach - the image is held by browsed backup snapshots that could not be unmounted:\n%@\nClose the Time Machine / Finder window on the backup and try again.",
+            stillMounted.joined(separator: "\n")))
       }
-      return CMActionResult(succeeded: false, message: "Nie udalo sie odpiac.")
+      return CMActionResult(succeeded: false, message: L10n.tr("Could not detach."))
     }
 
     guard waitForUpload else {
       return CMActionResult(
         succeeded: true,
-        message: "Odpiete (bez czekania na wysylke - dane moga byc tylko lokalnie).")
+        message: L10n.tr(
+          "Detached (without waiting for the upload - the data may be local only)."))
     }
 
-    // Zapisy z odpiecia musza najpierw trafic do kolejki - bez tej przerwy
-    // wygladalaby na pusta, bo jeszcze by sie nie zdazyla zapelnic.
+    // Writes from the detach must reach the queue first - without this pause
+    // it would look empty, because it would not have had time to fill yet.
     //
-    // UWAGA co do mechanizmu: pozycja pojawia sie w kolejce ZARAZ po zapisie,
-    // tyle ze z terminem wysylki `writeBackSeconds` w przod (widac to w
-    // `vfs/queue` jako dodatnie `expiry`). Ta przerwa czeka wiec na samo
-    // zakolejkowanie, a NIE na uplyw tego terminu - wczesniejszy komentarz
-    // w tym miejscu twierdzil odwrotnie.
+    // NOTE on the mechanism: an item appears in the queue RIGHT after the
+    // write, only with an upload deadline `writeBackSeconds` ahead (visible in
+    // `vfs/queue` as a positive `expiry`). So this pause waits for the queuing
+    // itself, NOT for that deadline to pass - the earlier comment here claimed
+    // the opposite.
     try? await Task.sleep(nanoseconds: 35_000_000_000)
 
-    // Terminy przesuwamy dopiero teraz, gdy kolejka jest juz kompletna.
-    // Bez tego drenaz trwalby tyle, co `writeBackSeconds` (dziesiec minut),
-    // czyli dluzej niz ponizszy limit czasu - i odpiecie zglaszaloby
-    // niepowodzenie za kazdym razem.
+    // We move the deadlines only now, when the queue is complete. Without this
+    // the drain would take as long as `writeBackSeconds` (ten minutes), i.e.
+    // longer than the time limit below - and the detach would report failure
+    // every time.
     CMLogger.log(expiryLogLine(await DriveBufferService.expireQueuedUploads()))
     return detachVerdict(settled: await DriveBufferService.statsWhenIdle(timeout: 600))
   }
 
-  /// Co odpiecie wpisuje do logu po probie przyspieszenia kolejki.
+  /// What the detach writes to the log after trying to speed up the queue.
   ///
-  /// TRZY rozne rzeczy wygladaly tu jak dwie. "Nie dostalismy odpowiedzi" od
-  /// "kolejka byla pusta" odroznilismy 23.09.2026, ale trzeci przypadek -
-  /// kolejka PELNA, a kazde `vfs/queue-set-expiry` padlo - nadal wychodzil
-  /// z `expireQueuedUploads` jako `0` i log meldowal "kolejka pusta".
-  /// Zmierzony stan tej maszyny w chwili audytu: 462 pozycje w kolejce.
+  /// THREE different things looked like two here. "We got no answer" was told
+  /// apart from "the queue was empty" on 23.09.2026, but the third case - the
+  /// queue FULL and every `vfs/queue-set-expiry` failed - still came out of
+  /// `expireQueuedUploads` as `0`, and the log reported "queue empty". The
+  /// measured state of this machine at the time of the audit: 462 items queued.
   ///
-  /// Tryb awarii jest ciezszy niz sama nieprawda w logu: czlowiek czyta te
-  /// linie dokladnie wtedy, gdy decyduje, czy wolno skasowac bufor. "Kolejka
-  /// pusta" czyta sie jako "nic nie czeka na wyslanie", a znaczylo
-  /// "czekaja 462 pozycje i zadnej nie udalo sie ruszyc".
+  /// The failure mode is worse than just an untruth in the log: a person reads
+  /// this line exactly when deciding whether the buffer may be deleted. "Queue
+  /// empty" reads as "nothing is waiting to be uploaded", while it meant "462
+  /// items are waiting and not one of them could be moved".
   ///
-  /// Wydzielone i CZYSTE, zeby te trzy przypadki dalo sie sprawdzic testem bez
-  /// rclone. Funkcja jest wylacznie opisem: o czekaniu na drenaz i o werdykcie
-  /// decyduje `detachLocked`/`detachVerdict` i ta poprawka ich nie dotyka.
+  /// Split out and PURE, so that these three cases can be tested without
+  /// rclone. The function is only a description: waiting for the drain and the
+  /// verdict are decided by `detachLocked`/`detachVerdict`, and this fix does
+  /// not touch them.
   static func expiryLogLine(_ outcome: DriveBufferService.ExpiryOutcome?) -> String {
-    let drenaz = "drenaz moze trwac do \(DriveBufferService.writeBackSeconds / 60) min"
+    let drain = "the drain may take up to \(DriveBufferService.writeBackSeconds / 60) min"
     guard let outcome else {
-      // Brak odpowiedzi to NIE pusta kolejka - patrz `expireQueuedUploads`.
-      return "Odpiecie: rclone nie odpowiedzial na pytanie o kolejke - terminow wysylki NIE"
-        + " przesunieto, \(drenaz)"
+      // No answer is NOT an empty queue - see `expireQueuedUploads`.
+      return "Detach: rclone did not answer the question about the queue - upload deadlines were"
+        + " NOT moved, \(drain)"
     }
     if outcome.queued == 0 {
-      return "Odpiecie: kolejka pusta - nie bylo czego przyspieszac"
+      return "Detach: queue empty - nothing to speed up"
     }
     if outcome.moved == 0 {
-      return "Odpiecie: UWAGA - kolejka ma \(outcome.queued) pozycji i ANI JEDNEJ nie udalo sie"
-        + " przyspieszyc (rclone odrzucil kazde vfs/queue-set-expiry), \(drenaz)"
+      return "Detach: WARNING - the queue has \(outcome.queued) items and NOT ONE could be"
+        + " sped up (rclone rejected every vfs/queue-set-expiry), \(drain)"
     }
     if outcome.moved < outcome.queued {
-      return "Odpiecie: wymuszono wysylke \(outcome.moved) z \(outcome.queued) pozycji kolejki -"
-        + " pozostalym \(outcome.queued - outcome.moved) NIE przesunieto terminu, \(drenaz)"
+      return "Detach: forced upload of \(outcome.moved) of \(outcome.queued) queued items -"
+        + " the deadline of the remaining \(outcome.queued - outcome.moved) was NOT moved, \(drain)"
     }
-    return "Odpiecie: wymuszono wysylke \(outcome.moved) pozycji z kolejki"
+    return "Detach: forced upload of \(outcome.moved) queued items"
   }
 
-  /// Czysta wersja werdyktu o odpieciu - `settled` to odczyt kolejki z chwili,
-  /// w ktorej ucichla (`nil` = nie ucichla w czasie albo rclone nie odpowiedzial).
+  /// Pure version of the detach verdict - `settled` is the queue reading from
+  /// the moment it went quiet (`nil` = it did not go quiet in time, or rclone
+  /// did not answer).
   ///
-  /// Pusta kolejka to jeszcze nie komplet danych na Dysku. Pasma, ktore rclone
-  /// PORZUCIL, wypadaja z kolejki dokladnie tak samo jak wyslane i zostaja
-  /// wylacznie w `erroredFiles`. Do 23 wrzesnia 2026 odpiecie patrzylo tylko
-  /// na `uploadsInProgress`/`uploadsQueued`, wiec meldowalo "Odpiete, wszystko
-  /// wyslane na Google Drive" przy danych istniejacych TYLKO na tym Macu -
-  /// a `UploadState` z tych samych licznikow wyprowadzal juz wtedy
-  /// `.failedFiles(...)` z etykieta "WYMAGA REAKCJI". CLI i GUI mowily o tej
-  /// samej chwili dwie rozne rzeczy.
+  /// An empty queue is not yet complete data on Drive. Bands that rclone
+  /// ABANDONED drop out of the queue exactly like uploaded ones and remain only
+  /// in `erroredFiles`. Until 23 September 2026 the detach looked only at
+  /// `uploadsInProgress`/`uploadsQueued`, so it reported "Detached, everything
+  /// uploaded to Google Drive" with data existing ONLY on this Mac - while
+  /// `UploadState`, from the same counters, already derived `.failedFiles(...)`
+  /// with the label "ACTION NEEDED". The CLI and the GUI said two different
+  /// things about the same moment.
   static func detachVerdict(settled: DriveBufferService.QueueStats?) -> CMActionResult {
     guard let settled else {
       return CMActionResult(
         succeeded: false,
-        message: "Odpiete, ale wysylka NIE zakonczyla sie w czasie - nie kasuj bufora.")
+        message: L10n.tr(
+          "Detached, but the upload did NOT finish in time - do not delete the buffer."))
     }
     guard settled.erroredFiles == 0 else {
       return CMActionResult(
         succeeded: false,
-        message: """
-          Odpiete, ale rclone PORZUCIL \(settled.erroredFiles) fragmentow kopii - istnieja \
-          wylacznie na tym Macu i na Google Drive ich nie ma. Nie kasuj bufora.
-          """)
+        message: L10n.tr(
+          "Detached, but rclone ABANDONED %@ backup fragments - they exist only on this Mac and are not on Google Drive. Do not delete the buffer.",
+          "\(settled.erroredFiles)"))
     }
-    return CMActionResult(succeeded: true, message: "Odpiete, wszystko wyslane na Google Drive.")
+    return CMActionResult(
+      succeeded: true, message: L10n.tr("Detached, everything uploaded to Google Drive."))
   }
 
-  /// Odmontowuje migawki backupu podpiete pod `/Volumes/.timemachine/`.
-  /// Zwraca sciezki, ktorych NIE udalo sie odmontowac.
+  /// Unmounts backup snapshots mounted under `/Volumes/.timemachine/`.
+  /// Returns the paths that could NOT be unmounted.
   ///
-  /// Przegladanie backupu - w Finderze albo zwyklym `ls` po sciezce z
-  /// `tmutil listbackups` - montuje jego migawke tylko do odczytu. Takie
-  /// montowanie trzyma urzadzenie obrazu zajete i `hdiutil detach` odmawia,
-  /// a komunikat nie mowi ani slowa o tym, co go blokuje.
+  /// Browsing a backup - in Finder or with a plain `ls` on a path from
+  /// `tmutil listbackups` - mounts its snapshot read-only. Such a mount keeps
+  /// the image's device busy and `hdiutil detach` refuses, while the message
+  /// says not a word about what is blocking it.
   ///
-  /// UZYWAMY `diskutil unmount`, NIE `/sbin/umount`. Zmierzone na dzialajacej
-  /// instalacji: `umount` na takiej migawce konczy sie
-  /// `Operation not permitted` dla uzytkownika (montowaniem zarzadza system),
-  /// a `diskutil unmount` na tej samej sciezce przechodzi bez roota.
-  /// Poprzednia wersja wolala `umount` przez `try?` i logowala "Odmontowano"
-  /// NIEZALEZNIE od wyniku - wiec przy 18 podpietych migawkach log meldowal
-  /// 18 sukcesow, zadna nie zostala odmontowana, a `hdiutil detach` zaraz
-  /// potem odmawial bez zwiazku ze soba widocznego w logu.
+  /// We USE `diskutil unmount`, NOT `/sbin/umount`. Measured on a working
+  /// installation: `umount` on such a snapshot ends with
+  /// `Operation not permitted` for the user (the system manages the mount),
+  /// while `diskutil unmount` on the same path succeeds without root.
+  /// The previous version called `umount` via `try?` and logged "Unmounted"
+  /// REGARDLESS of the result - so with 18 mounted snapshots the log reported
+  /// 18 successes, none was unmounted, and `hdiutil detach` right after refused
+  /// with no connection visible in the log.
   @discardableResult
   public static func unmountBrowsedSnapshots() async -> [String] {
     guard let points = DriveBufferService.mountPoints() else { return [] }
@@ -728,34 +742,35 @@ public enum BackupImageService {
       let result = try? await ProcessRunner.run(
         "/usr/sbin/diskutil", ["unmount", path], timeout: 60)
       if result?.succeeded == true {
-        CMLogger.log("Odmontowano przegladana migawke backupu: \(path)")
+        CMLogger.log("Unmounted browsed backup snapshot: \(path)")
       } else {
         failed.append(path)
-        CMLogger.log("NIE udalo sie odmontowac migawki backupu: \(path)")
+        CMLogger.log("FAILED to unmount backup snapshot: \(path)")
       }
     }
     return failed
   }
 
-  // MARK: - Weryfikacja
+  // MARK: - Verification
 
-  /// Sprawdza spojnosc obrazu.
+  /// Checks the image's consistency.
   ///
-  /// UWAGA: `hdiutil verify` na sparsebundle NIE dziala - taki obraz nie ma
-  /// sumy kontrolnej i narzedzie konczy komunikatem "has no checksum".
-  /// Trzeba podpiac urzadzenie bez montowania i puscic na nim `fsck_apfs`.
+  /// NOTE: `hdiutil verify` on a sparsebundle does NOT work - such an image has
+  /// no checksum and the tool ends with the message "has no checksum". The
+  /// device has to be attached without mounting and `fsck_apfs` run on it.
   public static func verify() async -> CMActionResult {
-    await withCMLock(lockName) { await verifyLocked() } ?? busyResult("Sprawdzanie obrazu")
+    await withCMLock(lockName) { await verifyLocked() }
+      ?? busyResult("Image verify", displayName: L10n.tr("Image verification"))
   }
 
   private static func verifyLocked() async -> CMActionResult {
     guard exists else {
-      return CMActionResult(succeeded: false, message: "Brak obrazu.")
+      return CMActionResult(succeeded: false, message: L10n.tr("No image."))
     }
     if isAttached {
       return CMActionResult(
         succeeded: false,
-        message: "Obraz jest podpiety - odepnij go przed sprawdzeniem.")
+        message: L10n.tr("The image is attached - detach it before verifying."))
     }
 
     guard
@@ -767,66 +782,68 @@ public enum BackupImageService {
         .first(where: { $0.contains("41504653") })?
         .prefix(while: { !$0.isWhitespace })
     else {
-      return CMActionResult(succeeded: false, message: "Nie znalazlem urzadzenia APFS w obrazie.")
+      return CMActionResult(
+        succeeded: false, message: L10n.tr("Could not find an APFS device in the image."))
     }
 
-    // BEZ timeoutu. `fsck_apfs` czyta metadane przez montowanie rclone, wiec
-    // jego czas zalezy od lacza i od liczby migawek - zmierzone na obrazie
-    // 210 GiB z 18 migawkami: pojedyncza migawka schodzi w minutach.
-    // Wczesniejsza granica godziny nie chronila przed niczym, a zamieniala
-    // "sprawdzenie jeszcze trwa" w "Obraz NIESPOJNY", bo ubity `fsck` zwraca
-    // niezerowy kod tak samo jak `fsck`, ktory znalazl uszkodzenie. Falszywy
-    // alarm o utracie backupu jest tu grozniejszy niz dlugie czekanie.
+    // NO timeout. `fsck_apfs` reads metadata through the rclone mount, so its
+    // time depends on the link and on the number of snapshots - measured on a
+    // 210 GiB image with 18 snapshots: a single snapshot takes minutes.
+    // The earlier one-hour limit protected against nothing, but turned "the
+    // check is still running" into "Image INCONSISTENT", because a killed
+    // `fsck` returns a non-zero code just like an `fsck` that found damage.
+    // A false alarm about losing the backup is more dangerous here than a long
+    // wait.
     let fsck = try? await ProcessRunner.run(fsckPath, ["-n", String(device)])
 
-    // Czy urzadzenie bylo jeszcze nasze, gdy `fsck` konczyl?
+    // Was the device still ours when `fsck` finished?
     //
-    // `fsck_apfs` zwraca niezerowy kod tak samo, gdy znalazl uszkodzenie, jak
-    // i wtedy, gdy ktos wyrwal mu urzadzenie spod nog - a wyrwac je potrafi
-    // `purgeStaleDevices()` (`hdiutil detach -force`) przy tiku agenta
-    // `gdrive-attach` co 900 s. Bez tego sprawdzenia `verify` meldowal wtedy
-    // "Obraz NIESPOJNY", czyli falszywy alarm o utracie calego backupu.
-    // Blokada 'image' zamyka juz to okno, ale komunikat ma byc uczciwy
-    // takze wtedy, gdy urzadzenie znika z innego powodu.
+    // `fsck_apfs` returns a non-zero code both when it found damage and when
+    // someone pulled the device out from under it - and
+    // `purgeStaleDevices()` (`hdiutil detach -force`) can do exactly that on
+    // the `gdrive-attach` agent's tick every 900 s. Without this check `verify`
+    // then reported "Image INCONSISTENT", i.e. a false alarm about losing the
+    // whole backup. The 'image' lock already closes that window, but the
+    // message has to be honest also when the device disappears for another
+    // reason.
     let deviceSurvived = await devicesForImage().contains(parentDevice(of: String(device)))
 
-    // Odpinamy Z CZEKANIEM, nie przez `defer { Task { ... } }`. Tamta wersja
-    // wracala z funkcji, zanim odpiecie sie wydarzylo - a wolajacy zwykle od
-    // razu podpina obraz z powrotem, wiec podpiecie scigalo sie z zaleglym
-    // odpieciem tego samego urzadzenia.
+    // We detach WITH waiting, not via `defer { Task { ... } }`. That version
+    // returned from the function before the detach happened - and the caller
+    // usually attaches the image back right away, so the attach raced with a
+    // pending detach of the same device.
     _ = try? await ProcessRunner.run(
       "/usr/bin/hdiutil", ["detach", String(device), "-force", "-quiet"], timeout: 120)
 
-    // "Nie udalo sie sprawdzic" to NIE to samo co "niespojny" - jedno znaczy
-    // brak wyniku, drugie uszkodzony backup. Zlanie ich w jeden komunikat
-    // kazaloby uzytkownikowi odtwarzac cala kopie z powodu nieudanego
-    // uruchomienia narzedzia.
+    // "Could not check" is NOT the same as "inconsistent" - one means no
+    // result, the other a damaged backup. Merging them into one message would
+    // make the user restore the whole backup because of a failed tool run.
     guard let fsck else {
       return CMActionResult(
         succeeded: false,
-        message: "Nie udalo sie uruchomic \(fsckPath) - spojnosc obrazu POZOSTAJE NIESPRAWDZONA.")
+        message: L10n.tr(
+          "Could not run %@ - the image's consistency REMAINS UNCHECKED.", fsckPath))
     }
     if !fsck.succeeded && !deviceSurvived {
       return CMActionResult(
         succeeded: false,
-        message: """
-          Sprawdzenie PRZERWANE - urzadzenie \(device) zniklo w trakcie (ktos odpial \
-          obraz na sile). To nie jest wynik o stanie backupu: spojnosc obrazu \
-          POZOSTAJE NIESPRAWDZONA. Powtorz sprawdzenie.
-          """)
+        message: L10n.tr(
+          "Check INTERRUPTED - device %@ disappeared midway (someone force-detached the image). This is not a result about the backup's state: the image's consistency REMAINS UNCHECKED. Repeat the check.",
+          String(device)))
     }
     return CMActionResult(
       succeeded: fsck.succeeded,
       message: fsck.succeeded
-        ? "Obraz spojny." : "Obraz NIESPOJNY: \(fsck.stdout.suffix(500))")
+        ? L10n.tr("Image consistent.")
+        : L10n.tr("Image INCONSISTENT: %@", String(fsck.stdout.suffix(500))))
   }
 
   /// `/dev/disk7s1` -> `/dev/disk7`.
   ///
-  /// `fsck_apfs` dostaje partycje APFS, a `hdiutil info` - i wiec
-  /// `devicesForImage()` - wypisuje urzadzenie NADRZEDNE. Porownanie ich
-  /// wprost nigdy by sie nie zgodzilo, wiec sprawdzenie "czy urzadzenie
-  /// przezylo" cicho odpowiadaloby "nie" za kazdym razem.
+  /// `fsck_apfs` gets the APFS partition, while `hdiutil info` - and therefore
+  /// `devicesForImage()` - lists the PARENT device. Comparing them directly
+  /// would never match, so the "did the device survive" check would silently
+  /// answer "no" every time.
   static func parentDevice(of device: String) -> String {
     let prefix = "/dev/disk"
     guard device.hasPrefix(prefix) else { return device }
@@ -834,44 +851,46 @@ public enum BackupImageService {
     return digits.isEmpty ? device : prefix + digits
   }
 
-  // MARK: - Gotowosc do restartu
+  // MARK: - Restart readiness
 
-  /// Czy mozna bezpiecznie wylaczyc Maca bez `prepare-shutdown`.
+  /// Whether the Mac can be safely shut down without `prepare-shutdown`.
   ///
-  /// Ryzyko przy wylaczaniu nie jest stale - istnieje tylko wtedy, gdy w
-  /// buforze czekaja dane jeszcze niewyslane. macOS daje agentom kilkanascie
-  /// sekund na zamkniecie, co przy pustej kolejce wystarcza z zapasem, a przy
-  /// pelnej nie wystarcza wcale.
+  /// The risk when shutting down is not constant - it exists only when data
+  /// not yet uploaded is waiting in the buffer. macOS gives agents a dozen or
+  /// so seconds to quit, which with an empty queue is plenty, and with a full
+  /// one not enough at all.
   ///
-  /// Zmierzone: kolejka wraca do zera w ciagu kilku minut po kazdym backupie
-  /// godzinowym, wiec przez wieksza czesc doby restart jest po prostu
-  /// bezpieczny. Zamiast kazac uzytkownikowi pamietac o poleceniu przed kazdym
-  /// restartem, mowimy mu, kiedy naprawde jest potrzebne.
+  /// Measured: the queue returns to zero within a few minutes after every
+  /// hourly backup, so for most of the day a restart is simply safe. Instead of
+  /// making the user remember a command before every restart, we tell them
+  /// when it is really needed.
   public static func safeToRebootNow() async -> Bool {
     guard let stats = await DriveBufferService.queueStats() else {
-      // Bez odczytu ze stanu kolejki nie mamy podstaw twierdzic, ze jest
-      // bezpiecznie - a przy takim pytaniu milczenie musi znaczyc "nie".
+      // Without a reading of the queue state we have no grounds to claim it is
+      // safe - and for such a question silence must mean "no".
       return false
     }
-    // `isQuiet`, NIE `isIdle`: pusta kolejka nie wystarczy, bo pasma porzucone
-    // przez rclone (`erroredFiles`) wypadaja z kolejki tak samo jak wyslane.
-    // Restart przy takim stanie nie niszczy niczego dodatkowo, ale odpowiedz
-    // "TAK - kolejka pusta" czytalo sie jako "kopia na Dysku jest kompletna",
-    // a nie byla - i to samo zdanie padalo w `drive-status` obok
-    // `UploadState.failedFiles` z etykieta "WYMAGA REAKCJI".
+    // `isQuiet`, NOT `isIdle`: an empty queue is not enough, because bands
+    // abandoned by rclone (`erroredFiles`) drop out of the queue just like
+    // uploaded ones. A restart in that state does not destroy anything extra,
+    // but the answer "YES - queue empty" read as "the backup on Drive is
+    // complete", and it was not - and the same sentence appeared in
+    // `drive-status` next to `UploadState.failedFiles` with the label
+    // "ACTION NEEDED".
     return stats.isQuiet
   }
 
-  // MARK: - Ponawianie
+  // MARK: - Retrying
 
-  /// Ponawia operacje `hdiutil` na montowaniu FUSE-T.
+  /// Retries `hdiutil` operations on a FUSE-T mount.
   ///
-  /// FUSE-T montuje przez NFS, a `hdiutil` na takim wolumenie bywa odrzucany
-  /// bledem "RPC version wrong". Zmierzone: blad nie zalezy od rozmiaru obrazu
-  /// ani od danych (jeden przebieg padl dla 100 GB i 400 GB, a przeszedl dla
-  /// 600, 1000 i 1500 GB), tylko od chwili - przy pustej kolejce wysylki
-  /// 5 prob na 5 udanych, przy rclone zajetym losowo. Przy tworzeniu obrazu
-  /// produkcyjnego pierwsza proba padla, druga przeszla.
+  /// FUSE-T mounts via NFS, and `hdiutil` on such a volume is sometimes
+  /// rejected with "RPC version wrong". Measured: the error does not depend on
+  /// the image size or the data (one run failed for 100 GB and 400 GB, and
+  /// passed for 600, 1000 and 1500 GB), only on the moment - with an empty
+  /// upload queue 5 of 5 attempts succeeded, with rclone busy it was random.
+  /// When creating the production image, the first attempt failed and the
+  /// second passed.
   private static func retryingFlakyMount(
     attempts: Int, _ operation: () async -> ProcessResult?
   ) async -> ProcessResult? {
@@ -880,7 +899,7 @@ public enum BackupImageService {
       last = await operation()
       if last?.succeeded == true { return last }
       guard attempt < attempts else { break }
-      CMLogger.log("hdiutil: proba \(attempt) nieudana, ponawiam")
+      CMLogger.log("hdiutil: attempt \(attempt) failed, retrying")
       try? await Task.sleep(nanoseconds: 5_000_000_000)
       await DriveBufferService.waitUntilIdle(timeout: 60)
     }

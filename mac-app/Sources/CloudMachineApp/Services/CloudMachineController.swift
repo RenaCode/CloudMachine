@@ -2,14 +2,14 @@ import CloudMachineCore
 import Foundation
 import SwiftUI
 
-/// Laczy interfejs z serwisami w `CloudMachineCore`. Sam nie zawiera logiki
-/// backupu - to, co wie o Google Drive, obrazie i buforze, siedzi w serwisach,
-/// zeby CLI i GUI robily dokladnie to samo.
+/// Connects the interface to the services in `CloudMachineCore`. It contains no backup
+/// logic itself - what it knows about Google Drive, the image and the buffer lives in the services,
+/// so that the CLI and the GUI do exactly the same thing.
 @MainActor
 final class CloudMachineController: ObservableObject {
   let status = AppStatus()
 
-  /// Stan wlasnych poswiadczen Google - tylko "jest / nie ma", nigdy wartosc.
+  /// State of our own Google credentials - only "present / absent", never the value.
   @Published var credentials = RemoteConfigurer.CredentialsState(
     hasClientID: false, hasClientSecret: false)
 
@@ -17,17 +17,17 @@ final class CloudMachineController: ObservableObject {
   private var lastBytesDone: Double?
   private var lastBytesSampledAt: Date?
 
-  /// Co ile odswiezamy odpowiedz na pytanie "kiedy ostatnio powstala kopia".
+  /// How often we refresh the answer to "when was a backup last made".
   ///
-  /// Rzadziej niz reszta panelu (10 s) i celowo: `BackupHealth.currentReport()`
-  /// czyta plik preferencji Time Machine, pyta rclone o pojemnosc Dysku
-  /// i tmutil o cel backupu - to sekundy pracy, nie mikrosekundy. Cykl
-  /// backupu jest godzinowy, wiec odpowiedz sprzed pieciu minut jest tak samo
-  /// dobra jak sprzed pieciu sekund.
+  /// Less often than the rest of the panel (10 s), and deliberately: `BackupHealth.currentReport()`
+  /// reads the Time Machine preferences file, asks rclone for the Drive capacity
+  /// and tmutil for the backup destination - that is seconds of work, not microseconds. The backup
+  /// cycle is hourly, so an answer from five minutes ago is just as
+  /// good as one from five seconds ago.
   private static let backupCycleInterval: TimeInterval = 300
   private var backupCycleCheckedAt: Date?
 
-  // MARK: - Cykl odswiezania
+  // MARK: - Refresh cycle
 
   func startAutoRefresh(interval: TimeInterval = 10) {
     refreshTask?.cancel()
@@ -51,20 +51,20 @@ final class CloudMachineController: ObservableObject {
     await refreshTimeMachine()
     await refreshProgress()
     await refreshBackupCycle()
-    // Tani odczyt jednego malego pliku - czujka zostawia w nim date KAZDEGO
-    // przebiegu. Patrz `WatchdogHeartbeat`: bez tego jedynym objawem
-    // wyladowanej czujki jest cisza, a cisza jest tu stanem normalnym.
+    // A cheap read of one small file - the watchdog leaves the date of EVERY
+    // run in it. See `WatchdogHeartbeat`: without this the only symptom of an
+    // unloaded watchdog is silence, and silence is the normal state here.
     status.watchdog = WatchdogHeartbeat.current()
     status.lastRefresh = Date()
   }
 
-  /// Wiek ostatniej UDANEJ kopii.
+  /// Age of the last SUCCESSFUL backup.
   ///
-  /// Panel nie zadawal tego pytania ani razu (patrz `BackupCycleStatus`),
-  /// wiec awaria "wszystko podpiete, a kopii nie ma od dwoch dni" wygladala
-  /// w nim dokladnie tak samo jak sprawny system. Zrodlo jest to samo, z
-  /// ktorego korzysta czujka `backup-health` - jedno zrodlo prawdy, zeby
-  /// panel i czujka nie mogly twierdzic czegos innego o tym samym.
+  /// The panel did not ask this question even once (see `BackupCycleStatus`),
+  /// so the failure "everything attached, and no backup for two days" looked
+  /// in it exactly the same as a working system. The source is the same one
+  /// the `backup-health` watchdog uses - a single source of truth, so that
+  /// the panel and the watchdog cannot claim different things about the same thing.
   private func refreshBackupCycle(force: Bool = false) async {
     if !force, let at = backupCycleCheckedAt,
       Date().timeIntervalSince(at) < Self.backupCycleInterval
@@ -75,10 +75,10 @@ final class CloudMachineController: ObservableObject {
 
     let report = await BackupHealth.currentReport()
     var cycle = BackupCycleStatus()
-    // "Odczytano" znaczy tu: plik preferencji dalo sie przeczytac. Gdy sie
-    // nie da (najczesciej brak Pelnego dostepu do dysku), `currentReport`
-    // zglasza to jako problem i NIE podaje zadnej daty - wtedy `known`
-    // zostaje `false`, a nie udaje, ze kopii po prostu nie ma.
+    // "Read" means here: the preferences file could be read. When it
+    // cannot (most often missing Full Disk Access), `currentReport`
+    // reports that as a problem and gives NO date - then `known`
+    // stays `false` instead of pretending there simply is no backup.
     cycle.known = report.preferencesReadable
     cycle.lastSuccess = report.lastSuccess
     cycle.problems = report.problems.map(\.summary)
@@ -86,7 +86,7 @@ final class CloudMachineController: ObservableObject {
     status.backupCycle = cycle
   }
 
-  // MARK: - Poszczegolne odczyty
+  // MARK: - Individual reads
 
   private func refreshDependencies() async {
     let readiness = CMTooling.checkReadiness()
@@ -94,35 +94,36 @@ final class CloudMachineController: ObservableObject {
       readiness.ready ? .ready : .missing(readiness.missing, readiness.remedies)
     status.remoteConfigured = await RemoteConfigurer.isConfigured(
       remoteName: DriveBufferService.remoteName)
-    // REALNY odczyt tego pliku, o ktory naprawde chodzi - patrz
-    // `BackupHealth.preferencesReadable`. Wczesniej bylo tu
-    // `isReadableFile` (czyli `access(R_OK)`) na KATALOGU
-    // `~/Library/Application Support/com.apple.TCC`: zla sciezka i sprawdzenie,
-    // ktore pod TCC niczego nie dowodzi.
+    // A REAL read of the file that actually matters - see
+    // `BackupHealth.preferencesReadable`. Previously this was
+    // `isReadableFile` (that is, `access(R_OK)`) on the DIRECTORY
+    // `~/Library/Application Support/com.apple.TCC`: the wrong path and a check
+    // that proves nothing under TCC.
     status.hasFullDiskAccess = BackupHealth.preferencesReadable()
   }
 
-  /// Stan wlasnych poswiadczen OAuth. Sprawdzamy TYLKO istnienie wpisu -
-  /// siegniecie po sama wartosc potrafi podniesc okno Keychaina, a to okno
-  /// nie ma prawa wyskakiwac przy zwyklym odswiezaniu interfejsu.
+  /// State of our own OAuth credentials. We check ONLY that the entry exists -
+  /// reaching for the value itself can raise a Keychain prompt, and that prompt
+  /// has no right to pop up during an ordinary interface refresh.
   private func refreshCredentials() async {
     credentials = await RemoteConfigurer.credentialsState()
   }
 
-  /// Zapisuje poswiadczenia i odswieza stan.
+  /// Saves the credentials and refreshes the state.
   ///
-  /// Nie przekonfigurowuje remote: token wydany na starym `client_id` dziala
-  /// dalej, wiec samo wpisanie nowych wartosci NIC nie zmienia, dopoki nie
-  /// przejdzie `configure-remote --replace-existing`. Mowimy to wprost.
+  /// Does not reconfigure the remote: a token issued for the old `client_id` keeps
+  /// working, so entering new values alone changes NOTHING until
+  /// `configure-remote --replace-existing` is run. We say so plainly.
   func saveCredentials(clientID: String, clientSecret: String) async -> String {
     do {
       try await RemoteConfigurer.storeCredentials(
         clientID: clientID, clientSecret: clientSecret)
       await refreshCredentials()
-      return
-        "Zapisane w Keychainie. Uwaga: istniejace polaczenie nadal dziala na starym client_id - zeby uzyc nowego, przejdz configure-remote --replace-existing."
+      return L10n.tr(
+        "Saved in the Keychain. Note: the existing connection still uses the old client_id - to use the new one, run configure-remote --replace-existing."
+      )
     } catch {
-      return "Nie zapisano: \(error.localizedDescription)"
+      return L10n.tr("Not saved: %@", error.localizedDescription)
     }
   }
 
@@ -130,26 +131,26 @@ final class CloudMachineController: ObservableObject {
     let stats = await DriveBufferService.queueStats()
     var buffer = BufferStatus()
     buffer.mounted = DriveBufferService.isMounted
-    // Martwy obraz (w tablicy montowan, ale bez odczytu) liczy sie jako
-    // NIEPODPIETY - z punktu widzenia Time Machine dokladnie tym jest.
+    // A dead image (in the mount table, but unreadable) counts as
+    // NOT ATTACHED - from Time Machine's point of view that is exactly what it is.
     //
-    // `await`, a nie wlasciwosc obliczana: ta funkcja chodzi na `@MainActor`
-    // co 10 s, a w sondzie siedzi `read()` na FUSE-T. Do 26.09.2026 byl to
-    // zwykly, blokujacy odczyt - zaklinowany wolumen zamrazal caly interfejs
-    // (ruch okna, menu, przyciski) na tyle, ile trwalo I/O, czyli potencjalnie
-    // bez konca. Teraz sonda siedzi na wlasnym watku z limitem czasu, a panel
-    // czeka na wynik bez blokowania watku glownego.
+    // `await`, not a computed property: this function runs on `@MainActor`
+    // every 10 s, and the probe contains a `read()` on FUSE-T. Until 26.09.2026 this was
+    // an ordinary, blocking read - a wedged volume froze the whole interface
+    // (window movement, menus, buttons) for as long as the I/O took, that is, potentially
+    // forever. Now the probe runs on its own thread with a time limit, and the panel
+    // waits for the result without blocking the main thread.
     buffer.imageAttached = await BackupImageService.attachment().isUsable
-    // Rozmiar bufora bierzemy od rclone; wlasny obchod katalogu to 6504
-    // wywolania stat co 10 sekund na dysku, na ktory leci backup.
+    // We take the buffer size from rclone; walking the directory ourselves means 6504
+    // stat calls every 10 seconds on the disk the backup is being written to.
     buffer.sizeGB = BufferGuardService.bufferGB(stats: stats)
     buffer.freeDiskGB = BufferGuardService.freeGB()
-    // Dwa osobne pytania, bo odpowiedzi znacza co innego: brak miejsca trzeba
-    // naprawic, limit dobowy mija sam.
+    // Two separate questions, because the answers mean different things: lack of space has to be
+    // fixed, the daily limit passes on its own.
     buffer.driveFull = DriveBufferService.hitStorageQuota()
     buffer.dailyQuotaExhausted = DriveBufferService.uploadStalled()
-    // Rozroznienie "odczytano" od "wyszlo zero" - bez tego brak odpowiedzi od
-    // rclone wygladal na pusta kolejke.
+    // Distinguishes "read" from "came out as zero" - without it, no answer from
+    // rclone looked like an empty queue.
     buffer.queueKnown = stats != nil
     if let stats {
       buffer.uploadsQueued = stats.uploadsQueued
@@ -160,18 +161,18 @@ final class CloudMachineController: ObservableObject {
     status.buffer = buffer
   }
 
-  /// `destinationReading()`, a NIE `currentDestinationMountPoint()`.
+  /// `destinationReading()`, and NOT `currentDestinationMountPoint()`.
   ///
-  /// Ta druga zwraca `nil` zarowno przy braku celu, jak i przy braku
-  /// odpowiedzi tmutil, wiec panel pokazywal "Time Machine nie wskazuje na
-  /// CloudMachine" takze wtedy, gdy o celu nie wiedzial NIC. Kierunek pomylki
-  /// byl bezpieczny (falszywy alarm zamiast falszywego spokoju), ale komunikat
-  /// wysylal czlowieka rejestrowac cel, ktory jest caly. Rozroznienie istnieje
-  /// w `DestinationReading` od 23.09.2026 i czujka `backup-health` juz z niego
-  /// korzysta - panel jest ostatnim miejscem, ktore te dwie rzeczy zlewalo.
+  /// The latter returns `nil` both when there is no destination and when there is no
+  /// answer from tmutil, so the panel showed "Time Machine does not point to
+  /// CloudMachine" even when it knew NOTHING about the destination. The direction of the error
+  /// was safe (a false alarm instead of false calm), but the message
+  /// sent a person off to register a destination that is intact. The distinction has existed
+  /// in `DestinationReading` since 23.09.2026 and the `backup-health` watchdog already
+  /// uses it - the panel is the last place that conflated these two things.
   ///
-  /// Cel moze tez istniec i wskazywac gdzie indziej - wtedy backupu na Drive
-  /// nie ma, mimo ze Time Machine wyglada na skonfigurowany; to nadal
+  /// The destination may also exist and point somewhere else - then there is no backup on Drive,
+  /// even though Time Machine looks configured; that is still
   /// `.notRegistered`.
   private func refreshTimeMachine() async {
     status.timeMachineState = TimeMachineState.from(
@@ -194,7 +195,7 @@ final class CloudMachineController: ObservableObject {
       bytesTotal: progress.totalBytes, filesDone: progress.files, filesTotal: progress.totalFiles,
       timeRemainingSeconds: progress.timeRemainingSeconds)
 
-    // tmutil nie podaje tempa - liczymy je z roznicy miedzy odczytami.
+    // tmutil does not report the rate - we compute it from the difference between readings.
     if let bytes = progress.bytes, let previous = lastBytesDone, let at = lastBytesSampledAt {
       let seconds = Date().timeIntervalSince(at)
       if seconds > 0, bytes >= previous {
@@ -206,63 +207,77 @@ final class CloudMachineController: ObservableObject {
     status.backupProgress = info
   }
 
-  // MARK: - Akcje
+  // MARK: - Actions
 
   func installRclone() async {
-    await run("Instaluje rclone") { await RcloneInstaller.install() }
+    await run(L10n.tr("Installing rclone"), log: "Installing rclone") {
+      await RcloneInstaller.install()
+    }
   }
 
-  /// Polaczenie z Google Drive robi sie z terminala, nie z GUI: OAuth otwiera
-  /// przegladarke i czeka na zatwierdzenie, a klucze czytamy z Keychaina.
+  /// Connecting to Google Drive is done from the terminal, not from the GUI: OAuth opens
+  /// the browser and waits for approval, and we read the keys from the Keychain.
   var connectDriveCommand: String {
     "\(CMPaths.agentBinaryPath?.path ?? "cloudmachine-agent") configure-remote"
   }
 
   func createImage(sizeGB: Int) async {
-    await run("Tworze obraz backupu") { await BackupImageService.create(sizeGB: sizeGB) }
+    await run(L10n.tr("Creating the backup image"), log: "Creating the backup image") {
+      await BackupImageService.create(sizeGB: sizeGB)
+    }
   }
 
   func attachImage() async {
-    await run("Podpinam obraz") { await BackupImageService.attach() }
+    await run(L10n.tr("Attaching the image"), log: "Attaching the image") {
+      await BackupImageService.attach()
+    }
   }
 
   func verifyImage() async {
-    await run("Sprawdzam spojnosc obrazu") { await BackupImageService.verify() }
+    await run(L10n.tr("Checking image consistency"), log: "Checking image consistency") {
+      await BackupImageService.verify()
+    }
   }
 
   func installAgents() async {
-    await run("Instaluje agentow launchd") { await LaunchdInstaller.install() }
+    await run(L10n.tr("Installing launchd agents"), log: "Installing launchd agents") {
+      await LaunchdInstaller.install()
+    }
   }
 
   func startBackup() async {
-    await run("Uruchamiam backup") {
+    await run(L10n.tr("Starting backup"), log: "Starting backup") {
       let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["startbackup"], timeout: 60)
       return CMActionResult(
         succeeded: result?.succeeded == true,
         message: result?.succeeded == true
-          ? "Backup uruchomiony." : "Nie udalo sie uruchomic backupu.")
+          ? L10n.tr("Backup started.") : L10n.tr("Could not start the backup."))
     }
   }
 
   func stopBackup() async {
-    await run("Wstrzymuje backup") {
+    await run(L10n.tr("Stopping backup"), log: "Stopping backup") {
       let result = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 60)
       return CMActionResult(
         succeeded: result?.succeeded == true,
         message: result?.succeeded == true
-          ? "Backup wstrzymany." : "Nie udalo sie wstrzymac backupu.")
+          ? L10n.tr("Backup stopped.") : L10n.tr("Could not stop the backup."))
     }
   }
 
-  /// Polecenie, ktore uzytkownik musi wkleic sam - `tmutil setdestination`
-  /// wymaga roota, a aplikacja nie ma reguly sudoers.
+  /// A command the user has to paste themselves - `tmutil setdestination`
+  /// requires root, and the app has no sudoers rule.
   var setDestinationCommand: String {
     "sudo tmutil setdestination '\(BackupImageService.targetPath.path)'"
   }
 
-  // MARK: - Wspolna obsluga akcji
+  // MARK: - Shared action handling
 
-  private func run(_ label: String, _ action: () async -> CMActionResult) async {
+  /// `label` is shown in the interface (translated); `logName` goes to the log,
+  /// which stays in English whatever the system language.
+  private func run(
+    _ label: String, log logName: String, _ action: () async -> CMActionResult
+  ) async {
     status.isBusy = true
     status.busyLabel = label
     status.errorMessage = nil
@@ -275,7 +290,7 @@ final class CloudMachineController: ObservableObject {
     status.lastAction = LastRunResult(
       succeeded: result.succeeded, message: result.message, date: Date())
     if !result.succeeded { status.errorMessage = result.message }
-    CMLogger.log("[gui] \(label): \(result.message)")
+    CMLogger.log("[gui] \(logName): \(result.message)")
     await refreshAll()
   }
 }

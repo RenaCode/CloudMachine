@@ -1,25 +1,25 @@
 import Foundation
 
-/// Wynik jednorazowej akcji (setup, instalacja, weryfikacja...) - wspolny
-/// ksztalt uzywany przez wiele serwisow w CloudMachineCore, zeby CLI i GUI
-/// mialy jeden, spojny sposob raportowania sukcesu/porazki.
+/// Result of a one-off action (setup, installation, verification...) - a
+/// shared shape used by many services in CloudMachineCore, so that the CLI and
+/// the GUI have one consistent way of reporting success/failure.
 public struct CMActionResult {
   public var succeeded: Bool
   public var message: String
-  /// `true`, jesli `succeeded == false` konkretnie dlatego, ze brakowalo
-  /// reguly sudoers NOPASSWD (patrz `ProcessResult.isSudoAuthFailure`) - a
-  /// NIE dlatego, ze samo polecenie zawiodlo. Pozwala wywolujacemu (GUI)
-  /// odroznic "trzeba najpierw ustawic sudoers i sprobowac ponownie" od
-  /// prawdziwego bledu, zamiast zwracac uzytkownikowi martwy koniec.
+  /// `true` if `succeeded == false` specifically because the NOPASSWD sudoers
+  /// rule was missing (see `ProcessResult.isSudoAuthFailure`) - and NOT
+  /// because the command itself failed. Lets the caller (GUI) tell "sudoers
+  /// has to be set up first, then retry" apart from a real error, instead of
+  /// handing the user a dead end.
   public var isSudoAuthFailure: Bool
 
-  /// `true`, jesli operacja w ogole sie NIE ZACZELA - nie dlatego, ze cos
-  /// poszlo zle, tylko dlatego, ze zasob byl zajety przez inna operacje
-  /// (patrz `BackupImageService.busyResult`).
+  /// `true` if the operation did NOT START at all - not because something went
+  /// wrong, but because the resource was held by another operation (see
+  /// `BackupImageService.busyResult`).
   ///
-  /// Osobne pole, a nie rozpoznawanie po tresci `message`: dopasowanie do
-  /// tekstu psuje sie przy kazdej zmianie komunikatu, a cicho - to znaczy
-  /// tak, ze nikt tego nie zauwaza az do awarii.
+  /// A separate field rather than recognizing it by the content of `message`:
+  /// matching on text breaks with every change of the message, and does so
+  /// silently - meaning nobody notices until something fails.
   public var didNotRun: Bool
 
   public init(
@@ -31,21 +31,21 @@ public struct CMActionResult {
     self.didNotRun = didNotRun
   }
 
-  /// Co wolajacy ma z tym wynikiem zrobic - w szczegolnosci z jakim kodem
-  /// wyjscia ma sie skonczyc polecenie CLI chodzace pod launchd.
+  /// What the caller should do with this result - in particular, which exit
+  /// code a CLI command running under launchd should end with.
   ///
-  /// Istnieje, bo "zajete przez inna operacje" NIE JEST awaria, a przez kod
-  /// wyjscia 1 ladowalo w `launchd-gdrive-attach.err.log` - czyli dokladnie
-  /// tam, gdzie czlowiek patrzy, pytajac "czy backup dziala". To ten sam blad,
-  /// ktory ten kod tepi w druga strone ("brak odpowiedzi czytany jako
-  /// odpowiedz"), tylko odwrocony: stan normalny czytany jako awaria.
+  /// It exists because "busy with another operation" is NOT a failure, yet
+  /// with exit code 1 it ended up in `launchd-gdrive-attach.err.log` - exactly
+  /// where a person looks when asking "is the backup working". It is the same
+  /// bug this code fights in the other direction ("no answer read as an
+  /// answer"), only reversed: a normal state read as a failure.
   public enum Disposition: Equatable {
-    /// Udalo sie.
+    /// It worked.
     case ok
-    /// Nic sie nie wydarzylo i nic sie nie zepsulo. Cykliczny tik ma po
-    /// prostu sprobowac przy nastepnym przebiegu.
+    /// Nothing happened and nothing broke. A periodic tick should simply try
+    /// again on the next run.
     case skipped
-    /// Prawdziwa porazka - ta ma byc widoczna.
+    /// A real failure - this one must be visible.
     case failed
   }
 

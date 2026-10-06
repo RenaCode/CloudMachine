@@ -13,10 +13,11 @@
   <key>CFBundleShortVersionString</key>
   <string>__CM_VERSION__</string>
   <!--
-    Numer wersji i numer budowy nie wystarczaja, zeby wskazac, CO dokladnie
-    dziala: VERSION stoi w miejscu miesiacami, a numer budowy (liczba commitow)
-    powtarza sie miedzy galeziami. SHA commitu wskazuje jednoznacznie, a
-    CMGitDirty mowi, czy w binarce siedzi kod, ktorego nie ma w zadnym commicie.
+    The version number and the build number are not enough to identify WHAT
+    exactly is running: VERSION stays the same for months, and the build number
+    (commit count) repeats across branches. The commit SHA identifies it
+    unambiguously, and CMGitDirty tells whether the binary contains code that
+    is not in any commit.
   -->
   <key>CMGitCommit</key>
   <string>__CM_COMMIT__</string>

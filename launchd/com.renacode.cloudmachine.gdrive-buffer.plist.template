@@ -12,13 +12,15 @@
   <key>RunAtLoad</key>
   <true/>
   <!--
-    Bufor musi stac zawsze - to on trzyma cel Time Machine przy zyciu.
-    KeepAlive podnosi go po padnieciu i po wybudzeniu Maca.
+    The buffer must always be up - it is what keeps the Time Machine
+    destination alive. KeepAlive brings it back after a crash and after the
+    Mac wakes up.
 
-    Agent nie probuje w nieskonczonosc na oslep: `mount-drive` sprawdza
-    najpierw, czy jest rclone z obsluga montowania i czy jest FUSE, i konczy
-    od razu z komunikatem, jesli ktoregos brakuje. Bez tego kazdy brakujacy
-    element oznaczalby restart co 30 s i log rosnacy bez konca.
+    The agent does not retry blindly forever: `mount-drive` first checks
+    whether rclone with mount support and FUSE are present, and exits
+    immediately with a message if either is missing. Without that, every
+    missing component would mean a restart every 30 s and a log growing
+    without end.
   -->
   <key>KeepAlive</key>
   <true/>

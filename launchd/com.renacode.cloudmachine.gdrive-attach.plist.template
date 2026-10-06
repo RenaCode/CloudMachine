@@ -12,14 +12,15 @@
   <key>RunAtLoad</key>
   <true/>
   <!--
-    Podpiecie obrazu jest jednorazowe, wiec nie KeepAlive. Cykliczne
-    uruchomienie naprawia sytuacje, w ktorej obraz zostal odpiety - na przyklad
-    po tym, jak bufor padl i wrocil.
+    Attaching the image is a one-shot action, so no KeepAlive. Running it
+    periodically repairs the case where the image got detached - for example
+    after the buffer went down and came back.
 
-    Kolejnosc wzgledem bufora nie wymaga sterowania z zewnatrz: `attach-image`
-    sam czeka, az bufor stanie - ile i na co, patrz `BufferReadiness`. To
-    czekanie, nie ten interwal, jest glowna obrona przed wyscigiem po starcie:
-    interwal tylko sprzata po sytuacji, w ktorej obraz odpial sie pozniej.
+    Ordering relative to the buffer needs no external control: `attach-image`
+    itself waits until the buffer is up - for how long and for what, see
+    `BufferReadiness`. That wait, not this interval, is the main defence
+    against the race at startup: the interval only cleans up after the image
+    got detached later on.
   -->
   <key>StartInterval</key>
   <integer>900</integer>

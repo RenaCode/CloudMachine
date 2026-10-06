@@ -1,24 +1,25 @@
 import Foundation
 
-/// Zapis poswiadczen do Keychaina.
+/// Writing credentials to the Keychain.
 ///
-/// **Dlaczego przez `security`, a nie przez API Security (SecItemAdd).**
-/// Wpis zalozony przez `SecItemAdd` dostaje ACL ograniczony do programu, ktory
-/// go utworzyl. Odczyt z INNEJ binarki - a dokladnie to robi
-/// `RemoteConfigurer.keychainSecret`, wolane z agenta launchd - podnosi wtedy
-/// okno "pozwol na dostep". Agent launchd nie ma komu tego okna pokazac, wiec
-/// odczyt zawisa albo wraca pusty, a rclone po cichu laczy sie na
-/// wspoldzielonym `client_id`. Zmierzone 13 wrz 2026: `SecItemAdd` zwrocil 0,
-/// po czym `security find-generic-password -w` z innego procesu zawisl na
-/// oknie SecurityAgent.
+/// **Why via `security` and not via the Security API (SecItemAdd).**
+/// An item created by `SecItemAdd` gets an ACL restricted to the program that
+/// created it. Reading it from ANOTHER binary - which is exactly what
+/// `RemoteConfigurer.keychainSecret`, called from the launchd agent, does -
+/// then raises an "allow access" dialog. The launchd agent has nobody to show
+/// that dialog to, so the read hangs or comes back empty, and rclone silently
+/// connects with the shared `client_id`. Measured 13 Sep 2026: `SecItemAdd`
+/// returned 0, after which `security find-generic-password -w` from another
+/// process hung on a SecurityAgent dialog.
 ///
-/// Zapis przez `security` daje wpis czytelny dla `security` - czyli dokladnie
-/// dla tej sciezki, ktorej uzywa dzialajacy system.
+/// Writing via `security` produces an item readable by `security` - i.e.
+/// exactly by the path the running system uses.
 ///
-/// **Cena: haslo idzie w argv `security`,** wiec przez ulamek sekundy widac je
-/// w `ps`. Swiadomy kompromis wobec alternatywy, ktora jest cicha awaria
-/// backupu. Ekspozycja dotyczy procesu zyjacego milisekundy i wylacznie na tej
-/// maszynie; sekret i tak zaraz laduje w Keychainie tego samego uzytkownika.
+/// **The price: the password goes into `security`'s argv,** so for a fraction
+/// of a second it is visible in `ps`. A deliberate trade-off against the
+/// alternative, which is a silent backup failure. The exposure concerns a
+/// process living for milliseconds and only on this machine; the secret lands
+/// in the same user's Keychain right afterwards anyway.
 public enum KeychainStore {
 
   public enum StoreError: LocalizedError {
@@ -27,15 +28,15 @@ public enum KeychainStore {
 
     public var errorDescription: String? {
       switch self {
-      case .emptyValue: return "Pusta wartosc - nie zapisuje."
-      case .failed(let detail): return "Keychain odmowil: \(detail)"
+      case .emptyValue: return L10n.tr("Empty value - not saving.")
+      case .failed(let detail): return L10n.tr("Keychain refused: %@", detail)
       }
     }
   }
 
-  /// Zapisuje albo nadpisuje wpis. `-U` znaczy "podmien, jesli juz jest" -
-  /// bez tego poprawienie literowki konczyloby sie bledem i stara wartoscia
-  /// nadal w uzyciu.
+  /// Saves or overwrites an item. `-U` means "replace if it already exists" -
+  /// without it, fixing a typo would end in an error with the old value still
+  /// in use.
   public static func save(_ value: String, account: String, service: String) async throws {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { throw StoreError.emptyValue }
@@ -45,15 +46,17 @@ public enum KeychainStore {
       ["add-generic-password", "-a", account, "-s", service, "-w", trimmed, "-U"],
       timeout: 30)
     guard result?.succeeded == true else {
-      throw StoreError.failed(result?.stderr ?? "nieznany blad")
+      throw StoreError.failed(result?.stderr ?? L10n.tr("unknown error"))
     }
   }
 
-  /// Czy wpis istnieje - BEZ `-w`, czyli bez siegania po sama wartosc.
+  /// Whether the item exists - WITHOUT `-w`, i.e. without reaching for the
+  /// value itself.
   ///
-  /// To nie jest drobiazg: samo sprawdzenie istnienia nie rusza ACL i nie
-  /// podnosi okna, a odczyt wartosci (`-w`) potrafi. Interfejs ma pokazac
-  /// "ustawione / brak" i do tego wartosc nie jest potrzebna.
+  /// This is not a detail: checking existence alone does not touch the ACL
+  /// and does not raise a dialog, while reading the value (`-w`) can. The
+  /// interface has to show "set / missing", and the value is not needed for
+  /// that.
   public static func exists(account: String, service: String) async -> Bool {
     let result = try? await ProcessRunner.run(
       "/usr/bin/security",
@@ -67,9 +70,9 @@ public enum KeychainStore {
       "/usr/bin/security",
       ["delete-generic-password", "-a", account, "-s", service],
       timeout: 30)
-    // Brak wpisu to nie blad - kasowanie ma byc idempotentne.
+    // A missing item is not an error - deletion must be idempotent.
     guard result?.succeeded == true || result?.stderr.contains("could not be found") == true else {
-      throw StoreError.failed(result?.stderr ?? "nieznany blad")
+      throw StoreError.failed(result?.stderr ?? L10n.tr("unknown error"))
     }
   }
 }

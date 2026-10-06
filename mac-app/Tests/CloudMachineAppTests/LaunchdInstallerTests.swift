@@ -2,57 +2,57 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Ustalenie 9: instalator agentow launchd meldowal sukces przy CZESCIOWEJ
-/// porazce.
+/// Finding 9: the launchd agent installer reported success on a PARTIAL
+/// failure.
 ///
-/// Wystarczyl jeden zaladowany agent, zeby `install()` zwrocilo
-/// `succeeded: true` i komunikat "Zainstalowano agentow: ...", wymieniajacy
-/// wylacznie te udane. Nieczytelny szablon szedl przez `continue`, nieudany
-/// zapis przez `try?` - a po nieudanym zapisie `launchctl load` wczytywal STARY
-/// plik `.plist` i konczyl sie kodem 0, czyli zaliczal sie jako sukces.
+/// One loaded agent was enough for `install()` to return `succeeded: true` and
+/// the message "Installed agents: ...", listing only the successful ones. An
+/// unreadable template went through `continue`, a failed write through `try?` -
+/// and after a failed write `launchctl load` read the OLD `.plist` file and
+/// exited with code 0, i.e. it counted as a success.
 ///
-/// Skutek: `buffer-guard` sie nie ladowal, instalator meldowal sukces, jedyna
-/// ochrona dysku nie dzialala i nikt o tym nie wiedzial. Brakujacej nazwy na
-/// liscie nie zauwazy nikt, kto nie zna tej listy z pamieci.
+/// The result: `buffer-guard` did not load, the installer reported success, the
+/// only protection of the disk was not working and nobody knew. Nobody who does
+/// not know the list by heart will notice a name missing from it.
 ///
-/// Testy podstawiaja czytanie szablonu, zapis i przeladowanie: instalacja
-/// PRAWDZIWA odpina obraz backupu i przeladowuje agentow tej maszyny, wiec nie
-/// da sie jej odpalic w tescie bez rozbierania dzialajacego backupu.
+/// The tests substitute reading the template, writing and reloading: a REAL
+/// installation detaches the backup image and reloads this machine's agents, so
+/// it cannot be run in a test without taking the working backup apart.
 final class LaunchdInstallerTests: XCTestCase {
 
   private let agentBin = URL(
     fileURLWithPath: "/Applications/CloudMachine.app/bin/cloudmachine-agent")
-  private let logDir = URL(fileURLWithPath: "/Users/kto/Library/Logs/CloudMachine")
-  private let docelowy = URL(fileURLWithPath: "/Users/kto/Library/LaunchAgents")
+  private let logDir = URL(fileURLWithPath: "/Users/someone/Library/Logs/CloudMachine")
+  private let destination = URL(fileURLWithPath: "/Users/someone/Library/LaunchAgents")
 
-  private func szablony(_ nazwy: [String]) -> [URL] {
-    nazwy.map { URL(fileURLWithPath: "/repo/launchd/\($0).plist.template") }
+  private func templates(_ names: [String]) -> [URL] {
+    names.map { URL(fileURLWithPath: "/repo/launchd/\($0).plist.template") }
   }
 
-  private struct ZlaProbka: Error {}
+  private struct BadSample: Error {}
 
-  // MARK: - Zbieranie porazek
+  // MARK: - Collecting failures
 
-  /// TA usterka, w calosci. Trzy agenty, jeden wchodzi, dwa padaja na dwa rozne
-  /// sposoby (`launchctl` odmawia, szablon nieczytelny) - wynik MUSI byc
-  /// porazka wymieniajaca to, czego NIE ma.
-  func testJedenUdanyAgentToNieJestUdanaInstalacja() async {
-    let wszystkie = szablony([
+  /// THAT defect, in full. Three agents, one goes in, two fail in two different
+  /// ways (`launchctl` refuses, the template is unreadable) - the result MUST
+  /// be a failure listing what is NOT there.
+  func testOneSuccessfulAgentIsNotASuccessfulInstallation() async {
+    let all = templates([
       "com.renacode.cloudmachine.app",
       "com.renacode.cloudmachine.buffer-guard",
       "com.renacode.cloudmachine.backup-health",
     ])
 
     let outcome = await LaunchdInstaller.installAgents(
-      templates: wszystkie, into: docelowy, agentBin: agentBin, logDir: logDir,
+      templates: all, into: destination, agentBin: agentBin, logDir: logDir,
       read: { url in
-        // Zepsuty szablon backup-health: wczesniej `guard ... else { continue }`
-        // wycinal go z instalacji BEZ SLADU.
-        if url.lastPathComponent.contains("backup-health") { throw ZlaProbka() }
+        // A broken backup-health template: previously `guard ... else {
+        // continue }` cut it out of the installation WITHOUT A TRACE.
+        if url.lastPathComponent.contains("backup-health") { throw BadSample() }
         return "__CM_AGENT_BIN__ __CM_LOG_DIR__"
       },
       write: { _, _ in },
-      // buffer-guard sie nie laduje - dokladnie ten agent z opisu ustalenia.
+      // buffer-guard does not load - exactly the agent from the finding.
       reload: { !$0.lastPathComponent.contains("buffer-guard") },
       log: { _ in })
 
@@ -61,154 +61,154 @@ final class LaunchdInstallerTests: XCTestCase {
       outcome.failed.map(\.label).sorted(),
       ["com.renacode.cloudmachine.backup-health", "com.renacode.cloudmachine.buffer-guard"])
 
-    let wynik = LaunchdInstaller.installVerdict(outcome)
+    let result = LaunchdInstaller.installVerdict(outcome)
     XCTAssertFalse(
-      wynik.succeeded,
-      "instalacja bez buffer-guard nie jest udana - dostalem: \(wynik.message)")
+      result.succeeded,
+      "an installation without buffer-guard is not successful - got: \(result.message)")
     XCTAssertTrue(
-      wynik.message.contains("buffer-guard"),
-      "komunikat musi NAZWAC agenta, ktorego brakuje: \(wynik.message)")
+      result.message.contains("buffer-guard"),
+      "the message must NAME the missing agent: \(result.message)")
     XCTAssertTrue(
-      wynik.message.contains("backup-health"),
-      "i drugiego tez: \(wynik.message)")
+      result.message.contains("backup-health"),
+      "and the other one too: \(result.message)")
     XCTAssertTrue(
-      wynik.message.contains("launchctl load odmowil"),
-      "i powiedziec, DLACZEGO nie wszedl: \(wynik.message)")
+      result.message.contains("launchctl load refused"),
+      "and say WHY it did not go in: \(result.message)")
   }
 
-  /// Nieudany zapis `.plist` NIE MOZE konczyc sie proba przeladowania.
+  /// A failed `.plist` write MUST NOT end with an attempt to reload.
   ///
-  /// Wczesniej zapis szedl przez `try?`, wiec po jego porazce lecialo
-  /// `launchctl load` na pliku, ktory nadal lezy w `~/Library/LaunchAgents` ze
-  /// STAREJ instalacji. `launchctl` konczyl sie wtedy kodem 0 i agent trafial
-  /// na liste "zainstalowanych", choc launchd chodzil na poprzedniej wersji -
-  /// byc moze wskazujacej na binarke, ktorej juz nie ma.
-  func testNieudanyZapisNieProbujePrzeladowac() async {
-    let przeladowania = Licznik()
+  /// Previously the write went through `try?`, so after it failed `launchctl
+  /// load` ran on the file that still lies in `~/Library/LaunchAgents` from the
+  /// OLD installation. `launchctl` then exited with code 0 and the agent landed
+  /// on the "installed" list, although launchd was running the previous
+  /// version - possibly pointing at a binary that no longer exists.
+  func testFailedWriteDoesNotAttemptReload() async {
+    let reloads = Counter()
 
     let outcome = await LaunchdInstaller.installAgents(
-      templates: szablony(["com.renacode.cloudmachine.buffer-guard"]),
-      into: docelowy, agentBin: agentBin, logDir: logDir,
+      templates: templates(["com.renacode.cloudmachine.buffer-guard"]),
+      into: destination, agentBin: agentBin, logDir: logDir,
       read: { _ in "__CM_AGENT_BIN__" },
-      write: { _, _ in throw ZlaProbka() },
+      write: { _, _ in throw BadSample() },
       reload: { _ in
-        przeladowania.zwieksz()
-        // Tak zachowywal sie launchctl na starym pliku: kod 0, czyli "sukces".
+        reloads.increment()
+        // This is how launchctl behaved on the old file: code 0, i.e. "success".
         return true
       },
       log: { _ in })
 
     XCTAssertEqual(
-      przeladowania.ile, 0,
-      "po nieudanym zapisie launchctl load wczytalby STARY .plist i zaliczyl sie jako sukces")
+      reloads.count, 0,
+      "after a failed write launchctl load would read the OLD .plist and count as a success")
     XCTAssertTrue(outcome.installed.isEmpty)
-    XCTAssertEqual(outcome.failed.count, 1, "nieudany zapis musi zostac ZAPISANY jako porazka")
+    XCTAssertEqual(outcome.failed.count, 1, "a failed write must be RECORDED as a failure")
     XCTAssertTrue(
-      outcome.failed.first?.reason.contains("nie udalo sie zapisac") == true,
-      "powod: \(outcome.failed.first?.reason ?? "(brak - porazki nikt nie zapisal)")")
+      outcome.failed.first?.reason.contains("could not write") == true,
+      "reason: \(outcome.failed.first?.reason ?? "(none - nobody recorded the failure)")")
     XCTAssertFalse(LaunchdInstaller.installVerdict(outcome).succeeded)
   }
 
-  /// Komplet agentow - i tylko komplet - jest sukcesem. Bez tego testu
-  /// "naprawa" zwracajaca `succeeded: false` zawsze przeszlaby niezauwazona,
-  /// a instalacja, ktora nigdy nie melduje sukcesu, jest tak samo bezuzyteczna
-  /// jak ta, ktora melduje go zawsze.
-  func testKompletAgentowToNadalSukces() async {
+  /// The full set of agents - and only the full set - is a success. Without
+  /// this test a "fix" that always returns `succeeded: false` would go
+  /// unnoticed, and an installation that never reports success is just as
+  /// useless as one that always does.
+  func testFullSetOfAgentsIsStillASuccess() async {
     let outcome = await LaunchdInstaller.installAgents(
-      templates: szablony([
+      templates: templates([
         "com.renacode.cloudmachine.app", "com.renacode.cloudmachine.buffer-guard",
       ]),
-      into: docelowy, agentBin: agentBin, logDir: logDir,
+      into: destination, agentBin: agentBin, logDir: logDir,
       read: { _ in "__CM_AGENT_BIN__ __CM_LOG_DIR__" },
       write: { _, _ in }, reload: { _ in true }, log: { _ in })
 
     XCTAssertTrue(outcome.failed.isEmpty)
-    let wynik = LaunchdInstaller.installVerdict(outcome)
-    XCTAssertTrue(wynik.succeeded, wynik.message)
+    let result = LaunchdInstaller.installVerdict(outcome)
+    XCTAssertTrue(result.succeeded, result.message)
     XCTAssertEqual(
-      wynik.message,
-      "Zainstalowano agentow: com.renacode.cloudmachine.app, com.renacode.cloudmachine.buffer-guard"
+      result.message,
+      "Installed agents: com.renacode.cloudmachine.app, com.renacode.cloudmachine.buffer-guard"
     )
   }
 
-  /// Brak szablonow to nadal porazka - inaczej instalacja, ktora nie zrobila
-  /// NIC, meldowalaby sukces z pusta lista.
-  func testBrakSzablonowToPorazka() {
+  /// No templates is still a failure - otherwise an installation that did
+  /// NOTHING would report success with an empty list.
+  func testNoTemplatesIsAFailure() {
     XCTAssertFalse(LaunchdInstaller.installVerdict(LaunchdInstaller.InstallOutcome()).succeeded)
   }
 
-  // MARK: - Podstawianie sciezek
+  // MARK: - Path substitution
 
-  /// Szablon musi dostac sciezki, po ktore sie zglasza - inaczej agent
-  /// wystartowalby z literalem `__CM_AGENT_BIN__` jako programem.
-  func testSciezkiTrafiajaDoZapisanegoPliku() async {
-    let zapisane = Przechwycone()
+  /// The template must get the paths it asks for - otherwise the agent would
+  /// start with the literal `__CM_AGENT_BIN__` as its program.
+  func testPathsEndUpInTheWrittenFile() async {
+    let written = Captured()
 
     _ = await LaunchdInstaller.installAgents(
-      templates: szablony(["com.renacode.cloudmachine.app"]),
-      into: docelowy, agentBin: agentBin, logDir: logDir,
+      templates: templates(["com.renacode.cloudmachine.app"]),
+      into: destination, agentBin: agentBin, logDir: logDir,
       read: { _ in "<string>__CM_AGENT_BIN__</string><string>__CM_LOG_DIR__</string>" },
-      write: { tresc, url in zapisane.dodaj(tresc, url) },
+      write: { content, url in written.add(content, url) },
       reload: { _ in true }, log: { _ in })
 
     XCTAssertEqual(
-      zapisane.tresci,
+      written.contents,
       ["<string>\(agentBin.path)</string><string>\(logDir.path)</string>"])
     XCTAssertEqual(
-      zapisane.sciezki,
-      [docelowy.appendingPathComponent("com.renacode.cloudmachine.app.plist").path])
+      written.paths,
+      [destination.appendingPathComponent("com.renacode.cloudmachine.app.plist").path])
   }
 
-  /// Pliki, ktore nie sa szablonami, nie moga trafic do instalacji - katalog
-  /// `launchd/` bywa listowany w calosci (README, `.DS_Store`).
-  func testNieSzablonyZostajaPominiete() async {
+  /// Files that are not templates must not get into the installation - the
+  /// `launchd/` directory is sometimes listed in full (README, `.DS_Store`).
+  func testNonTemplatesAreSkipped() async {
     let outcome = await LaunchdInstaller.installAgents(
       templates: [
         URL(fileURLWithPath: "/repo/launchd/README.md"),
         URL(fileURLWithPath: "/repo/launchd/com.renacode.cloudmachine.app.plist.template"),
       ],
-      into: docelowy, agentBin: agentBin, logDir: logDir,
+      into: destination, agentBin: agentBin, logDir: logDir,
       read: { _ in "x" }, write: { _, _ in }, reload: { _ in true }, log: { _ in })
 
     XCTAssertEqual(outcome.installed, ["com.renacode.cloudmachine.app"])
-    XCTAssertTrue(outcome.failed.isEmpty, "README nie jest nieudanym agentem")
+    XCTAssertTrue(outcome.failed.isEmpty, "a README is not a failed agent")
   }
 
-  // MARK: - Pomocnicze
+  // MARK: - Helpers
 
-  /// Klasy, bo podstawiane domkniecia sa `@Sendable`.
-  private final class Licznik: @unchecked Sendable {
+  /// Classes, because the substituted closures are `@Sendable`.
+  private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
-    private var licznik = 0
-    func zwieksz() {
+    private var value = 0
+    func increment() {
       lock.lock()
-      licznik += 1
+      value += 1
       lock.unlock()
     }
-    var ile: Int {
+    var count: Int {
       lock.lock()
       defer { lock.unlock() }
-      return licznik
+      return value
     }
   }
 
-  private final class Przechwycone: @unchecked Sendable {
+  private final class Captured: @unchecked Sendable {
     private let lock = NSLock()
-    private var zebrane: [(String, String)] = []
-    func dodaj(_ tresc: String, _ url: URL) {
+    private var collected: [(String, String)] = []
+    func add(_ content: String, _ url: URL) {
       lock.lock()
-      zebrane.append((tresc, url.path))
+      collected.append((content, url.path))
       lock.unlock()
     }
-    var tresci: [String] {
+    var contents: [String] {
       lock.lock()
       defer { lock.unlock() }
-      return zebrane.map(\.0)
+      return collected.map(\.0)
     }
-    var sciezki: [String] {
+    var paths: [String] {
       lock.lock()
       defer { lock.unlock() }
-      return zebrane.map(\.1)
+      return collected.map(\.1)
     }
   }
 }

@@ -1,12 +1,12 @@
 import Foundation
 
-/// Parsowanie tekstowego wyjscia `tmutil status`/`tmutil destinationinfo` -
-/// oba to wlasciwie "plist-jak" tekst, nie prawdziwy JSON/plist, wiec
-/// najprosciej i najbezpieczniej parsowac linia po linii, tak jak robily to
-/// oryginalne `awk` w bash.
-/// Postep aktywnego backupu, wyciagniety z bloku `Progress = { ... }` w
-/// `tmutil status`. Wszystkie pola opcjonalne - macOS nie zawsze wypelnia
-/// caly blok (np. w fazach innych niz "Copying" czesc pol moze brakowac).
+/// Parsing the text output of `tmutil status`/`tmutil destinationinfo` - both
+/// are really "plist-like" text, not real JSON/plist, so it is simplest and
+/// safest to parse line by line, the way the original `awk` in bash did.
+/// Progress of an active backup, extracted from the `Progress = { ... }` block
+/// in `tmutil status`. All fields optional - macOS does not always fill the
+/// whole block (e.g. in phases other than "Copying" some fields may be
+/// missing).
 public struct TimeMachineProgress: Equatable {
   public var phase: String?
   public var percent: Double?
@@ -19,39 +19,42 @@ public struct TimeMachineProgress: Equatable {
 
 public enum TimeMachineStatus {
 
-  /// Limit czasu dla KAZDEGO wywolania `tmutil` w tym pliku.
+  /// Time limit for EVERY `tmutil` call in this file.
   ///
-  /// Do 23.09.2026 nie bylo tu zadnego limitu i to byla awaria czekajaca na
-  /// swoj dzien. `tmutil destinationinfo` siega do celu backupu, czyli na
-  /// montowanie FUSE-T lezace na Google Drive. Przy martwym montowaniu
-  /// (incydent ENXIO z 22.09) odczyt wchodzi w nieprzerywalne I/O i nie wraca
-  /// NIGDY. Czujka `backup-health` wisi wtedy na `currentReport()`, a launchd
-  /// ze `StartInterval` nie uruchamia drugiej instancji, dopoki zyje pierwsza
-  /// - czyli czujka milknie NA STALE, dokladnie w chwili, w ktorej ma mowic.
+  /// Until 23.09.2026 there was no limit here at all, and that was a failure
+  /// waiting for its day. `tmutil destinationinfo` reaches the backup
+  /// destination, i.e. the FUSE-T mount living on Google Drive. With a dead
+  /// mount (the ENXIO incident of 22.09) the read enters uninterruptible I/O
+  /// and NEVER returns. The `backup-health` watchdog then hangs on
+  /// `currentReport()`, and launchd with `StartInterval` does not start a
+  /// second instance while the first one is alive - i.e. the watchdog goes
+  /// silent PERMANENTLY, exactly at the moment it is supposed to speak.
   ///
-  /// Dobor liczby, a nie "jakis limit z palca":
-  ///   - na zdrowym systemie `tmutil status` i `destinationinfo` odpowiadaja
-  ///     grubo ponizej sekundy (mierzone recznie na tej maszynie),
-  ///   - na montowaniu, ktore jeszcze zyje, ale odpowiada wolno, ten sam
-  ///     odczyt potrafi trwac dziesiatki sekund, bo idzie przez siec,
-  ///   - projekt ma juz jedna wpadke z limitem dobranym dla CZYSTEGO startu:
-  ///     120 s wystarczalo po restarcie, a po awarii zabraklo 10 s. Dlatego
-  ///     90 s to nie jest "tyle, ile zwykle trwa", tylko dwa rzedy wielkosci
-  ///     zapasu nad przypadkiem zdrowym i spory zapas nad wolnym.
+  /// How the number was chosen, rather than "some limit off the top of the
+  /// head":
+  ///   - on a healthy system `tmutil status` and `destinationinfo` answer well
+  ///     below a second (measured by hand on this machine),
+  ///   - on a mount that is still alive but answers slowly, the same read can
+  ///     take tens of seconds, because it goes over the network,
+  ///   - the project already has one slip with a limit chosen for a CLEAN
+  ///     start: 120 s was enough after a restart, and after a failure it was
+  ///     10 s short. That is why 90 s is not "as long as it usually takes" but
+  ///     two orders of magnitude of headroom over the healthy case and a
+  ///     generous margin over the slow one.
   ///
-  /// Gorna granica CZEKANIA jest wyzsza niz ta liczba: `ProcessRunner` przy
-  /// `timeout` wysyla SIGTERM, po +5 s SIGKILL, a po +10 s poddaje sie
-  /// i zwraca blad (SIGKILL nie dziala na proces w stanie "U"). Realne
-  /// maksimum to wiec 100 s na jedno wywolanie. `backup-health` robi ich na
-  /// przebieg jedno, przy `StartInterval` 1800 s - zapas 18-krotny, wiec
-  /// limit nie moze zjesc okna uruchomienia.
+  /// The upper bound on WAITING is higher than this number: on `timeout`
+  /// `ProcessRunner` sends SIGTERM, after +5 s SIGKILL, and after +10 s it
+  /// gives up and returns an error (SIGKILL does not work on a process in
+  /// state "U"). The real maximum is therefore 100 s per call.
+  /// `backup-health` makes one of them per run, with a `StartInterval` of
+  /// 1800 s - an 18-fold margin, so the limit cannot eat up the run window.
   public static let commandTimeout: TimeInterval = 90
 
-  /// Surowe wyjscie `tmutil`. `nil` znaczy DOKLADNIE jedno: tmutil NIE
-  /// ODPOWIEDZIAL (limit czasu albo nie dalo sie go uruchomic) - a nie
-  /// "odpowiedzial, ze nie". Kazdy wolajacy musi te dwie rzeczy rozroznic
-  /// sam, bo zlanie ich w `false`/`nil` to wlasnie ten rodzaj cichej awarii,
-  /// przed ktorym ostrzega naglowek `BackupHealth`.
+  /// Raw `tmutil` output. `nil` means EXACTLY one thing: tmutil DID NOT
+  /// ANSWER (time limit, or it could not be started) - not "it answered no".
+  /// Every caller has to tell these two apart itself, because merging them
+  /// into `false`/`nil` is exactly the kind of silent failure the
+  /// `BackupHealth` header warns against.
   private static func output(_ arguments: [String]) async -> String? {
     do {
       let result = try await ProcessRunner.run(
@@ -59,35 +62,36 @@ public enum TimeMachineStatus {
       return result.stdout
     } catch {
       CMLogger.log(
-        "tmutil \(arguments.joined(separator: " ")): BRAK ODPOWIEDZI - \(error.localizedDescription)"
+        "tmutil \(arguments.joined(separator: " ")): NO ANSWER - \(error.localizedDescription)"
       )
       return nil
     }
   }
 
-  /// Czy backup trwa. `nil` = tmutil nie odpowiedzial, czyli NIE WIADOMO.
+  /// Whether a backup is in progress. `nil` = tmutil did not answer, i.e.
+  /// UNKNOWN.
   ///
-  /// Rozroznienie jest tu istotne dla dozorcy bufora: "nie trwa" kaze mu
-  /// przejsc w czuwanie i zapomniec, ze nadzorowal backup, a "nie wiadomo"
-  /// musi zostawic stan bez zmiany.
+  /// The distinction matters here for the buffer guard: "not in progress"
+  /// tells it to go into standby and forget it was supervising a backup, while
+  /// "unknown" must leave the state unchanged.
   public static func runningState() async -> Bool? {
     guard let out = await output(["status"]) else { return nil }
     return isRunning(statusOutput: out)
   }
 
-  /// Skrot dla miejsc CZYSTO INFORMACYJNYCH (wydruk stanu, podglad w GUI),
-  /// gdzie brak odpowiedzi i "nie trwa" wygladaja tak samo i nic z tego nie
-  /// wynika. Wszedzie, gdzie z odpowiedzi wynika DECYZJA, uzywaj
-  /// `runningState()` i obsluz `nil` osobno.
+  /// Shortcut for PURELY INFORMATIONAL places (a status printout, a preview in
+  /// the GUI), where no answer and "not in progress" look the same and nothing
+  /// follows from it. Wherever a DECISION follows from the answer, use
+  /// `runningState()` and handle `nil` separately.
   public static func isRunning() async -> Bool {
     await runningState() ?? false
   }
 
-  /// Czysta funkcja parsujaca - wydzielona z `isRunning()`, zeby dalo sie ja
-  /// przetestowac bez `tmutil` na prawdziwym Maku (patrz `CooldownGate` dla
-  /// tego samego wzorca w tym projekcie). Cala logika parsujaca w tym pliku
-  /// wczesniej nie miala ani jednego testu, mimo ze to wlasnie tutaj (blednie
-  /// zgadywana nazwa wolumenu, kolizje mountowania) siedzialy realne bugi.
+  /// Pure parsing function - split out of `isRunning()` so it can be tested
+  /// without `tmutil` on a real Mac (see `CooldownGate` for the same pattern
+  /// in this project). All the parsing logic in this file previously had not a
+  /// single test, even though this is exactly where real bugs were (a wrongly
+  /// guessed volume name, mount collisions).
   static func isRunning(statusOutput: String) -> Bool {
     for line in statusOutput.split(separator: "\n") {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -98,15 +102,16 @@ public enum TimeMachineStatus {
     return false
   }
 
-  /// Parsuje `tmutil status` linia po linii (ten sam styl co reszta pliku) -
-  /// klucze wewnatrz bloku `Progress` (`bytes`, `files`, `TimeRemaining`...)
-  /// sa unikalne w calym wyjsciu, wiec nie trzeba osobno sledzic zagniezdzenia
-  /// nawiasow klamrowych. Zwraca `nil`, jesli aktualnie nic nie kopiuje.
+  /// Parses `tmutil status` line by line (the same style as the rest of the
+  /// file) - the keys inside the `Progress` block (`bytes`, `files`,
+  /// `TimeRemaining`...) are unique in the whole output, so there is no need to
+  /// track the nesting of braces separately. Returns `nil` if nothing is being
+  /// copied at the moment.
   ///
-  /// `nil` znaczy tu takze "tmutil nie odpowiedzial" i to jedyne miejsce
-  /// w tym pliku, gdzie zlanie tych dwoch przypadkow jest w porzadku: postep
-  /// sluzy WYLACZNIE do pokazania paska w interfejsie i zadna decyzja z niego
-  /// nie wynika. Kto pyta o postep, i tak wczesniej pyta `runningState()`.
+  /// Here `nil` also means "tmutil did not answer", and this is the only place
+  /// in this file where merging the two cases is fine: progress serves ONLY to
+  /// show a bar in the interface and no decision follows from it. Whoever asks
+  /// about progress asks `runningState()` beforehand anyway.
   public static func currentProgress() async -> TimeMachineProgress? {
     guard let out = await output(["status"]) else { return nil }
     return currentProgress(statusOutput: out)
@@ -139,8 +144,9 @@ public enum TimeMachineStatus {
     return running ? progress : nil
   }
 
-  /// Odpowiednik `tmutil destinationinfo | awk ... -v mp="$SP_MOUNT"` - szuka
-  /// bloku, ktorego "Mount Point" zawiera `mountPoint`, i zwraca jego ID.
+  /// Counterpart of `tmutil destinationinfo | awk ... -v mp="$SP_MOUNT"` -
+  /// looks for the block whose "Mount Point" contains `mountPoint`, and returns
+  /// its ID.
   public static func destinationID(forMountPointContaining mountPoint: String) async -> String? {
     guard let out = await output(["destinationinfo"]) else { return nil }
     return destinationID(forMountPointContaining: mountPoint, destinationInfoOutput: out)
@@ -167,9 +173,9 @@ public enum TimeMachineStatus {
     return nil
   }
 
-  /// Limit (GB) skonfigurowany dla celu TM pod danym punktem montowania -
-  /// parsuje linie "Quota" (np. "300 GB") z bloku znalezionego tak samo jak
-  /// w `destinationID`. `nil`, jesli TM nie raportuje limitu dla tego celu.
+  /// Quota (GB) configured for the TM destination at the given mount point -
+  /// parses the "Quota" line (e.g. "300 GB") from the block found the same way
+  /// as in `destinationID`. `nil` if TM reports no quota for this destination.
   public static func destinationQuotaGB(forMountPointContaining mountPoint: String) async
     -> Double?
   {
@@ -198,38 +204,38 @@ public enum TimeMachineStatus {
     return nil
   }
 
-  /// Punkt montowania AKTUALNIE zarejestrowanego celu Time Machine
-  /// (architektura gwarantuje dokladnie jeden aktywny cel lokalny - patrz
-  /// LocalBackupService). Zwraca prawdziwa, zarejestrowana sciezke zamiast
-  /// zgadywac ja z domyslnej nazwy wolumenu - uzytkownik moze nazwac lokalny
-  /// wolumin dowolnie (np. recznie utworzona partycja "TimeMachine" zamiast
-  /// domyslnej "CloudMachine-Local"), a zgadywanie po nazwie bylo realnym
-  /// bugiem: po recznej zmianie nazwy wolumenu caly status GUI/watchdogow
-  /// pokazywal "brak lokalnego woluminu" / "TimeMachine niezarejestrowany",
-  /// mimo poprawnie dzialajacego, zarejestrowanego celu.
+  /// Mount point of the CURRENTLY registered Time Machine destination (the
+  /// architecture guarantees exactly one active local destination - see
+  /// LocalBackupService). Returns the real, registered path instead of
+  /// guessing it from the default volume name - the user may name the local
+  /// volume anything (e.g. a manually created "TimeMachine" partition instead
+  /// of the default "CloudMachine-Local"), and guessing by name was a real
+  /// bug: after a manual volume rename the whole GUI/watchdog status showed
+  /// "no local volume" / "TimeMachine not registered", despite a correctly
+  /// working, registered destination.
   ///
-  /// Zwraca `nil` zarowno przy braku celu, jak i przy braku odpowiedzi od
-  /// tmutil - kto musi te dwie rzeczy rozroznic (czujka `backup-health`:
-  /// jedno znaczy "ktos przestawil cel", drugie "nie wiemy nic"), pyta
-  /// `destinationReading()`.
+  /// Returns `nil` both when there is no destination and when tmutil did not
+  /// answer - whoever has to tell these two apart (the `backup-health`
+  /// watchdog: one means "someone changed the destination", the other "we know
+  /// nothing") asks `destinationReading()`.
   public static func currentDestinationMountPoint() async -> String? {
     if case .mountPoint(let path) = await destinationReading() { return path }
     return nil
   }
 
-  /// Odpowiedz `tmutil destinationinfo` z jawnym, trzecim stanem: BRAK
-  /// ODPOWIEDZI.
+  /// The answer of `tmutil destinationinfo` with an explicit third state: NO
+  /// ANSWER.
   ///
-  /// Trzeci stan musi istniec osobno z tego samego powodu, co `queueUnknown`
-  /// w `UploadState`: bez niego zawieszony tmutil wygladal dokladnie tak samo
-  /// jak wyrejestrowany cel i czujka zglaszalaby "Time Machine nie wskazuje
-  /// na CloudMachine" - zdanie prawdziwie brzmiace i falszywe, ktore wysyla
-  /// czlowieka w zla strone.
+  /// The third state has to exist separately for the same reason as
+  /// `queueUnknown` in `UploadState`: without it a hung tmutil looked exactly
+  /// like an unregistered destination and the watchdog would report "Time
+  /// Machine does not point to CloudMachine" - a true-sounding and false
+  /// sentence that sends the person the wrong way.
   public enum DestinationReading: Equatable, Sendable {
     case mountPoint(String)
-    /// tmutil odpowiedzial, ale zadnego celu nie ma.
+    /// tmutil answered, but there is no destination.
     case none
-    /// tmutil nie odpowiedzial w limicie czasu.
+    /// tmutil did not answer within the time limit.
     case noAnswer
   }
 
@@ -250,15 +256,15 @@ public enum TimeMachineStatus {
     return nil
   }
 
-  /// Wszystkie zarejestrowane ID celow Time Machine - uzywane przez
-  /// `LocalBackupService.setAsDestination` do usuniecia poprzednich celow
-  /// przed zarejestrowaniem nowego (ta architektura utrzymuje dokladnie
-  /// jeden aktywny lokalny cel, w przeciwienstwie do legacy podejscia).
+  /// All registered Time Machine destination IDs - used by
+  /// `LocalBackupService.setAsDestination` to remove previous destinations
+  /// before registering a new one (this architecture keeps exactly one active
+  /// local destination, unlike the legacy approach).
   ///
-  /// Pusta lista przy braku odpowiedzi jest tu BEZPIECZNA i tylko dlatego
-  /// zostaje: jedyny wolajacy kasuje po kolei zwrocone cele przed
-  /// zarejestrowaniem nowego, wiec "nie wiem" konczy sie nieusunieciem
-  /// czegos, a nie usunieciem czegos nie tego.
+  /// An empty list on no answer is SAFE here, and that is the only reason it
+  /// stays: the only caller deletes the returned destinations one by one
+  /// before registering a new one, so "I do not know" ends with something not
+  /// being removed, not with the wrong thing being removed.
   public static func allDestinationIDs() async -> [String] {
     guard let out = await output(["destinationinfo"]) else { return [] }
     return allDestinationIDs(destinationInfoOutput: out)
@@ -276,8 +282,9 @@ public enum TimeMachineStatus {
     return ids
   }
 
-  /// `nil` = tmutil nie odpowiedzial. Celowo NIE `false`: "w konfiguracji nie
-  /// ma tego napisu" i "nie udalo sie zapytac" to dwie rozne odpowiedzi.
+  /// `nil` = tmutil did not answer. Deliberately NOT `false`: "the
+  /// configuration does not contain this text" and "could not ask" are two
+  /// different answers.
   public static func destinationInfoContains(_ needle: String) async -> Bool? {
     guard let out = await output(["destinationinfo"]) else { return nil }
     return out.contains(needle)
