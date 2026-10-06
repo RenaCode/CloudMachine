@@ -1,6 +1,15 @@
 // Polish translations, keyed by the English text passed to `L10n.tr`.
 extension L10nPolish {
   static let system: [String: String] = [
+    // DriveFolder
+    "'%@' is not a valid folder name: use lowercase letters, digits and dashes.":
+      "'%@' to nieprawidłowa nazwa folderu: użyj małych liter, cyfr i myślników.",
+    "This Mac already backs up to folder '%@'. Switching to '%@' would start a new, empty backup and orphan the existing one, so nothing was changed.":
+      "Ten Mac już robi kopię do folderu '%@'. Przejście na '%@' zaczęłoby nową, pustą kopię i osierociło istniejącą, więc nic nie zmieniono.",
+    "This Mac already has a CloudMachine installation, whose backup is in folder '%@'. Switching to '%@' would orphan it, so nothing was changed.":
+      "Ten Mac ma już instalację CloudMachine, której kopia leży w folderze '%@'. Przejście na '%@' by ją osierociło, więc nic nie zmieniono.",
+    "Could not save the folder name to %@: %@":
+      "Nie udało się zapisać nazwy folderu w %@: %@",
     "Homebrew is not installed. Install it manually: https://brew.sh":
       "Homebrew nie jest zainstalowany. Zainstaluj go ręcznie: https://brew.sh",
     "Installing rclone failed: %@":

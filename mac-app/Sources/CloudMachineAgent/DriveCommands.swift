@@ -347,6 +347,10 @@ struct DriveStatus: AsyncParsableCommand {
           ? "OK" : L10n.tr("missing: %@", readiness.missing.joined(separator: ", "))))
     let mounted = DriveBufferService.mountedState()
     print(L10n.tr("Drive mount:      %@", StatusLines.mounted(mounted)))
+    print(
+      L10n.tr(
+        "Drive folder:     %@",
+        "\(DriveBufferService.remoteName):\(DriveBufferService.remotePath)"))
     // Since 26.09.2026 the readability probe has a time limit - which is why
     // this tool does not hang on a dead mount (on 25.09.2026 it hung for over
     // 25 s and had to be killed), but reports that there is no answer.

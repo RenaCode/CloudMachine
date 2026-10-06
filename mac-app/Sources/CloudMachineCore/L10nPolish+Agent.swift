@@ -161,6 +161,10 @@ extension L10nPolish {
       "brakuje: %@",
     "Drive mount:      %@":
       "Montowanie Drive: %@",
+    "Drive folder:     %@":
+      "Folder na Drive:  %@",
+    "Name of this Mac's folder on Google Drive (default: derived from the computer name). Set once; it cannot be changed later.":
+      "Nazwa folderu tego Maca na Google Drive (domyślnie z nazwy komputera). Ustawiana raz; później nie da się jej zmienić.",
     "Image attached:   %@":
       "Obraz podpięty:   %@",
     "Cache on disk:    %@":

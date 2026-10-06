@@ -33,10 +33,18 @@ struct ConfigureRemote: AsyncParsableCommand {
   )
   var replaceExisting = false
 
+  @Option(
+    name: .long,
+    help: ArgumentHelp(
+      L10n.tr(
+        "Name of this Mac's folder on Google Drive (default: derived from the computer name). Set once; it cannot be changed later."
+      )))
+  var folder: String?
+
   func run() async throws {
     let (config, key) = await CLIContext.load()
     let result = await RemoteConfigurer.connect(
-      config: config, machineKey: key, replaceExisting: replaceExisting)
+      config: config, machineKey: key, replaceExisting: replaceExisting, folder: folder)
     print(result.message)
     if !result.succeeded { throw ExitCode.failure }
   }
