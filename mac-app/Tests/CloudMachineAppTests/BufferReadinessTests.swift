@@ -2,56 +2,57 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Testy czekania na gotowy bufor.
+/// Tests of waiting for a ready buffer.
 ///
-/// Kazdy odtwarza konkretny wyscig, ktory juz zdarzyl sie na zywo - nie
-/// sprawdzamy, ze funkcja "dziala", tylko ze zachowuje sie inaczej niz wersja,
-/// ktora 13 wrz 2026 zostawila Time Machine bez celu.
+/// Each one replays a specific race that has already happened live - we do
+/// not check that the function "works", but that it behaves differently from
+/// the version that left Time Machine without a destination on 13 Sep 2026.
 final class BufferReadinessTests: XCTestCase {
 
-  /// Zegar, ktory rusza sie tylko wtedy, gdy kod naprawde by spal. Dzieki temu
-  /// test mierzy CZEKANIE, a nie predkosc maszyny.
+  /// A clock that moves only when the code would really sleep. Thanks to that
+  /// the test measures WAITING, not the speed of the machine.
   private final class FakeClock {
     private(set) var now = Date(timeIntervalSince1970: 1_757_700_000)
     func sleep(_ seconds: TimeInterval) { now.addTimeInterval(seconds) }
   }
 
-  // MARK: - Warunek gotowosci
+  // MARK: - Readiness condition
 
-  /// To jest ten drugi wyscig: montowanie juz stoi, ale rclone nie wczytal
-  /// jeszcze brudnego cache, wiec katalog jest pusty. Stara wersja uznawala to
-  /// za gotowosc i podpiecie odpadalo na "Brak obrazu".
-  func testMontowanieBezObrazuToNieGotowosc() {
+  /// This is the second race: the mount is already up, but rclone has not yet
+  /// read the dirty cache, so the directory is empty. The old version treated
+  /// that as ready and the attach failed with "No image".
+  func testMountWithoutImageIsNotReady() {
     XCTAssertFalse(BufferReadiness.isReady(mounted: true, imageVisible: false))
   }
 
-  func testObrazBezMontowaniaToNieGotowosc() {
+  func testImageWithoutMountIsNotReady() {
     XCTAssertFalse(BufferReadiness.isReady(mounted: false, imageVisible: true))
   }
 
-  func testJednoIDrugieToGotowosc() {
+  func testBothMeanReady() {
     XCTAssertTrue(BufferReadiness.isReady(mounted: true, imageVisible: true))
   }
 
-  // MARK: - Czekanie
+  // MARK: - Waiting
 
-  /// ZNANA ZLA PROBKA: bufor staje po 150 s. Stary limit 120 s poddawal sie
-  /// dziesiec sekund za wczesnie i wlasnie to zdarzylo sie 13 wrz 2026.
-  func testDoczekaSieBuforaKtoryStajePo150s() async {
+  /// KNOWN BAD SAMPLE: the buffer comes up after 150 s. The old 120 s limit
+  /// gave up ten seconds too early, and that is exactly what happened on
+  /// 13 Sep 2026.
+  func testWaitsForABufferThatComesUpAfter150s() async {
     let clock = FakeClock()
-    let gotowyOd = clock.now.addingTimeInterval(150)
+    let readyAt = clock.now.addingTimeInterval(150)
 
     let ready = await BufferReadiness.wait(
       now: { clock.now },
       sleep: { clock.sleep($0) },
-      probe: { clock.now >= gotowyOd })
+      probe: { clock.now >= readyAt })
 
-    XCTAssertTrue(ready, "Bufor stanal po 150 s - czekanie musi go zlapac")
+    XCTAssertTrue(ready, "The buffer came up after 150 s - the wait has to catch it")
   }
 
-  /// Dowod, ze poprzedni test nie przechodzi dlatego, ze funkcja zwraca zawsze
-  /// `true`: bufor, ktory nie staje NIGDY, musi zostac zgloszony jako awaria.
-  func testPoddajeSieGdyBuforNieStajeWcale() async {
+  /// Proof that the previous test does not pass because the function always
+  /// returns `true`: a buffer that NEVER comes up must be reported as a failure.
+  func testGivesUpWhenTheBufferNeverComesUp() async {
     let clock = FakeClock()
 
     let ready = await BufferReadiness.wait(
@@ -59,12 +60,12 @@ final class BufferReadinessTests: XCTestCase {
       sleep: { clock.sleep($0) },
       probe: { false })
 
-    XCTAssertFalse(ready, "Bufor nigdy nie stanal - to musi byc awaria, nie cisza")
+    XCTAssertFalse(ready, "The buffer never came up - this has to be a failure, not silence")
   }
 
-  /// Czekanie ma sie skonczyc mniej wiecej na zadeklarowanym limicie, a nie
-  /// ciagnac w nieskonczonosc: launchd czeka na ten proces.
-  func testKonczyCzekanieNaZadeklarowanymLimicie() async {
+  /// The wait has to end roughly at the declared limit, not drag on forever:
+  /// launchd waits for this process.
+  func testStopsWaitingAtTheDeclaredLimit() async {
     let clock = FakeClock()
     let start = clock.now
 
@@ -78,9 +79,9 @@ final class BufferReadinessTests: XCTestCase {
     XCTAssertLessThan(elapsed, BufferReadiness.defaultTimeout + BufferReadiness.defaultPoll * 2)
   }
 
-  /// Gotowy bufor nie moze kosztowac ani jednego uspienia - `attach-image`
-  /// chodzi tez z reki i po kazdym tyknieciu launchd.
-  func testGotowyBuforNieCzekaWcale() async {
+  /// A ready buffer must not cost a single sleep - `attach-image` also runs by
+  /// hand and on every launchd tick.
+  func testReadyBufferDoesNotWaitAtAll() async {
     let clock = FakeClock()
     let start = clock.now
 
@@ -90,12 +91,13 @@ final class BufferReadinessTests: XCTestCase {
       probe: { true })
 
     XCTAssertTrue(ready)
-    XCTAssertEqual(clock.now, start, "Gotowy bufor ma wracac natychmiast")
+    XCTAssertEqual(clock.now, start, "A ready buffer has to return immediately")
   }
 
-  /// Limit musi byc wiekszy niz zaobserwowane 150 s, inaczej naprawa jest
-  /// pozorna. Zapisane wprost, zeby nikt go nie scial z powrotem do dwoch minut.
-  func testLimitJestWiekszyNizZaobserwowanyWyscig() {
+  /// The limit has to be greater than the observed 150 s, otherwise the fix is
+  /// only apparent. Written down explicitly, so that nobody cuts it back to two
+  /// minutes.
+  func testLimitIsGreaterThanTheObservedRace() {
     XCTAssertGreaterThan(BufferReadiness.defaultTimeout, 150)
   }
 }

@@ -2,68 +2,69 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Operacje na obrazie backupu: wzajemne wykluczenie i te werdykty, ktore
-/// wczesniej klamaly - "wszystko wyslane" przy porzuconych pasmach i "obraz
-/// NIESPOJNY" po wyrwaniu urzadzenia spod `fsck`.
+/// Operations on the backup image: mutual exclusion and the verdicts that used
+/// to lie - "everything uploaded" with abandoned bands and "image
+/// INCONSISTENT" after the device was pulled out from under `fsck`.
 final class BackupImageServiceTests: XCTestCase {
 
-  // MARK: - Wzajemne wykluczenie
+  // MARK: - Mutual exclusion
 
-  /// Blokada nazwana `BackupImageService.lockName` lezy w prawdziwym katalogu
-  /// logow, bo to tej samej blokady uzywaja `attach`/`detach`/`verify`/`create`.
-  /// Trzymamy ja przez ulamek sekundy i tylko po to, zeby sprawdzic, ze
-  /// operacje jej PRZESTRZEGAJA - zadna z nich nie dochodzi wtedy do `hdiutil`.
+  /// The lock named `BackupImageService.lockName` lives in the real log
+  /// directory, because `attach`/`detach`/`verify`/`create` use that same lock.
+  /// We hold it for a fraction of a second and only to check that the
+  /// operations RESPECT it - none of them gets as far as `hdiutil` then.
   private func withHeldImageLock(_ body: () async -> Void) async throws {
     let lock = CMLock(name: BackupImageService.lockName)
     try XCTSkipUnless(
       lock.acquire(),
-      "blokade '\(BackupImageService.lockName)' trzyma cos innego na tej maszynie")
+      "the '\(BackupImageService.lockName)' lock is held by something else on this machine")
     defer { lock.release() }
     await body()
   }
 
-  /// Sedno poprawki: do 23 wrzesnia 2026 `withCMLock` nie bylo wolane z ani
-  /// jednego miejsca w repo, wiec kazda z tych czterech operacji szla przy
-  /// trzymanej blokadzie tak samo jak bez niej. Test sprawdza nie tylko
-  /// `succeeded == false` (to akurat wychodzilo juz wczesniej, bo bufor nie
-  /// jest zamontowany), ale takze tresc i - co wazniejsze - `disposition`:
-  /// operacja ma rozpoznac zajetosc, a nie odbic sie od czegos innego po drodze.
-  func testOperacjeNaObrazieNieWchodzaSobieWDroge() async throws {
+  /// The heart of the fix: until 23 September 2026 `withCMLock` was not called
+  /// from a single place in the repo, so each of these four operations ran with
+  /// the lock held just as without it. The test checks not only
+  /// `succeeded == false` (that already came out before, because the buffer is
+  /// not mounted), but also the content and - more importantly - `disposition`:
+  /// the operation has to recognise the lock is taken, not bounce off something
+  /// else along the way.
+  func testImageOperationsDoNotGetInEachOthersWay() async throws {
     try await withHeldImageLock {
-      for (nazwa, wynik) in [
+      for (name, result) in [
         ("create", await BackupImageService.create(sizeGB: 100)),
         ("attach", await BackupImageService.attach()),
         ("detach", await BackupImageService.detach()),
         ("verify", await BackupImageService.verify()),
       ] {
-        XCTAssertFalse(wynik.succeeded, "\(nazwa) przy zajetym obrazie nie moze meldowac sukcesu")
+        XCTAssertFalse(result.succeeded, "\(name) must not report success with the image busy")
         XCTAssertTrue(
-          wynik.message.contains("inna operacja na obrazie"),
-          "\(nazwa) ma powiedziec, ze NIE zrobilo nic - dostalem: \(wynik.message)")
+          result.message.contains("another image operation"),
+          "\(name) has to say that it did NOTHING - got: \(result.message)")
         XCTAssertEqual(
-          wynik.disposition, .skipped,
-          "\(nazwa): zajetosc ma byc rozpoznawalna po TYPIE wyniku, nie po tresci komunikatu")
+          result.disposition, .skipped,
+          "\(name): busy has to be recognisable by the result TYPE, not by the message text")
       }
     }
   }
 
-  /// `attach-image` chodzi pod launchd co 900 s i jego kod wyjscia laduje w
-  /// `launchd-gdrive-attach.err.log`. Zajetosc obrazu nie moze sie tam
-  /// zapisywac jako awaria - ale prawdziwa porazka MUSI, inaczej schowalibysmy
-  /// realny blad za kodem 0.
-  func testZajeteToNieAwariaAlePorazkaNadalJestPorazka() {
+  /// `attach-image` runs under launchd every 900 s and its exit code lands in
+  /// `launchd-gdrive-attach.err.log`. A busy image must not be recorded there
+  /// as a failure - but a real failure MUST be, otherwise we would hide a real
+  /// error behind exit code 0.
+  func testBusyIsNotAFailureButAFailureIsStillAFailure() {
     XCTAssertEqual(
-      CMActionResult(succeeded: true, message: "Podpiete").disposition, .ok)
+      CMActionResult(succeeded: true, message: "Attached").disposition, .ok)
     XCTAssertEqual(
-      CMActionResult(succeeded: false, message: "zajete", didNotRun: true).disposition,
+      CMActionResult(succeeded: false, message: "busy", didNotRun: true).disposition,
       .skipped)
     XCTAssertEqual(
-      CMActionResult(succeeded: false, message: "Nie udalo sie podpiac obrazu").disposition,
+      CMActionResult(succeeded: false, message: "Could not attach the image").disposition,
       .failed,
-      "brak `didNotRun` ma znaczyc realna porazke - domyslna wartosc nie moze uciszac bledow")
+      "no `didNotRun` has to mean a real failure - the default value must not silence errors")
   }
 
-  // MARK: - Werdykt o odpieciu
+  // MARK: - Detach verdict
 
   private func stats(queued: Int = 0, inProgress: Int = 0, errored: Int = 0)
     -> DriveBufferService.QueueStats
@@ -73,139 +74,139 @@ final class BackupImageServiceTests: XCTestCase {
       erroredFiles: errored, bytesUsed: 1024, outOfSpace: false)
   }
 
-  func testPustaKolejkaBezBledowToWszystkoWyslane() {
-    let wynik = BackupImageService.detachVerdict(settled: stats())
-    XCTAssertTrue(wynik.succeeded)
-    XCTAssertTrue(wynik.message.contains("wszystko wyslane"))
+  func testEmptyQueueWithoutErrorsMeansEverythingUploaded() {
+    let result = BackupImageService.detachVerdict(settled: stats())
+    XCTAssertTrue(result.succeeded)
+    XCTAssertTrue(result.message.contains("everything uploaded"))
   }
 
-  /// Pasma porzucone przez rclone wypadaja z kolejki tak samo jak wyslane,
-  /// wiec sama pusta kolejka meldowala "Odpiete, wszystko wyslane na Google
-  /// Drive" przy danych istniejacych TYLKO na tym Macu.
-  func testPorzuconePasmaNieSaWyslane() {
-    let wynik = BackupImageService.detachVerdict(settled: stats(errored: 7))
-    XCTAssertFalse(wynik.succeeded)
-    XCTAssertFalse(wynik.message.contains("wszystko wyslane"))
-    XCTAssertTrue(wynik.message.contains("7"))
+  /// Bands abandoned by rclone drop out of the queue just like uploaded ones,
+  /// so an empty queue alone reported "Detached, everything uploaded to Google
+  /// Drive" with data existing ONLY on this Mac.
+  func testAbandonedBandsAreNotUploaded() {
+    let result = BackupImageService.detachVerdict(settled: stats(errored: 7))
+    XCTAssertFalse(result.succeeded)
+    XCTAssertFalse(result.message.contains("everything uploaded"))
+    XCTAssertTrue(result.message.contains("7"))
   }
 
-  /// Brak odczytu to nie sukces - patrz `UploadState.queueUnknown`.
-  func testBrakOdczytuKolejkiToNieSukces() {
-    let wynik = BackupImageService.detachVerdict(settled: nil)
-    XCTAssertFalse(wynik.succeeded)
+  /// No reading is not success - see `UploadState.queueUnknown`.
+  func testNoQueueReadingIsNotSuccess() {
+    let result = BackupImageService.detachVerdict(settled: nil)
+    XCTAssertFalse(result.succeeded)
   }
 
-  // MARK: - Tablica montowan
+  // MARK: - Mount table
 
-  /// Dotad ta lista powstawala z parsowania wydruku `/sbin/mount` (`" on "` …
-  /// `" ("`) wewnatrz `unmountBrowsedSnapshots()`, wiec nie bylo do czego
-  /// podstawic probki. Migawka backupu montuje sie pod
-  /// `/Volumes/.timemachine/<host>/<data>.backup/<wolumen>` i trzyma
-  /// urzadzenie obrazu zajete, przez co `hdiutil detach` odmawia.
-  func testWybieraTylkoPrzegladaneMigawkiBackupu() {
-    let punkty = [
+  /// Until now this list came from parsing `/sbin/mount` output (`" on "` …
+  /// `" ("`) inside `unmountBrowsedSnapshots()`, so there was nothing to
+  /// substitute a sample for. A backup snapshot mounts under
+  /// `/Volumes/.timemachine/<host>/<date>.backup/<volume>` and keeps the image's
+  /// device busy, which makes `hdiutil detach` refuse.
+  func testPicksOnlyBrowsedBackupSnapshots() {
+    let points = [
       "/",
       "/Volumes/CloudMachine",
       "/Users/mbeczynski/.cloudmachine/drive",
       "/Volumes/.timemachine/mac-studio/2026-09-23-101500.backup/CloudMachine",
       "/Volumes/.timemachine/mac-studio/2026-09-22-231500.backup/CloudMachine",
-      // Pulapka: podobna nazwa, ale NIE pod katalogiem migawek.
-      "/Volumes/timemachine-kopia",
+      // Trap: a similar name, but NOT under the snapshot directory.
+      "/Volumes/timemachine-copy",
     ]
     XCTAssertEqual(
-      BackupImageService.browsedSnapshotMounts(punkty),
+      BackupImageService.browsedSnapshotMounts(points),
       [
         "/Volumes/.timemachine/mac-studio/2026-09-23-101500.backup/CloudMachine",
         "/Volumes/.timemachine/mac-studio/2026-09-22-231500.backup/CloudMachine",
       ])
   }
 
-  func testBrakMigawekToPustaLista() {
+  func testNoSnapshotsGivesEmptyList() {
     XCTAssertEqual(BackupImageService.browsedSnapshotMounts(["/", "/Volumes/CloudMachine"]), [])
   }
 
-  /// Tablica montowan czytana z jadra, nie z `/sbin/mount`. Sprawdzamy na
-  /// zywo, bo cala poprawka polega na tym, ze ten odczyt NIE uruchamia procesu
-  /// i NIE dotyka systemu plikow - czego atrapa by nie pokazala.
-  func testTablicaMontowanJestCzytelnaIZawieraKorzen() throws {
-    let punkty = try XCTUnwrap(
-      DriveBufferService.mountPoints(), "getmntinfo nie oddal tablicy montowan")
-    XCTAssertTrue(punkty.contains("/"), "kazdy system ma zamontowany korzen - dostalem: \(punkty)")
+  /// The mount table read from the kernel, not from `/sbin/mount`. We check it
+  /// live, because the whole fix is that this read does NOT start a process
+  /// and does NOT touch the file system - which a fake would not show.
+  func testMountTableIsReadableAndContainsRoot() throws {
+    let points = try XCTUnwrap(
+      DriveBufferService.mountPoints(), "getmntinfo did not return the mount table")
+    XCTAssertTrue(points.contains("/"), "every system has the root mounted - got: \(points)")
   }
 
-  // MARK: - Stan podpiecia
+  // MARK: - Attachment state
 
-  /// `.unknown` to NIE `.detached`. `.detached` jest twierdzeniem
-  /// („sprawdzilem, nie ma"), a przy nieodczytanej tablicy montowan nie bylo
-  /// czego sprawdzic. Rozroznienie ma znaczenie, bo `attach` na podstawie
-  /// `.detached` robi `purgeStaleDevices()`, czyli `detach -force` na
-  /// urzadzeniu, ktore moze byc w tym czasie zywe.
-  func testNieznanyStanToNiePodpietyIleczNieodpiety() {
-    let nieznany = BackupImageService.Attachment.unknown
-    XCTAssertNotEqual(nieznany, .detached)
-    XCTAssertNotEqual(nieznany, .attached)
+  /// `.unknown` is NOT `.detached`. `.detached` is a claim ("I checked, it is
+  /// not there"), while with an unread mount table there was nothing to check.
+  /// The distinction matters, because on `.detached` `attach` runs
+  /// `purgeStaleDevices()`, i.e. `detach -force` on a device that may be alive
+  /// at that moment.
+  func testUnknownStateIsNeitherAttachedNorDetached() {
+    let unknown = BackupImageService.Attachment.unknown
+    XCTAssertNotEqual(unknown, .detached)
+    XCTAssertNotEqual(unknown, .attached)
     XCTAssertFalse(
-      nieznany.isUsable,
-      "na niewiadomej nie wolno polegac - Time Machine nie ma tu gwarancji celu")
+      unknown.isUsable,
+      "you must not rely on an unknown - Time Machine has no guaranteed destination here")
   }
 
-  /// Kazdy stan ma dawac inne zdanie. Wspolny opis dla `.detached`
-  /// i `.unknown` przywrocilby zlanie, ktore ta poprawka usuwa - tyle ze
-  /// w warstwie, ktora czyta czlowiek.
-  func testKazdyStanPodpieciaMaWlasnyOpis() {
-    let opisy = [
+  /// Every state has to give a different sentence. A shared description for
+  /// `.detached` and `.unknown` would bring back the merging this fix removes -
+  /// just in the layer a person reads.
+  func testEveryAttachmentStateHasItsOwnDescription() {
+    let descriptions = [
       BackupImageService.describe(.attached),
       BackupImageService.describe(.detached),
       BackupImageService.describe(.dead(errno: ENXIO)),
       BackupImageService.describe(.unknown),
-      // Ten sam stan, INNA przyczyna: sonda czytelnosci nie odpowiedziala
-      // w czasie. Decyzja jest ta sama (wstrzymaj), ale zdanie dla czlowieka
-      // musi byc inne - patrz `attachmentReading()`.
+      // The same state, a DIFFERENT cause: the readability probe did not
+      // answer in time. The decision is the same (hold off), but the sentence
+      // for a person must differ - see `attachmentReading()`.
       BackupImageService.describe(.unknown, probeTimedOut: true),
     ]
-    XCTAssertEqual(Set(opisy).count, opisy.count, "opisy sie powtarzaja: \(opisy)")
-    XCTAssertTrue(BackupImageService.describe(.unknown).contains("NIE WIADOMO"))
+    XCTAssertEqual(
+      Set(descriptions).count, descriptions.count, "descriptions repeat: \(descriptions)")
+    XCTAssertTrue(BackupImageService.describe(.unknown).contains("UNKNOWN"))
     XCTAssertTrue(
-      BackupImageService.describe(.unknown, probeTimedOut: true).contains("sonda"),
-      "opis ma mowic, ze to sonda nie odpowiedziala, a nie ze tablica montowan")
+      BackupImageService.describe(.unknown, probeTimedOut: true).contains("probe"),
+      "the description has to say that the probe did not answer, not the mount table")
   }
 
-  // MARK: - Urzadzenie nadrzedne
+  // MARK: - Parent device
 
-  /// `fsck_apfs` dostaje partycje, `hdiutil info` wypisuje urzadzenie
-  /// nadrzedne - bez tego przeliczenia sprawdzenie "czy urzadzenie przezylo"
-  /// odpowiadaloby "nie" zawsze.
-  func testUrzadzenieNadrzedneZPartycji() {
+  /// `fsck_apfs` gets the partition, `hdiutil info` lists the parent device -
+  /// without this conversion the "did the device survive" check would always
+  /// answer "no".
+  func testParentDeviceFromPartition() {
     XCTAssertEqual(BackupImageService.parentDevice(of: "/dev/disk7s1"), "/dev/disk7")
     XCTAssertEqual(BackupImageService.parentDevice(of: "/dev/disk12s3"), "/dev/disk12")
     XCTAssertEqual(BackupImageService.parentDevice(of: "/dev/disk7"), "/dev/disk7")
-    XCTAssertEqual(BackupImageService.parentDevice(of: "cos-innego"), "cos-innego")
+    XCTAssertEqual(BackupImageService.parentDevice(of: "something-else"), "something-else")
   }
 
-  // MARK: - Obraz na zdalnym
+  // MARK: - Image on the remote
 
   private let listing = """
-    inne-dane/
+    other-data/
     mac-studio.sparsebundle/
     """
 
-  func testWypisZdalnegoZObrazem() {
+  func testRemoteListingWithImage() {
     XCTAssertEqual(
       BackupImageService.classifyRemoteListing(succeeded: true, stdout: listing, stderr: ""),
       .present)
   }
 
-  func testPustyWypisZdalnegoToBrakObrazu() {
+  func testEmptyRemoteListingMeansNoImage() {
     XCTAssertEqual(
       BackupImageService.classifyRemoteListing(succeeded: true, stdout: "", stderr: ""),
       .absent)
   }
 
-  /// Pierwsze uruchomienie: zdalnego katalogu jeszcze nie ma. To jest
-  /// ODPOWIEDZ ("nie ma tam nic"), a nie jej brak - inaczej straznik
-  /// blokowalby `create` dokladnie w tym jedynym przypadku, dla ktorego
-  /// `create` istnieje.
-  func testBrakKataloguNaZdalnymToBrakObrazu() {
+  /// First run: the remote directory does not exist yet. That is an ANSWER
+  /// ("there is nothing there"), not the lack of one - otherwise the guard would
+  /// block `create` in exactly the one case `create` exists for.
+  func testMissingRemoteDirectoryMeansNoImage() {
     XCTAssertEqual(
       BackupImageService.classifyRemoteListing(
         succeeded: false, stdout: "",
@@ -213,68 +214,69 @@ final class BackupImageServiceTests: XCTestCase {
       .absent)
   }
 
-  /// Zerwane lacze to NIE dowod nieobecnosci obrazu. Tworzenie obrazu jest
-  /// nieodwracalne, wiec brak pewnosci musi je przerwac.
-  func testBrakLaczaToNieDowodNieobecnosci() {
-    let wynik = BackupImageService.classifyRemoteListing(
+  /// A broken link is NOT proof that the image is absent. Creating the image is
+  /// irreversible, so lack of certainty has to abort it.
+  func testNoLinkIsNotProofOfAbsence() {
+    let result = BackupImageService.classifyRemoteListing(
       succeeded: false, stdout: "",
       stderr: "Failed to lsf with 2 errors: couldn't connect to Google Drive")
-    guard case .unknown = wynik else {
-      return XCTFail("brak odpowiedzi ma byc .unknown, dostalem \(wynik)")
+    guard case .unknown = result else {
+      return XCTFail("no answer has to be .unknown, got \(result)")
     }
   }
 
-  // MARK: - Ustalenie 5: co odpiecie mowi o kolejce
+  // MARK: - Finding 5: what the detach says about the queue
 
-  /// TA usterka. `expireQueuedUploads()` liczylo tylko SUKCESY, wiec kolejka
-  /// pelna pozycji, z ktorych zadnej nie udalo sie przyspieszyc, wychodzila
-  /// stad jako `0` - dokladnie tak samo jak kolejka pusta. Zmierzony stan tej
-  /// maszyny w chwili audytu: 462 pozycje, a log twierdzilby "kolejka pusta".
+  /// THE defect. `expireQueuedUploads()` counted only SUCCESSES, so a queue
+  /// full of items none of which could be sped up came out of it as `0` -
+  /// exactly like an empty queue. The measured state of this machine at the
+  /// time of the audit: 462 items, and the log would claim "queue empty".
   ///
-  /// Te linie czyta czlowiek w chwili, w ktorej decyduje, czy wolno skasowac
-  /// bufor - "kolejka pusta" czyta sie tam jako "nic nie czeka na wyslanie".
-  func testKolejkaPelnaBezAniJednegoSukcesuToNiePustaKolejka() {
-    let linia = BackupImageService.expiryLogLine(
+  /// A person reads these lines at the moment of deciding whether the buffer
+  /// may be deleted - "queue empty" reads there as "nothing is waiting to be
+  /// uploaded".
+  func testFullQueueWithoutASingleSuccessIsNotAnEmptyQueue() {
+    let line = BackupImageService.expiryLogLine(
       DriveBufferService.ExpiryOutcome(queued: 462, moved: 0))
     XCTAssertFalse(
-      linia.contains("kolejka pusta"),
-      "462 pozycje w kolejce to nie pusta kolejka - dostalem: \(linia)")
-    XCTAssertTrue(linia.contains("462"), "liczba czekajacych pozycji musi byc widoczna: \(linia)")
+      line.contains("queue empty"),
+      "462 queued items are not an empty queue - got: \(line)")
+    XCTAssertTrue(line.contains("462"), "the number of waiting items must be visible: \(line)")
     XCTAssertTrue(
-      linia.contains("nie udalo sie"),
-      "log musi powiedziec, ze terminow NIE przesunieto: \(linia)")
+      line.contains("NOT ONE could be"),
+      "the log has to say that the deadlines were NOT moved: \(line)")
   }
 
-  /// Pusta kolejka nadal ma sie opisywac jako pusta - inaczej "naprawa"
-  /// polegajaca na skasowaniu tego przypadku przeszlaby niezauwazona.
-  func testPustaKolejkaNadalMowiZeJestPusta() {
+  /// An empty queue still has to describe itself as empty - otherwise a
+  /// "fix" consisting of deleting this case would go unnoticed.
+  func testEmptyQueueStillSaysItIsEmpty() {
     XCTAssertTrue(
       BackupImageService.expiryLogLine(
         DriveBufferService.ExpiryOutcome(queued: 0, moved: 0)
-      ).contains("kolejka pusta"))
+      ).contains("queue empty"))
   }
 
-  /// Czesciowa porazka tez nie jest sukcesem: pozycje bez przesunietego terminu
-  /// beda czekac cale `writeBackSeconds` i drenaz potrwa dluzej, niz wynikaloby
-  /// z linii "wymuszono wysylke N pozycji".
-  func testCzesciowePrzesuniecieMowiIleZOSTALO() {
-    let linia = BackupImageService.expiryLogLine(
+  /// A partial failure is not a success either: items without a moved deadline
+  /// will wait the whole `writeBackSeconds` and the drain will take longer than
+  /// the line "forced upload of N items" would suggest.
+  func testPartialMoveSaysHowManyAreLeft() {
+    let line = BackupImageService.expiryLogLine(
       DriveBufferService.ExpiryOutcome(queued: 100, moved: 60))
-    XCTAssertTrue(linia.contains("60 z 100"), linia)
-    XCTAssertTrue(linia.contains("40"), "brakujace 40 pozycji musi byc widoczne: \(linia)")
+    XCTAssertTrue(line.contains("60 of 100"), line)
+    XCTAssertTrue(line.contains("40"), "the missing 40 items must be visible: \(line)")
   }
 
-  func testWszystkiePrzesunieteToZwyklyKomunikat() {
-    let linia = BackupImageService.expiryLogLine(
+  func testAllMovedGivesThePlainMessage() {
+    let line = BackupImageService.expiryLogLine(
       DriveBufferService.ExpiryOutcome(queued: 12, moved: 12))
-    XCTAssertEqual(linia, "Odpiecie: wymuszono wysylke 12 pozycji z kolejki")
+    XCTAssertEqual(line, "Detach: forced upload of 12 queued items")
   }
 
-  /// Brak odpowiedzi rclone to trzeci, osobny przypadek - nie wolno go zlac
-  /// ani z pusta kolejka, ani z porazka przesuwania.
-  func testBrakOdpowiedziToNadalOsobnyPrzypadek() {
-    let linia = BackupImageService.expiryLogLine(nil)
-    XCTAssertTrue(linia.contains("nie odpowiedzial"), linia)
-    XCTAssertFalse(linia.contains("kolejka pusta"), linia)
+  /// No answer from rclone is a third, separate case - it must not be merged
+  /// with either the empty queue or the failure to move.
+  func testNoAnswerIsStillASeparateCase() {
+    let line = BackupImageService.expiryLogLine(nil)
+    XCTAssertTrue(line.contains("did not answer"), line)
+    XCTAssertFalse(line.contains("queue empty"), line)
   }
 }

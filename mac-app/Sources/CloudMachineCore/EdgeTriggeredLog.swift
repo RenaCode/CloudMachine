@@ -1,15 +1,15 @@
 import Foundation
 
-/// Loguje `message` tylko przy PIERWSZYM napotkaniu danego stanu (`active ==
-/// true`) - kolejne cykle watchdoga w tym samym stanie milcza, zeby nie
-/// zasypac wspolnego logu setkami identycznych linii przy dluzszej awarii.
-/// Gdy `active` wroci do `false`, znacznik sie czysci i nastepne wystapienie
-/// znow zaloguje.
+/// Logs `message` only the FIRST time a given state is met (`active ==
+/// true`) - later watchdog cycles in the same state stay quiet, so that a longer
+/// failure does not flood the shared log with hundreds of identical lines.
+/// When `active` goes back to `false`, the marker is cleared and the next
+/// occurrence logs again.
 ///
-/// Powstalo z realnego przypadku: `BackupWatchdogService`/
-/// `VerifyWatchdogService` milczaly przez >2 dni, bo ich strazniki "mount
-/// jeszcze niegotowy" po prostu `return`owaly bez sladu w logu - diagnoza
-/// zajela znacznie dluzej, niz gdyby ta granica stanu byla widoczna.
+/// Born from a real case: `BackupWatchdogService`/`VerifyWatchdogService` were
+/// silent for >2 days, because their "mount not ready yet" guards simply
+/// `return`ed without a trace in the log - the diagnosis took much longer than
+/// it would have if that state boundary had been visible.
 public enum EdgeTriggeredLog {
   public static func log(marker: URL, active: Bool, _ message: @autoclosure () -> String) {
     if active {
