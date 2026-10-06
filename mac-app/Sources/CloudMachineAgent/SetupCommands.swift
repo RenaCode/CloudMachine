@@ -6,7 +6,8 @@ struct InstallLaunchd: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "install-launchd",
     abstract:
-      "Generuje i instaluje agentow launchd (bufor Drive, podpiecie obrazu, dozorca bufora)."
+      L10n.tr(
+        "Generates and installs the launchd agents (Drive buffer, image attach, buffer guard).")
   )
 
   func run() async throws {
@@ -20,12 +21,15 @@ struct ConfigureRemote: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "configure-remote",
     abstract:
-      "Laczy z Google Drive przez rclone (OAuth w przegladarce) i tworzy folder tej maszyny.")
+      L10n.tr(
+        "Connects to Google Drive through rclone (OAuth in the browser) and creates this machine's folder."
+      ))
 
   @Flag(
     name: .long,
     help:
-      "Nadpisz istniejacy remote. RYZYKOWNE: podmienia token i uprawnienia."
+      ArgumentHelp(
+        L10n.tr("Overwrite the existing remote. RISKY: replaces the token and permissions."))
   )
   var replaceExisting = false
 
@@ -42,7 +46,9 @@ struct InstallDependencies: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "install-dependencies",
     abstract:
-      "Instaluje rclone przez Homebrew - UWAGA: ta wersja NIE umie montowac, patrz install-rclone.")
+      L10n.tr(
+        "Installs rclone through Homebrew - WARNING: this build CANNOT mount, see install-rclone."
+      ))
 
   func run() async throws {
     let result = await DependencyInstaller.installRclone()

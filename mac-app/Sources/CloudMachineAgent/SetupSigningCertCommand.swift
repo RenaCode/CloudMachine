@@ -2,21 +2,23 @@ import ArgumentParser
 import CloudMachineCore
 import Foundation
 
-/// Port `scripts/setup-local-signing-cert.sh` - tworzy jednorazowy, lokalny
-/// certyfikat self-signed do podpisywania `CloudMachine.app`, zeby uprawnienia
-/// TCC (Pelny dostep do dysku itp.) PRZETRWALY kolejne przebudowy appki.
+/// Port of `scripts/setup-local-signing-cert.sh` - creates a one-off, local
+/// self-signed certificate for signing `CloudMachine.app`, so that TCC
+/// permissions (Full Disk Access etc.) SURVIVE later rebuilds of the app.
 ///
-/// Domyslny podpis ad-hoc w `build-app` generuje NOWY hash tozsamosci (CDHash)
-/// przy kazdym rebuildzie, wiec macOS traktuje kazda przebudowana wersje jak
-/// zupelnie inna appke i cofa jej wczesniej przyznane uprawnienia. Ten
-/// certyfikat jest czysto lokalny: nie jest nigdzie wysylany, nie jest
-/// zaufany przez nikogo poza tym Makiem, i sluzy WYLACZNIE do podpisywania
-/// kodu. Uruchom RAZ; kazde kolejne `build-app` uzyje go automatycznie.
+/// The default ad-hoc signature in `build-app` produces a NEW identity hash
+/// (CDHash) on every rebuild, so macOS treats each rebuilt version as a
+/// completely different app and revokes the permissions granted to it before.
+/// This certificate is purely local: it is not sent anywhere, it is not
+/// trusted by anyone but this Mac, and it is used ONLY for code signing. Run
+/// it ONCE; every later `build-app` will use it automatically.
 struct SetupSigningCert: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "setup-signing-cert",
     abstract:
-      "Tworzy lokalny certyfikat self-signed, zeby Full Disk Access przetrwalo kolejne przebudowy appki."
+      L10n.tr(
+        "Creates a local self-signed certificate so that Full Disk Access survives later rebuilds of the app."
+      )
   )
 
   func run() async throws {
@@ -29,7 +31,9 @@ struct SetupSigningCert: AsyncParsableCommand {
       "/usr/bin/security", ["find-certificate", "-c", certName, keychain.path]),
       check.succeeded
     {
-      print("Certyfikat '\(certName)' juz istnieje w \(keychain.path), nic nie robie.")
+      print(
+        L10n.tr(
+          "Certificate '%@' already exists in %@, nothing to do.", certName, keychain.path))
       return
     }
 
@@ -57,7 +61,7 @@ struct SetupSigningCert: AsyncParsableCommand {
       """
     try configContents.write(to: configFile, atomically: true, encoding: .utf8)
 
-    print("==> Generuje klucz i certyfikat self-signed '\(certName)'...")
+    print(L10n.tr("==> Generating the key and self-signed certificate '%@'...", certName))
     let reqStatus = try await InteractiveProcess.run(
       "/usr/bin/openssl",
       [
@@ -65,19 +69,20 @@ struct SetupSigningCert: AsyncParsableCommand {
         "-days", "3650", "-nodes", "-config", configFile.path, "-sha256",
       ])
     guard reqStatus == 0 else {
-      print("BLAD: openssl req zakonczyl sie kodem \(reqStatus).")
+      print(L10n.tr("ERROR: openssl req exited with code %@.", "\(reqStatus)"))
       throw ExitCode.failure
     }
 
-    // -legacy: OpenSSL 3.x domyslnie szyfruje PKCS12 algorytmami (AES-256+
-    // SHA-256 MAC), ktorych macOS'owy Security framework (`security import`)
-    // nie rozumie - bez tej flagi import konczy sie mylacym "MAC
-    // verification failed (wrong password?)" mimo poprawnego hasla. -legacy
-    // wraca do 3DES/RC2, ktore macOS poprawnie parsuje.
+    // -legacy: OpenSSL 3.x encrypts PKCS12 by default with algorithms
+    // (AES-256 + SHA-256 MAC) that the macOS Security framework (`security
+    // import`) does not understand - without this flag the import fails with a
+    // misleading "MAC verification failed (wrong password?)" despite a correct
+    // password. -legacy goes back to 3DES/RC2, which macOS parses correctly.
     //
-    // Ale `/usr/bin/openssl` na macOS to LibreSSL, ktory flagi -legacy NIE
-    // ZNA i konczy sie bledem (sprawdzone na LibreSSL 3.3.6) - a 3DES/RC2 ma
-    // juz domyslnie. Flage dokladamy wiec tylko prawdziwemu OpenSSL 3.
+    // But `/usr/bin/openssl` on macOS is LibreSSL, which does NOT KNOW the
+    // -legacy flag and fails with an error (checked on LibreSSL 3.3.6) - and it
+    // already uses 3DES/RC2 by default. So we add the flag only for real
+    // OpenSSL 3.
     let versionOutput =
       (try? await ProcessRunner.run("/usr/bin/openssl", ["version"]))?.stdout ?? ""
     let legacyFlag = versionOutput.hasPrefix("OpenSSL 3") ? ["-legacy"] : []
@@ -88,12 +93,14 @@ struct SetupSigningCert: AsyncParsableCommand {
         "-in", certFile.path, "-passout", "pass:cloudmachine-local",
       ])
     guard pkcs12Status == 0 else {
-      print("BLAD: openssl pkcs12 zakonczyl sie kodem \(pkcs12Status).")
+      print(L10n.tr("ERROR: openssl pkcs12 exited with code %@.", "\(pkcs12Status)"))
       throw ExitCode.failure
     }
 
     print(
-      "==> Importuje certyfikat do \(keychain.path) (z gory autoryzuje /usr/bin/codesign, bez pytania o haslo keychaina za kazdym razem)..."
+      L10n.tr(
+        "==> Importing the certificate into %@ (pre-authorizing /usr/bin/codesign, so it does not ask for the keychain password every time)...",
+        keychain.path)
     )
     let importStatus = try await InteractiveProcess.run(
       "/usr/bin/security",
@@ -102,26 +109,28 @@ struct SetupSigningCert: AsyncParsableCommand {
         "-T", "/usr/bin/codesign", "-T", "/usr/bin/security",
       ])
     guard importStatus == 0 else {
-      print("BLAD: security import zakonczyl sie kodem \(importStatus).")
+      print(L10n.tr("ERROR: security import exited with code %@.", "\(importStatus)"))
       throw ExitCode.failure
     }
 
-    print("==> Ufam certyfikatowi WYLACZNIE do podpisywania kodu (code signing)...")
+    print(L10n.tr("==> Trusting the certificate ONLY for code signing..."))
     let trustStatus = try await InteractiveProcess.run(
       "/usr/bin/security",
       ["add-trusted-cert", "-r", "trustRoot", "-p", "codeSign", "-k", keychain.path, certFile.path])
     guard trustStatus == 0 else {
-      print("BLAD: security add-trusted-cert zakonczyl sie kodem \(trustStatus).")
+      print(L10n.tr("ERROR: security add-trusted-cert exited with code %@.", "\(trustStatus)"))
       throw ExitCode.failure
     }
 
+    print("")
+    print(L10n.tr("Done. Certificate '%@' is now available to codesign.", certName))
     print(
-      """
-
-      Gotowe. Certyfikat '\(certName)' jest teraz dostepny dla codesign.
-      Nastepne 'cloudmachine-agent build-app' uzyje go automatycznie zamiast podpisu ad-hoc.
-      Po TYM JEDNYM rebuildzie przyznaj Pelny dostep do dysku ostatni raz - kolejne
-      przebudowy juz go nie zresetuja, dopoki podpisujesz tym samym certyfikatem.
-      """)
+      L10n.tr(
+        "The next 'cloudmachine-agent build-app' will use it automatically instead of an ad-hoc signature."
+      ))
+    print(
+      L10n.tr(
+        "After THAT ONE rebuild, grant Full Disk Access one last time - later\nrebuilds will no longer reset it, as long as you sign with the same certificate."
+      ))
   }
 }

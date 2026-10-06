@@ -1,12 +1,13 @@
 import CloudMachineCore
 import Foundation
 
-/// Wspolne czesci harnessow pomiarowych.
+/// Shared parts of the measurement harnesses.
 ///
-/// Same harnessy mierza zachowanie `hdiutil` i FUSE-T, a nie nasz kod. Nie sa
-/// czescia dzialajacego systemu - dlatego siedza w OSOBNEJ binarce
-/// `cloudmachine-poc`, ktorej `build-app` nie wklada do bundla. Uruchamia sie
-/// je recznie, gdy trzeba cos zmierzyc albo potwierdzic regresje.
+/// The harnesses themselves measure the behaviour of `hdiutil` and FUSE-T, not
+/// our code. They are not part of the running system - which is why they live
+/// in a SEPARATE binary, `cloudmachine-poc`, which `build-app` does not put
+/// into the bundle. They are run by hand when something needs measuring or a
+/// regression needs confirming.
 enum POC {
 
   struct Failure: LocalizedError {
@@ -14,9 +15,9 @@ enum POC {
     var errorDescription: String? { message }
   }
 
-  // MARK: - Procesy
+  // MARK: - Processes
 
-  /// Odpowiednik `set -e`: nieudany proces przerywa harness.
+  /// The equivalent of `set -e`: a failed process aborts the harness.
   @discardableResult
   static func run(
     _ executable: String, _ args: [String], timeout: TimeInterval? = 600
@@ -25,15 +26,15 @@ enum POC {
     guard result.succeeded else {
       throw Failure(
         message: """
-          Nie powiodlo sie: \(executable) \(args.joined(separator: " "))
+          Failed: \(executable) \(args.joined(separator: " "))
           \(result.stderr.isEmpty ? result.stdout : result.stderr)
           """)
     }
     return result
   }
 
-  /// Odpowiednik `... || true` - wolane tam, gdzie porazka jest spodziewana
-  /// (sprzatanie po czyms, co moze nie istniec).
+  /// The equivalent of `... || true` - called where failure is expected
+  /// (cleaning up after something that may not exist).
   static func runIgnoringFailure(
     _ executable: String, _ args: [String], timeout: TimeInterval? = 300
   ) async {
@@ -46,18 +47,18 @@ enum POC {
     await runIgnoringFailure("/usr/bin/hdiutil", args)
   }
 
-  /// Po wymuszonym odpieciu urzadzenie potrafi zostac w systemie jako zombie.
-  /// Podpiecie zwraca wtedy martwy uchwyt, na ktorym `fsck_apfs` melduje
-  /// "failed to read container superblock" z UUID z samych zer - wyglada to
-  /// jak skasowany backup, a jest tylko nieczytelnym urzadzeniem.
+  /// After a forced detach a device can linger in the system as a zombie.
+  /// Attaching then returns a dead handle on which `fsck_apfs` reports
+  /// "failed to read container superblock" with an all-zero UUID - it looks
+  /// like a deleted backup, but it is only an unreadable device.
   ///
-  /// Logika parsowania `hdiutil info` mieszka w `CloudMachineCore` i jest
-  /// pokryta testami - harness jej nie powiela.
+  /// The `hdiutil info` parsing logic lives in `CloudMachineCore` and is
+  /// covered by tests - the harness does not duplicate it.
   static func purgeStaleDevices(forImage image: URL) async {
     await BackupImageService.purgeStaleDevices(image)
   }
 
-  // MARK: - Obrazy
+  // MARK: - Images
 
   static func bandSectors(bandMB: Int) -> Int {
     bandMB * 1024 * 1024 / 512
@@ -91,7 +92,7 @@ enum POC {
       ["attach", image.path, "-nobrowse", "-mountpoint", mountpoint.path])
   }
 
-  // MARK: - Pliki
+  // MARK: - Files
 
   static func recreateDirectory(_ url: URL) throws {
     try? FileManager.default.removeItem(at: url)
@@ -107,14 +108,15 @@ enum POC {
     return data
   }
 
-  /// Nadpisuje plik W MIEJSCU - odpowiednik `dd conv=notrunc`.
+  /// Overwrites a file IN PLACE - the equivalent of `dd conv=notrunc`.
   ///
-  /// To nie jest drobiazg: zapis przez `Data.write(to:)` tworzy nowy plik i
-  /// podmienia go, przez co dane ladowalyby w innych miejscach obrazu i
-  /// pomiar brudzonych pasm mierzylby cos innego niz realna zmiana w miejscu.
+  /// This is not a detail: writing through `Data.write(to:)` creates a new
+  /// file and swaps it in, so the data would land in other places of the image
+  /// and the dirtied-bands measurement would measure something other than a
+  /// real in-place change.
   static func overwriteInPlace(_ url: URL, with data: Data) throws {
     guard let handle = FileHandle(forWritingAtPath: url.path) else {
-      throw Failure(message: "Nie mozna otworzyc do zapisu: \(url.path)")
+      throw Failure(message: "Cannot open for writing: \(url.path)")
     }
     defer { try? handle.close() }
     try handle.seek(toOffset: 0)
@@ -130,7 +132,7 @@ enum POC {
     (try? FileManager.default.contentsOfDirectory(atPath: directory.path).count) ?? 0
   }
 
-  /// Ile pasm zmienilo sie po znaczniku - odpowiednik `find -newer`.
+  /// How many bands changed after the marker - the equivalent of `find -newer`.
   static func filesModified(after mark: Date, in directory: URL) -> Int {
     guard
       let entries = try? FileManager.default.contentsOfDirectory(
@@ -145,8 +147,8 @@ enum POC {
     }.count
   }
 
-  /// Zajetosc na dysku w MB - odpowiednik `du -sk`, czyli miejsce FAKTYCZNIE
-  /// zajete, nie suma rozmiarow logicznych.
+  /// Disk usage in MB - the equivalent of `du -sk`, i.e. the space ACTUALLY
+  /// allocated, not the sum of logical sizes.
   static func allocatedMegabytes(of directory: URL) -> Int {
     guard
       let walker = FileManager.default.enumerator(

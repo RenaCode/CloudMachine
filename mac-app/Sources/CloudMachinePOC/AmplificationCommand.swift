@@ -1,47 +1,46 @@
 import ArgumentParser
 import Foundation
 
-/// Mierzy wzmocnienie zapisu: ile megabajtow trzeba wyslac do Drive'a, zeby
-/// utrwalic jeden megabajt faktycznej zmiany.
+/// Measures write amplification: how many megabytes have to be uploaded to
+/// Drive to persist one megabyte of actual change.
 ///
-/// To jest liczba, ktora decyduje o rozmiarze pasma. Duze pasma oszczedzaja
-/// operacje na plikach (Drive przepuszcza ~2/s i ma limit 400 000 plikow), ale
-/// kazda drobna zmiana kaze wyslac cale pasmo od nowa. Jesli wzmocnienie okaze
-/// sie wysokie, 64 MB jest bledem i trzeba zejsc nizej.
+/// This is the number that decides the band size. Large bands save file
+/// operations (Drive lets through ~2/s and has a limit of 400,000 files), but
+/// every small change forces the whole band to be uploaded again. If the
+/// amplification turns out high, 64 MB is a mistake and we have to go lower.
 ///
-/// Uruchamiane dla kazdego rozmiaru pasma osobno; wynik to tabela do
-/// porownania.
+/// Run separately for each band size; the result is a table for comparison.
 struct AmplificationCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "amplification",
-    abstract: "Mierzy wzmocnienie zapisu dla zadanego rozmiaru pasma.")
+    abstract: "Measures write amplification for a given band size.")
 
   enum Workload: String, ExpressibleByArgument, CaseIterable {
-    /// Przepisanie rozrzuconych plikow - najgorszy realny przypadek.
+    /// Rewriting scattered files - the worst realistic case.
     case scatter
-    /// Dopisanie nowych plikow - tak zachowuje sie Time Machine.
+    /// Adding new files - this is how Time Machine behaves.
     case append
   }
 
-  @Option(name: .long, help: "Rozmiar pasma w MB.")
+  @Option(name: .long, help: "Band size in MB.")
   var bandMB: Int = 64
 
-  @Option(name: .long, help: "Ile plikow w pierwszym zapisie.")
+  @Option(name: .long, help: "How many files in the first write.")
   var seedFiles: Int = 3000
 
-  @Option(name: .long, help: "Rozmiar pojedynczego pliku w KB.")
+  @Option(name: .long, help: "Size of a single file in KB.")
   var fileKB: Int = 64
 
-  @Option(name: .long, help: "Ile plikow zmieniamy w drugim przebiegu.")
+  @Option(name: .long, help: "How many files to change in the second pass.")
   var touchFiles: Int = 300
 
-  @Option(name: .long, help: "scatter = rozrzucone przepisanie, append = nowe pliki jak TM.")
+  @Option(name: .long, help: "scatter = scattered rewrite, append = new files like TM.")
   var workload: Workload = .scatter
 
-  @Option(name: .long, help: "Katalog roboczy.")
+  @Option(name: .long, help: "Working directory.")
   var root: String = "/tmp/cm-amp"
 
-  @Flag(name: .long, help: "Tylko posprzataj po poprzednim przebiegu i zakoncz.")
+  @Flag(name: .long, help: "Only clean up after the previous run and exit.")
   var clean = false
 
   private var runRoot: URL { URL(fileURLWithPath: root).appendingPathComponent("b\(bandMB)") }
@@ -59,12 +58,12 @@ struct AmplificationCommand: AsyncParsableCommand {
     guard !clean else {
       await cleanup()
       try? FileManager.default.removeItem(at: URL(fileURLWithPath: root))
-      print("Posprzatane.")
+      print("Cleaned up.")
       return
     }
 
-    // `trap cleanup EXIT` z wersji powlokowej: cokolwiek pojdzie nie tak,
-    // nie zostawiamy podpietych obrazow.
+    // `trap cleanup EXIT` from the shell version: whatever goes wrong, we do
+    // not leave images attached.
     do {
       try await measure()
     } catch {
@@ -85,11 +84,11 @@ struct AmplificationCommand: AsyncParsableCommand {
       at: image, sizeGB: 30, volumeName: "AmpPOC\(bandMB)", bandMB: bandMB)
     try await POC.attach(image, mountpoint: target)
 
-    // Pierwszy zapis - odpowiednik pelnego backupu.
-    let dataDir = target.appendingPathComponent("dane")
+    // First write - the equivalent of a full backup.
+    let dataDir = target.appendingPathComponent("data")
     try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
     for i in 1...seedFiles {
-      try POC.createFile(dataDir.appendingPathComponent("plik-\(i).bin"), kilobytes: fileKB)
+      try POC.createFile(dataDir.appendingPathComponent("file-\(i).bin"), kilobytes: fileKB)
     }
     await POC.sync()
     await POC.detachQuietly(target.path)
@@ -98,30 +97,30 @@ struct AmplificationCommand: AsyncParsableCommand {
     let seedBands = POC.fileCount(in: bands)
     let seedMB = POC.allocatedMegabytes(of: image)
 
-    // Znacznik czasu, wzgledem ktorego liczymy zmienione pasma.
+    // The timestamp against which we count the changed bands.
     let mark = Date()
     try await Task.sleep(nanoseconds: 1_000_000_000)
 
-    // Drugi przebieg - odpowiednik backupu przyrostowego.
+    // Second pass - the equivalent of an incremental backup.
     try await POC.attach(image, mountpoint: target)
     var changedKB = 0
     switch workload {
     case .append:
-      // Time Machine nie przepisuje istniejacych danych w miejscu - kazdy
-      // backup doklada nowe pliki. Zapis jest wtedy skupiony, nie rozrzucony.
-      let growth = dataDir.appendingPathComponent("przyrost")
+      // Time Machine does not rewrite existing data in place - every backup
+      // adds new files. The writes are then clustered, not scattered.
+      let growth = dataDir.appendingPathComponent("growth")
       try FileManager.default.createDirectory(at: growth, withIntermediateDirectories: true)
       for i in 1...touchFiles {
-        try POC.createFile(growth.appendingPathComponent("nowy-\(i).bin"), kilobytes: fileKB)
+        try POC.createFile(growth.appendingPathComponent("new-\(i).bin"), kilobytes: fileKB)
         changedKB += fileKB
       }
     case .scatter:
-      // Zmieniamy rozrzucone pliki, zeby trafic w mozliwie wiele roznych pasm;
-      // to najgorszy realny przypadek, nie sredni.
+      // We change scattered files to hit as many different bands as possible;
+      // this is the worst realistic case, not the average one.
       let step = max(1, seedFiles / touchFiles)
       for i in stride(from: 1, through: seedFiles, by: step) {
         try POC.overwriteInPlace(
-          dataDir.appendingPathComponent("plik-\(i).bin"),
+          dataDir.appendingPathComponent("file-\(i).bin"),
           with: POC.randomData(kilobytes: fileKB))
         changedKB += fileKB
       }
@@ -134,11 +133,11 @@ struct AmplificationCommand: AsyncParsableCommand {
     let changedMB = max(1, changedKB / 1024)
 
     print("---")
-    print("pasmo                : \(bandMB) MB   (scenariusz: \(workload.rawValue))")
-    print("po pelnym zapisie    : \(seedBands) pasm, \(seedMB) MB")
-    print("zmieniono realnie    : \(changedMB) MB w \(touchFiles) plikach")
-    print("pobrudzonych pasm    : \(dirty)")
-    print("do wyslania          : \(uploadMB) MB")
-    print("WZMOCNIENIE          : \(uploadMB / changedMB)x")
+    print("band                 : \(bandMB) MB   (workload: \(workload.rawValue))")
+    print("after full write     : \(seedBands) bands, \(seedMB) MB")
+    print("actually changed     : \(changedMB) MB in \(touchFiles) files")
+    print("dirtied bands        : \(dirty)")
+    print("to upload            : \(uploadMB) MB")
+    print("AMPLIFICATION        : \(uploadMB / changedMB)x")
   }
 }
