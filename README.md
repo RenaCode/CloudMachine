@@ -28,87 +28,12 @@ knows the cloud exists.
 
 ---
 
-## What it costs in practice
-
-Measured on a Mac Studio, 332 Mbit/s uplink:
-
-| | |
-|---|---|
-| Full backup | 210 GiB, about two hours |
-| Incremental backup | ~370 MB of new data, a few minutes |
-| Google Drive used | 589 GiB (29 Sep 2026) — of which only 417 GiB is live data |
-| Actually uploaded per day | **327–595 GB** — see below |
-
-That last row is not a typo, and it is the number that surprises people. What
-Time Machine *writes* and what rclone *sends* are different quantities, because
-the unit of upload is a 32 MB band and any touch of a band re-sends all of it.
-Time Machine revisits the same bands throughout a run, so one changed byte can
-cost 32 MB several times over.
-
-Measured here across five days: bands were re-sent a median of **9.5 minutes
-apart**, giving 7.6× to 24× more traffic than the underlying change. On 14–15
-September 2026 that put 823 GB on the wire in 24 hours for roughly 45 GB of real
-change — past Google's 750 GB/day write ceiling, which blocked *all* uploads for
-several hours.
-
-So the daily cap is not just a first-backup concern, and it does not require a
-source larger than 750 GB. A 265 GiB backup reached it. `--vfs-write-back` is
-the lever that keeps it in check — see [Why the pieces are what they
-are](#why-the-pieces-are-what-they-are).
-
-### The image is larger than the backup, and the gap only grows
-
-The other number that surprises people is the first one. Measured 29 September
-2026, on an image created on the 11th:
-
-```
-live data in the volume   417 GiB
-bands on Google Drive     589 GiB   (18,860 files x 31.98 MiB)
-gap                       172 GiB   -- 29% of the image holds nothing
-```
-
-Three layers, none of which can tell the one below what it just did:
-
-1. Time Machine writes a snapshot. APFS allocates blocks, the sparsebundle
-   allocates the 32 MB bands covering them.
-2. Time Machine thins old snapshots. APFS frees those blocks *inside* the
-   volume — but **there is no TRIM path from a filesystem, through `hdiutil`,
-   down to the band files.** The band stays, holding data nothing references.
-3. APFS keeps writing. Being copy-on-write, it prefers untouched ranges over
-   recycling what was just freed.
-
-Step 3 is what makes this grow rather than settle. If freed blocks were reused
-promptly the dead bands would be self-replenishing headroom and the image would
-plateau. They are not, so the gap widens.
-
-**Do not try to reclaim it with `hdiutil compact`.** It is the only tool for the
-job and it takes nothing but an image path — no way to scope it. Against an
-image that lives on Drive it would pull the whole ~589 GiB down through rclone
-past a 100 GB cache, push back hundreds of GiB as it relocates data, blow the
-750 GB/day write ceiling, and hold the image detached for a day or more with no
-backups running. The return is a fraction of the 172 GiB, because a band can
-only be dropped when all 32 MB of it is free and APFS scatters its allocations.
-Google does not bill for writes; the dead bands cost quota and nothing else.
-
-The lever worth *measuring*, if the gap ever matters, is the cause rather than
-the symptom: the volume is 3.9 TiB of logical space holding 417 GiB, so the
-allocator never has a reason to reuse anything. Sizing the image nearer the
-working set should force recycling and flatten the band count. That is an
-untested hypothesis, written down here so the next person does not have to
-re-derive it.
-
-One trap while reading any of this: **Google's storage UI labels GiB as GB.**
-The "591.79 GB" it shows is 589 GiB of sparsebundle plus 2.8 GiB of everything
-else on the account. `operations/about` through the rclone rc gives real bytes.
-
----
-
 ## Requirements
 
-- macOS 14 (Sonoma) or newer. Administrator rights for two commands, listed below.
+- macOS 14 (Sonoma) or newer, and an administrator password for one step
+  (pointing Time Machine at CloudMachine).
 - A Google account with room to spare.
-- Homebrew, to install a release — or Xcode / a Swift 5.9+ toolchain, to build
-  the app yourself (see below).
+- [Homebrew](https://brew.sh).
 - Nothing else at runtime. CloudMachine installs its own `rclone` and its own
   copy of FUSE-T.
 
@@ -119,473 +44,103 @@ so they read the same whoever sends them to you.
 
 ### Current limitations
 
-Worth knowing before you start, because none of them announce themselves:
-
-- **One Mac per Google account.** The Drive folder is a constant,
-  `gdrive:CloudMachine/mac-studio`, whatever the Mac is called, so a second Mac
-  on the same account would share the folder and the image with the first.
-  `config/machines.example.json` describes several machines with per-machine
-  `limit_gb` budgets, but no code enforces those budgets — what is checked is
-  the real free space on Drive, reported by rclone.
-- **Not notarised.** Releases are signed with a self-signed certificate (local
-  builds ad hoc or with a local one, see below), not with an Apple Developer ID.
-  The Homebrew cask clears the quarantine flag; a DMG downloaded by hand gets
-  Gatekeeper's "unidentified developer" warning.
+- **Not notarised.** Releases are signed with a self-signed certificate, not
+  with an Apple Developer ID. The Homebrew cask clears the quarantine flag; a
+  DMG downloaded by hand gets Gatekeeper's "unidentified developer" warning.
+- **Per-machine budgets are not enforced.** `config/machines.example.json`
+  describes `limit_gb` per Mac, but nothing acts on it — what is checked is the
+  real free space on Drive, reported by rclone. Several Macs on one account
+  share that space.
 
 ---
 
-## Installing
+## Getting started
 
 ```sh
 brew install --cask renacode/tap/cloudmachine
+open -a CloudMachine
 ```
 
-The cask installs a universal (Apple Silicon + Intel) `CloudMachine.app` into
-`/Applications`. `brew upgrade` does not restart the Google Drive mount, and
-neither `brew uninstall` nor `--zap` touches the launchd agents or the upload
-buffer in `~/.cloudmachine`, which may hold backups that have not reached
-Google Drive yet. Run `cloudmachine-agent prepare-shutdown` before
-uninstalling. Releases, signing and the cask are described in
-[`packaging/README.md`](packaging/README.md).
+CloudMachine lives in the menu bar. Its window opens on a **Required Setup
+Steps** card listing what is left to do on this Mac, in order, each with a
+button — or, for the two steps an app cannot do, a command to copy:
 
-### Building the app
+1. **Install rclone** and **Install FUSE-T.** CloudMachine downloads its own
+   copies; nothing else is installed system-wide.
+2. **Connect Google Drive** — a command to run in Terminal. It opens Google's
+   sign-in in the browser and waits for your approval. Enter your own OAuth
+   credentials first (see [below](#your-own-google-oauth-credentials)).
+3. **Grant Full Disk Access** — opens the right pane of System Settings.
+   Without it CloudMachine cannot read when Time Machine last *finished* a
+   backup, which is the one check that matters.
+4. **Install agents** — the launchd agents that keep the Drive mounted, attach
+   the image and watch the backup.
+5. **Create image**, then **Attach image** — the backup image on Google Drive.
+   The size is a ceiling, not an allocation: the image is sparse, and Drive
+   only holds what has been written.
+6. **Point Time Machine at CloudMachine** — a `sudo tmutil setdestination`
+   command to copy, because only an administrator can change it.
 
-```sh
-cd mac-app
-swift run cloudmachine-agent setup-signing-cert   # optional, once per Mac
-swift run cloudmachine-agent build-app            # -> mac-app/build/CloudMachine.app
-rm -rf /Applications/CloudMachine.app             # never copy over a live bundle
-cp -R build/CloudMachine.app /Applications/
-```
+When the card disappears, setup is done. Turn on automatic backups in System
+Settings → General → Time Machine, or run `sudo tmutil enable`.
 
-Removing the installed copy first is not optional. `cp -R` onto an existing
-bundle overwrites its files in place; macOS still holds the old signature for
-them and kills every agent started from the bundle
-(`last exit reason = OS_REASON_CODESIGNING`), while `codesign --verify` keeps
-passing. Removed and copied anew, the files get new identities. The mount
-survives this: the rclone process that holds it lives outside the bundle.
+### Several Macs, one Google account
 
-`build-app` puts the menu-bar app and `cloudmachine-agent` side by side in
-`Contents/MacOS/`, with the launchd templates as resources, so the installed app
-does not need the repository next to it. It must live in `/Applications`: the
-launchd agent that starts the app opens `/Applications/CloudMachine.app`.
+Install CloudMachine on each Mac and go through the same steps; they can all
+use the same Google account and the same OAuth credentials. Each Mac backs up
+into its own folder, `gdrive:CloudMachine/<folder>`, holding
+`<folder>.sparsebundle`, so their backups never mix.
 
-`setup-signing-cert` creates a local, self-signed code-signing certificate in the
-login keychain. Without it every build is signed ad hoc with a new identity, and
-macOS revokes permissions such as Full Disk Access after each rebuild. With it,
-`build-app` signs with that certificate automatically.
+The folder name is chosen once, at **Connect Google Drive**, from the computer
+name. To pick it yourself, add `--folder NAME` to the command the card gives
+you, e.g. `… configure-remote --folder office-imac`. It cannot be changed
+afterwards, because a new name is a new, empty backup; CloudMachine refuses
+rather than orphan the old one. Installations set up before per-Mac folders
+keep `mac-studio`, which is where their backup already is.
 
-`swift run cloudmachine-agent make-dmg` packs the built app into
-`mac-app/build/CloudMachine-<version>.dmg`; `build-app --universal` builds for
-both architectures, as releases do. Releases are built by
-`.github/workflows/release.yml` from a `vX.Y.Z` tag. The version
-comes from `mac-app/VERSION`, and `cloudmachine-agent version` prints it
-together with the build number and the commit the binary was built from.
+### Upgrading and uninstalling
 
----
-
-## Setup
-
-`cloudmachine-agent` lives inside the app bundle. `install-launchd` symlinks it
-into `/usr/local/bin`; until then, call it by its full path:
-
-```sh
-/Applications/CloudMachine.app/Contents/MacOS/cloudmachine-agent --help
-```
-
-```sh
-cloudmachine-agent install-rclone     # official binary — the Homebrew build cannot mount
-cloudmachine-agent install-fuse       # FUSE-T, inside CloudMachine, no separate app
-cloudmachine-agent configure-remote   # Google OAuth in the browser
-cloudmachine-agent create-image --size-gb 4000
-cloudmachine-agent attach-image
-cloudmachine-agent install-launchd    # agents that keep it running
-```
-
-Two steps need `sudo`, because they change system-wide settings:
-
-```sh
-sudo tmutil setdestination /Volumes/CloudMachine
-sudo tmutil enable                    # hourly backups; skip if you prefer manual
-```
+`brew upgrade` replaces the app without restarting the Google Drive mount; the
+agents pick up the new version on their next run. Neither `brew uninstall` nor
+`--zap` touches the launchd agents or the upload buffer in `~/.cloudmachine`,
+which may hold backups that have not reached Google Drive yet. Run
+`cloudmachine-agent prepare-shutdown` before uninstalling.
 
 ### Your own Google OAuth credentials
 
-`configure-remote` reads `client_id` and `client_secret` from the macOS Keychain
-under the service `cloudmachine-gdrive`. Create them at
+Do this before **Connect Google Drive**. Create the credentials at
 [console.developers.google.com](https://console.developers.google.com/): new
 project, enable the Google Drive API, consent screen, credentials, OAuth 2.0 of
-type *Desktop*. Then:
+type *Desktop*. Paste the client ID and secret into the **Google Drive
+Credentials (OAuth 2.0)** card at the bottom of the app window; it stores them
+in the macOS Keychain.
 
-```sh
-security add-generic-password -a client_id     -s cloudmachine-gdrive -w -U
-security add-generic-password -a client_secret -s cloudmachine-gdrive -w -U
-```
+They are not optional polish: rclone's shared `client_id` is being retired
+during 2026, and Google rate-limits per `client_id`, so on the shared one you
+compete with every other rclone user.
 
-Without `-w <value>`, `security` prompts — the secret stays out of your shell
-history and out of `ps`.
-
-The app window can do the same thing: the *Google Drive Credentials
-(OAuth 2.0)* card, folded away at the bottom since it is a once-ever step. It writes through the
-`security` tool rather than the Keychain API on purpose — an entry created by
-`SecItemAdd` gets an ACL limited to the program that made it, and reading it
-from a different binary raises an authorisation dialog. The launchd agent has
-nobody to show that dialog to, so it would read nothing and quietly fall back to
-the shared `client_id`.
-
-Your own credentials are not optional polish: rclone's shared `client_id` is
-being retired during 2026, and Google rate-limits per `client_id`, so on the
-shared one you compete with every other rclone user. If the Keychain entries are
-missing, `configure-remote` still works — it falls back to the shared
-`client_id` and says so in the log rather than pretending otherwise.
-
-The remote is created with scope `drive.file`, which grants access only to files
-this application itself created. Full `drive` scope would hand out read, write
-and **delete** over the entire Google account, which is far more than a folder
-of disk-image bands needs — especially with `--drive-use-trash=false`, where a
+The connection uses scope `drive.file`, which grants access only to files this
+application itself created. Full `drive` scope would hand out read, write and
+**delete** over the entire Google account, which is far more than a folder of
+disk-image bands needs — especially with `--drive-use-trash=false`, where a
 delete has no bin to recover from.
 
-`configure-remote` refuses to touch a remote that already exists. Overwriting it
-replaces the token and the scope, and credentials scoped `drive.file` cannot see
-files created by the previous credentials — the backup stays intact but becomes
-unreachable, which amounts to the same thing. Back up `~/.config/rclone/rclone.conf`
-first and pass `--replace-existing` if you really mean it.
-
 ---
 
-## Running it
-
-```sh
-cloudmachine-agent drive-status
-```
-
-```
-Tools:            OK
-Drive mount:      OK
-Image attached:   OK  (/Volumes/CloudMachine)
-Cache on disk:    103 GB of 100G
-To upload:        ~14 GB (462 items)
-Free on disk:     288 GB
-Upload queue:     0 in progress, 0 queued, 0 errors
-Restart without asking: YES - queue empty
-Upload:           Everything uploaded to Google Drive
-TM destination:   /Volumes/CloudMachine
-Backup:           not running
-```
-
-The number that matters is the upload queue. Until it returns to zero between
-backups, part of the backup is still only on this Mac.
-
-The `Upload:` line is the same verdict the app window shows, computed in one
-place so the two can never disagree. When it is not nominal it prints a second
-line saying why, and whether it clears on its own.
-
-It has three kinds of answer, not two. Besides "fine" and "broken" there is
-**"unknown"** — printed when rclone does not answer the question about its
-queue. That third state exists because of a specific lie: the queue read used
-to time out, the caller substituted zeros for the missing numbers, and both the
-CLI and the app then announced *Everything uploaded to Google Drive* while 386
-bands sat unsent. A verdict computed from numbers nobody measured is worse than
-no verdict, so now it says so.
-
-Five launchd agents keep it alive, all running code from inside the app:
-
-| Agent | Job |
-|---|---|
-| `gdrive-buffer` | holds the rclone mount; `KeepAlive` |
-| `gdrive-attach` | attaches the image, retries every 15 minutes |
-| `buffer-guard` | watches the buffer and the upload; `KeepAlive` |
-| `backup-health` | every 30 min: is a backup still *completing*? |
-| `app` | the menu-bar app itself |
-
-`buffer-guard` distinguishes two things that look identical in every counter and
-mean opposite things. **Out of space on Drive** does not pass on its own, so it
-pauses Time Machine until someone frees space. **The daily write quota** clears
-by itself within hours, so it only reports — measured twice, the buffer did not
-move off 99–103 GB during either stall, and pausing would have cost backups for
-nothing. The disk is still protected either way: the size thresholds below act
-whatever the cause.
-
-### Knowing when it stops working
-
-Every other check here reports the state of the plumbing — mount up, image
-attached, queue empty. None of them notices the failure that matters most:
-everything looks attached and nothing has finished a backup in two days. The
-dashboard shows a green tick for exactly that state.
-
-```sh
-cloudmachine-agent backup-health
-```
-
-```
-Last successful backup: 2026-09-12 18:25
-Last attempt:           2026-09-12 18:02
-Backup cycle: OK
-```
-
-It reads the date of the last **completed** backup — `SnapshotDates` in
-`/Library/Preferences/com.apple.TimeMachine.plist`, a counter macOS only
-advances on success — and complains after three missed hourly runs, on a
-non-zero `RESULT`, on unsent files, on a Drive or disk running out of room, and
-when the mount, the image or the Time Machine destination is gone. A problem
-goes to the macOS notification centre and to `cloudmachine.log`, once, with a
-reminder every twelve hours while it lasts. Exit code 1 means broken, so `&&`
-and launchd see the same answer as you do.
-
-It deliberately reads a local file rather than calling `tmutil latestbackup`:
-the latter mounts a snapshot on a volume that lives on Google Drive, and a
-watchdog that hangs when the mount is sick is silent exactly when it is needed.
-
-### Reading the logs
-
-The app window deliberately does **not** show a log viewer. It answers one
-question — is the backup reaching Google Drive, and if not, why — and a wall of
-timestamped lines is not that answer. It also aged badly: the pane showed the
-tail of the log, so on a quiet day it still displayed last night's failure and
-looked like a live one.
-
-Logs are a diagnostic tool, so they live here instead.
-
-| File | What it holds |
-|---|---|
-| `~/Library/Logs/CloudMachine/cloudmachine.log` | everything the agents decided: pauses, resumes, alerts, attach/detach |
-| `~/.cloudmachine/rclone.log` | every transfer and every API error, one line each |
-| `~/Library/Logs/CloudMachine/launchd-*.out.log`, `launchd-*.err.log` | stdout and stderr per agent |
-
-Neither main log can eat the disk: `cloudmachine.log` is cut back to its last
-5,000 lines once it passes 200 MiB, and `rclone.log` is moved aside to
-`rclone.log.1` when the mount starts if it is over 100 MiB.
-
-**Check the timestamps before concluding anything.** An entry is not news
-because it is the last one in the file; on a quiet day the newest line can be
-hours old.
-
-```sh
-# Did anything fail today?
-grep "^\[$(date +%Y-%m-%d)" ~/Library/Logs/CloudMachine/cloudmachine.log | grep -i awaria
-
-# Is the upload actually moving, or only erroring? Successes vs refusals per minute.
-grep "^$(date +%Y/%m/%d)" ~/.cloudmachine/rclone.log \
-  | awk '{k=$1" "substr($2,1,5)}
-         /: Copied \(/     {ok[k]++}
-         /upload limit/   {err[k]++}
-         END {for (k in ok) seen[k]; for (k in err) seen[k];
-              for (k in seen) print k, "ok:" ok[k]+0, "err:" err[k]+0}' \
-  | sort | tail -20
-```
-
-That second one is worth knowing, because a wall of `403` lines on its own says
-very little. Google returns `userRateLimitExceeded` both for ordinary throttling
-and for the exhausted 750 GB/day write quota, and the text is identical — it was
-measured at exactly 1:1 across 81036 error lines here. What separates them is
-whether anything is still getting through. Ordinary throttling runs at one
-success per error or better; a real stall drops to roughly one in a hundred.
-`buffer-guard` uses that same ratio to decide whether to report a stall, so this
-command shows you what it is looking at.
-
-Empty logs after a fresh install are normal — the agents only write when
-something happens.
-
-That last sentence is also why silence proves nothing about the watchdog itself.
-`backup-health` runs on `StartInterval 1800` with no `KeepAlive`, so an agent
-that was unloaded or that hung looks exactly like one that ran and had nothing
-to report. Every run therefore drops its date into
-`~/Library/Application Support/CloudMachine/backup-health-last-run`, and both
-`drive-status` and the app window show it:
-
-```
-Backup watchdog:  2026-09-25 22:04 (12 min ago)
-Backup watchdog:  2026-09-22 03:10 (3 days ago) - THE WATCHDOG MAY NOT BE RUNNING
-```
-
-The second line means nobody has been asking whether the backup works — not
-that the backup is broken. Check the cycle yourself (`cloudmachine-agent
-backup-health`) and then find out why the agent stopped
-(`launchctl print gui/$UID/com.renacode.cloudmachine.backup-health`).
-
-### Before rebooting
-
-```sh
-cloudmachine-agent prepare-shutdown
-```
-
-Powering off is where this design is fragile. Detaching the image is itself a
-write — APFS flushes metadata into bands, and the upload of those bands is
-deferred. Killing rclone inside that window does not cost "the last few
-changes", it costs the volume's root directory. `prepare-shutdown` stops the
-backup, detaches, waits for the queue to drain, and refuses to report success
-while anything is still local.
-
-It stays quick despite the ten-minute `--vfs-write-back`: detaching pulls every
-queued expiry forward first, so the wait is the upload itself, not the delay. A
-`prepare-shutdown` nobody is willing to sit through is one nobody runs, and
-skipping it is what once left Time Machine without a destination overnight.
-
-Sleep is safe and needs nothing: the buffer survives, uploads resume on wake,
-and Power Nap wakes the Mac for scheduled backups.
-
----
-
-## Why the pieces are what they are
-
-**32 MB bands.** Google Drive allows roughly two operations per file per second
-and caps a drive at 400,000 files, which favours large bands. But every change
-dirties a whole band, which favours small ones. Measured under Time Machine's
-actual write pattern, 64 MB bands cost exactly twice the transfer of 8 MB bands.
-32 MB is the smallest band at which the first upload stops being bound by
-Drive's per-file rate and becomes bound by the link. The size is fixed when the
-image is created and cannot be changed afterwards.
-
-**A ten-minute write-back.** `--vfs-write-back` sets how long rclone waits after
-a band stops changing before sending it. Short delays send a band again on every
-touch; long delays coalesce those touches into one upload but widen the window
-where data exists only locally.
-
-It was 30 s, and that is how 823 GB went out in a day for 45 GB of change. The
-current 600 s comes from measurement rather than taste: across 56,533 gaps
-between consecutive re-sends of the same band, the median gap is 9.5 minutes, so
-ten minutes absorbs about half of the repeats. Going further pays less and less —
-15 minutes reaches 57%, 30 minutes 70% — while the local-only window grows in
-proportion.
-
-The catch is that a long write-back breaks every drain path, because a queued
-item carries a future expiry and `waitUntilQuiet` counts it. Detaching would
-block for the full ten minutes and time out. `expireQueuedUploads()` pulls those
-expiries forward through rclone's `vfs/queue-set-expiry`, so detach still drains
-in seconds. Attach does the same before waiting, since `hdiutil` on FUSE-T
-rejects mounts more often while rclone is busy.
-
-**Its own rclone.** The Homebrew build is compiled without FUSE and refuses to
-mount outright. CloudMachine installs the official binary beside it, verified by
-SHA256.
-
-**Its own FUSE-T.** The official installer leaves an app in `/Applications` that
-only hosts an FSKit backend this project does not use. CloudMachine keeps the two
-files it actually needs in `~/.cloudmachine/fuse` and symlinks the library where
-rclone looks for it — no root required, since `/usr/local/lib` belongs to the
-user. FUSE-T is not open source: its binary distribution is free for
-non-commercial use provided the copyright notice is kept, which is why
-`LICENSE.rtf` is copied alongside. Bundling it with commercial software needs a
-licence from its authors.
-
-**A buffer guard.** `--vfs-cache-max-size` is a soft limit — rclone only evicts
-what it has already uploaded, so when everything is queued the buffer keeps
-growing and can fill the disk. Time Machine writes at SSD speed, rclone uploads
-at link speed, and the difference accumulates. The guard pauses Time Machine
-when the backlog grows past a threshold and resumes when the upload catches up,
-trading speed for finishing at all.
-
-What it measures is the **unsent backlog**, not the size of the cache. Those are
-not the same number and the difference cost the guard its whole purpose: with
-`--vfs-cache-max-age 9999h` the cache sits at its limit permanently (281
-measurements here, never below 99 GB), so a resume threshold expressed in cache
-size was unreachable. The journal shows it exactly: one PAUZA line ever, and not
-a single WZNOWIENIE. The backlog is the part of the cache rclone *cannot* evict,
-so it is also the number that decides whether the limit can hold at all — the
-guard pauses above 50 GB of backlog and resumes below 10 GB, both derived from
-the 100 GB cache size rather than written down twice. The backlog in gigabytes
-is an *estimate*: rclone reports how many items are queued, not how many bytes,
-and every item here is a fixed 32 MiB sparsebundle band, so the guard multiplies
-and says so with a `~` wherever it prints the number.
-
-**Pausing is not one command.** `tmutil stopbackup` cancels the backup that is
-running and does not touch the schedule, so macOS starts another one an hour
-later. The guard therefore re-issues the stop on every 30-second tick for as
-long as the pause lasts, rather than once when it enters the paused state — that
-bug kept the state for 53 hours while the actual write pause lasted one backup.
-`tmutil disable` would hold by itself, and is deliberately not used: the guard
-keeps its state in memory and runs under `KeepAlive`, so a crash between
-disabling and resuming would leave Time Machine switched off with nobody to
-switch it back on.
-
-Disk protection does not depend on any of the above. The free-space threshold
-and rclone's own "out of space" are checked in **every** state, including while
-paused — previously they lived in the running branch only, so one pause switched
-off the protection this process exists for. And nothing here treats a missing
-answer as good news: if rclone's control interface does not reply, the backlog is
-*unknown*, which neither pauses nor resumes, and says so in the log once.
-
----
-
-## Restoring
-
-Nothing special: this is a normal Time Machine backup. Enter Time Machine from
-the menu bar to browse versions, or restore a whole system through Migration
-Assistant. That is the reason for the disk-image approach — file-level cloud
-backup tools cannot feed Migration Assistant.
-
-### What is actually in there
-
-CloudMachine decides *where* the backup goes; Time Machine decides *what* goes
-into it, and it will happily report a healthy 210 GiB backup that omits your
-home directory. Check before you need it:
-
-```sh
-tmutil isexcluded ~/Documents ~/Desktop ~/Pictures
-plutil -p /Library/Preferences/com.apple.TimeMachine.plist | grep -A15 SkipPaths
-```
-
-`SkipPaths` is the exclusion list from System Settings → Time Machine →
-Options. `~/.cloudmachine` belongs there — it is the write buffer, and backing
-it up would mean backing up the backup. Anything else on that list is a
-deliberate decision worth re-reading.
-
-### Actually pulling a file back out
-
-A backup nobody has ever restored from is a hypothesis, not a backup. This
-takes a minute and touches nothing:
-
-```sh
-B=$(tmutil listbackups -m | tail -1)   # -m mounts the snapshot; without it the path 404s
-ls "$B"                                 # -> Data
-cp "$B/Data/private/etc/hosts" /tmp/    # a single file
-cp -R "$B/Data/private/etc/pam.d" /tmp/ # a whole directory
-shasum -a 256 /tmp/hosts /etc/hosts     # the two lines must match
-```
-
-Then unmount what you browsed, because a mounted snapshot holds the image
-device busy and makes `detach-image` fail:
-
-```sh
-mount | grep /Volumes/.timemachine/ |
-  sed -E 's/^.* on (\/Volumes\/\.timemachine\/[^(]*) \(.*$/\1/' |
-  while read -r m; do diskutil unmount "$m"; done
-```
-
-Use `diskutil unmount`, not `umount` — the latter returns
-`Operation not permitted` for these snapshots.
-
-### Checking the image
-
-```sh
-cloudmachine-agent verify-image
-```
-
-`hdiutil verify` does not work on a sparsebundle: such an image carries no
-checksum and the tool reports `has no checksum`. The right tool is `fsck_apfs`
-on the attached device, which is what `verify-image` runs.
-
-**`verify-image` is not a background task.** `fsck_apfs` reads the image's
-metadata through the rclone mount, snapshot by snapshot, so its runtime tracks
-the snapshot count rather than the data size — 39 snapshots over a 589 GiB
-image (29 Sep 2026) is hours, not minutes, and the count climbs hourly.
-Running it against the *attached* image saturates the mount badly enough that
-`mount(8)` itself blocks and `backupd` cannot mount the destination, so the
-hourly backups fail while it runs. Detach first, as the command requires, and
-do it when you can leave the Mac alone.
-
----
-
-## Measurement harnesses
-
-The measurements behind these decisions — write amplification per band size, and
-what survives the cloud layer dying mid-write — are written up in
-[gdrive/README.md](gdrive/README.md). The shell harnesses that produced them are
-gone; that work now lives as subcommands of `cloudmachine-agent`, which is why
-`gdrive/` holds nothing but the write-up.
+## Documentation
+
+- [Running CloudMachine](docs/operations.md) — checking from Terminal,
+  knowing when backups stop, reading the logs, before rebooting.
+- [Restoring](docs/restoring.md) — getting files back, and checking the image.
+- [How it works, and what it costs](docs/design.md) — measured traffic and
+  storage, and why each piece is the way it is.
+- [Setting up from Terminal](docs/setup-cli.md) — the same setup without the app.
+- [Building from source](docs/building.md) — local builds, tests, releases,
+  measurement harnesses.
 
 ---
 
 ## Licence
 
-MIT. FUSE-T and rclone keep their own licences; see above.
+MIT. FUSE-T and rclone keep their own licences; see
+[How it works](docs/design.md#why-the-pieces-are-what-they-are).

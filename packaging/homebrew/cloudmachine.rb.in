@@ -51,9 +51,9 @@ cask "cloudmachine" do
   ]
 
   caveats <<~EOS
-    First-time setup (the agent lives inside the app bundle):
-      /Applications/CloudMachine.app/Contents/MacOS/cloudmachine-agent --help
-    See https://github.com/RenaCode/CloudMachine#setup for the full sequence.
+    Open CloudMachine (`open -a CloudMachine`): its window lists the
+    remaining setup steps for this Mac, with a button for each.
+    See https://github.com/RenaCode/CloudMachine#getting-started
 
     `brew upgrade` keeps the Google Drive mount running. Afterwards, check
     that the backup watchdog still runs: `cloudmachine-agent drive-status`.

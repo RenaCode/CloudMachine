@@ -100,6 +100,8 @@ final class CloudMachineController: ObservableObject {
     // `~/Library/Application Support/com.apple.TCC`: the wrong path and a check
     // that proves nothing under TCC.
     status.hasFullDiskAccess = BackupHealth.preferencesReadable()
+    status.agentsInstalled = await LaunchdInstaller.isInstalled(
+      label: "com.renacode.cloudmachine.gdrive-buffer")
   }
 
   /// State of our own OAuth credentials. We check ONLY that the entry exists -
@@ -159,6 +161,9 @@ final class CloudMachineController: ObservableObject {
       buffer.outOfSpace = stats.outOfSpace
     }
     status.buffer = buffer
+    status.imageExists =
+      buffer.mounted
+      ? FileManager.default.fileExists(atPath: BackupImageService.imagePath.path) : nil
   }
 
   /// `destinationReading()`, and NOT `currentDestinationMountPoint()`.
@@ -208,6 +213,33 @@ final class CloudMachineController: ObservableObject {
   }
 
   // MARK: - Actions
+
+  func installFuse() async {
+    await run(L10n.tr("Installing FUSE-T"), log: "Installing FUSE-T") {
+      await FuseInstaller.install()
+    }
+  }
+
+  /// Opens System Settings at Full Disk Access. Granting it is a decision
+  /// only the user can make; the app can only take them to the right pane.
+  func openFullDiskAccessSettings() {
+    if let url = URL(
+      string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+    {
+      NSWorkspace.shared.open(url)
+    }
+  }
+
+  var setupPlan: [SetupStep] {
+    SetupPlan.steps(
+      SetupPlan.Inputs(
+        hasRclone: CMTooling.hasManagedRclone, hasFuse: CMTooling.hasFuse,
+        remoteConfigured: status.remoteConfigured, hasFullDiskAccess: status.hasFullDiskAccess,
+        agentsInstalled: status.agentsInstalled, mounted: status.buffer.mounted,
+        imageExists: status.imageExists, imageAttached: status.buffer.imageAttached,
+        timeMachineNotPointingHere: status.timeMachineState == .notRegistered,
+        connectCommand: connectDriveCommand, setDestinationCommand: setDestinationCommand))
+  }
 
   func installRclone() async {
     await run(L10n.tr("Installing rclone"), log: "Installing rclone") {
