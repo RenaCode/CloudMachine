@@ -14,10 +14,10 @@ connection stalls the upload instead of interrupting the backup.
 
 ```
 Time Machine
-  -> /Volumes/CloudMachine          attached sparsebundle; Time Machine sees plain APFS
-     -> ~/.cloudmachine/drive       rclone mount over FUSE-T
-        -> ~/.cloudmachine/cache    100 GB write buffer
-        -> gdrive:CloudMachine/...  Google Drive
+  -> /Volumes/CloudMachine                  attached sparsebundle; Time Machine sees plain APFS
+     -> ~/.cloudmachine/drive               rclone mount over FUSE-T
+        -> ~/.cloudmachine/cache            100 GB write buffer
+        -> gdrive:CloudMachine/mac-studio   Google Drive
 ```
 
 **No network filesystem sits in the write path.** That is the whole point.
@@ -107,7 +107,55 @@ else on the account. `operations/about` through the rclone rc gives real bytes.
 
 - macOS 14 (Sonoma) or newer. Administrator rights for two commands, listed below.
 - A Google account with room to spare.
-- Nothing else. CloudMachine installs its own `rclone` and its own copy of FUSE-T.
+- Xcode or a Swift 5.9+ toolchain, to build the app (there is no prebuilt
+  release yet — see below).
+- Nothing else at runtime. CloudMachine installs its own `rclone` and its own
+  copy of FUSE-T.
+
+### Current limitations
+
+Worth knowing before you start, because none of them announce themselves:
+
+- **One Mac per Google account.** The Drive folder is a constant,
+  `gdrive:CloudMachine/mac-studio`, whatever the Mac is called, so a second Mac
+  on the same account would share the folder and the image with the first.
+  `config/machines.example.json` describes several machines with per-machine
+  `limit_gb` budgets, but no code enforces those budgets — what is checked is
+  the real free space on Drive, reported by rclone.
+- **The interface speaks Polish.** The menu-bar app, the CLI output and the log
+  lines are in Polish; there is no language switch yet. The examples below quote
+  that output verbatim.
+- **Unsigned builds.** The app is signed ad hoc (or with a local self-signed
+  certificate, see below), not with an Apple Developer ID and not notarised, so
+  a downloaded copy gets Gatekeeper's "unidentified developer" warning.
+
+---
+
+## Building the app
+
+```sh
+cd mac-app
+swift run cloudmachine-agent setup-signing-cert   # optional, once per Mac
+swift run cloudmachine-agent build-app            # -> mac-app/build/CloudMachine.app
+cp -R build/CloudMachine.app /Applications/
+```
+
+`build-app` puts the menu-bar app and `cloudmachine-agent` side by side in
+`Contents/MacOS/`, with the launchd templates as resources, so the installed app
+does not need the repository next to it. It must live in `/Applications`: the
+launchd agent that starts the app opens `/Applications/CloudMachine.app`.
+
+`setup-signing-cert` creates a local, self-signed code-signing certificate in the
+login keychain. Without it every build is signed ad hoc with a new identity, and
+macOS revokes permissions such as Full Disk Access after each rebuild. With it,
+`build-app` signs with that certificate automatically.
+
+`swift run cloudmachine-agent make-dmg` packs the built app into
+`mac-app/build/CloudMachine-<version>.dmg`. The same two steps run in
+`.github/workflows/release.yml` when a `vX.Y.Z` tag is pushed and attach the
+`.dmg` to a GitHub release; no such release has been published yet. The version
+comes from `mac-app/VERSION`, and `cloudmachine-agent version` prints it
+together with the build number and the commit the binary was built from.
 
 ---
 
@@ -152,8 +200,8 @@ security add-generic-password -a client_secret -s cloudmachine-gdrive -w -U
 Without `-w <value>`, `security` prompts — the secret stays out of your shell
 history and out of `ps`.
 
-The app window can do the same thing: the *Poświadczenia Google Drive* card,
-folded away at the bottom since it is a once-ever step. It writes through the
+The app window can do the same thing: the *Poświadczenia Google Drive
+(OAuth 2.0)* card, folded away at the bottom since it is a once-ever step. It writes through the
 `security` tool rather than the Keychain API on purpose — an entry created by
 `SecItemAdd` gets an ACL limited to the program that made it, and reading it
 from a different binary raises an authorisation dialog. The launchd agent has
@@ -195,7 +243,7 @@ Do wyslania:      ~14 GB (462 pozycji)
 Wolne na dysku:   288 GB
 Kolejka wysylki:  0 w toku, 0 w kolejce, 0 bledow
 Restart bez pytania: TAK - kolejka pusta
-Wysylka:          Wszystko wyslane na Google Drive
+Wysylka:          Wszystko wysłane na Google Drive
 Cel Time Machine: /Volumes/CloudMachine
 Backup:           nie trwa
 ```
@@ -277,9 +325,11 @@ Logs are a diagnostic tool, so they live here instead.
 |---|---|
 | `~/Library/Logs/CloudMachine/cloudmachine.log` | everything the agents decided: pauses, resumes, alerts, attach/detach |
 | `~/.cloudmachine/rclone.log` | every transfer and every API error, one line each |
-| `~/Library/Logs/CloudMachine/launchd-*.out.log` | stdout per agent, one file each |
+| `~/Library/Logs/CloudMachine/launchd-*.out.log`, `launchd-*.err.log` | stdout and stderr per agent |
 
-Both main logs are rotated by size, so they will not eat the disk.
+Neither main log can eat the disk: `cloudmachine.log` is cut back to its last
+5,000 lines once it passes 200 MiB, and `rclone.log` is moved aside to
+`rclone.log.1` when the mount starts if it is over 100 MiB.
 
 **Check the timestamps before concluding anything.** An entry is not news
 because it is the last one in the file; on a quiet day the newest line can be
