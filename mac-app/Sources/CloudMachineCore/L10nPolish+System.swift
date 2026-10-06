@@ -1,6 +1,24 @@
 // Polish translations, keyed by the English text passed to `L10n.tr`.
 extension L10nPolish {
   static let system: [String: String] = [
+    "This Mac is close to its space limit on Google Drive":
+      "Ten Mac zbliża się do swojego limitu miejsca na Google Drive",
+    "%@ GB of %@ GB used. Time Machine deletes the oldest backups to stay within its quota; check that the quota is set (drive-status).":
+      "Zajęte %@ GB z %@ GB. Time Machine kasuje najstarsze kopie, żeby zmieścić się w limicie; sprawdź, czy limit jest ustawiony (drive-status).",
+    "This Mac is over its space limit on Google Drive":
+      "Ten Mac przekroczył swój limit miejsca na Google Drive",
+    "%@ GB of %@ GB used. Set the Time Machine quota (command in the app window or drive-status), or raise the limit.":
+      "Zajęte %@ GB z %@ GB. Ustaw limit Time Machine (polecenie w oknie aplikacji albo w drive-status) albo podnieś limit.",
+    "not set":
+      "nie ustawiony",
+    "%@ GB - usage not measured yet":
+      "%@ GB - zajętość jeszcze nie zmierzona",
+    "%@ of %@ GB used (%@%%)":
+      "zajęte %@ z %@ GB (%@%%)",
+    "The limit must be a whole number of GB above zero.":
+      "Limit musi być całkowitą liczbą GB większą od zera.",
+    "machines.json cannot be read, so it was not overwritten. Fix or remove it first.":
+      "Nie da się odczytać machines.json, więc nie został nadpisany. Najpierw go popraw albo usuń.",
     // DriveFolder
     "'%@' is not a valid folder name: use lowercase letters, digits and dashes.":
       "'%@' to nieprawidłowa nazwa folderu: użyj małych liter, cyfr i myślników.",

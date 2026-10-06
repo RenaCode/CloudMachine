@@ -47,10 +47,6 @@ so they read the same whoever sends them to you.
 - **Not notarised.** Releases are signed with a self-signed certificate, not
   with an Apple Developer ID. The Homebrew cask clears the quarantine flag; a
   DMG downloaded by hand gets Gatekeeper's "unidentified developer" warning.
-- **Per-machine budgets are not enforced.** `config/machines.example.json`
-  describes `limit_gb` per Mac, but nothing acts on it — what is checked is the
-  real free space on Drive, reported by rclone. Several Macs on one account
-  share that space.
 
 ---
 
@@ -98,6 +94,20 @@ name. It cannot be changed afterwards, because a new name is a new, empty
 backup; CloudMachine refuses rather than orphan the old one. The window shows
 the folder in use. Installations set up before per-Mac folders
 keep `mac-studio`, which is where their backup already is.
+
+### Space limit per Mac
+
+Macs on one account share its space, so each can get a limit: the **Space limit
+for this Mac** card in the window (or `cloudmachine-agent set-limit --gb 1500`).
+It works two ways:
+
+- **Time Machine quota.** The card gives a `sudo tmutil setquota` command to
+  copy; Time Machine then deletes this Mac's oldest backups to stay under it.
+  The quota is 70% of the limit, because the image on Drive grows larger than
+  the backup inside it (see [How it works](docs/design.md)).
+- **An alarm on the real usage.** The watchdog measures this Mac's folder on
+  Drive every few hours and warns from 90% of the limit, and again above it.
+  The card and `drive-status` show the usage.
 
 ### Upgrading and uninstalling
 

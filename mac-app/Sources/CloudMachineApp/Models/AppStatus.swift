@@ -192,6 +192,12 @@ final class AppStatus: ObservableObject {
   /// (from the computer name), and the folder in use once it is.
   @Published var suggestedDriveFolder = ""
   @Published var driveFolderPath = ""
+  /// This Mac's space limit on Drive, its measured usage, and what Time
+  /// Machine's quota is now - see `MachineBudget`.
+  @Published var budgetLimitGB: Int?
+  @Published var budgetUsage: MachineBudget.Usage?
+  @Published var timeMachineQuotaGB: Double?
+  @Published var timeMachineDestinationID: String?
   /// Whether the mount agent is loaded in launchd; `nil` until asked.
   @Published var agentsInstalled: Bool?
   /// Whether this Mac's image exists on the mounted Drive; `nil` while the

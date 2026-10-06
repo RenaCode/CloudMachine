@@ -1,6 +1,18 @@
 // Polish translations, keyed by the English text passed to `L10n.tr`.
 extension L10nPolish {
   static let agent: [String: String] = [
+    "Space limit:      %@":
+      "Limit miejsca:    %@",
+    "                  Time Machine quota not set to match - run: %@":
+      "                  Limit Time Machine nie pasuje - uruchom: %@",
+    "Sets how much of Google Drive this Mac may use, and prints the Time Machine quota command.":
+      "Ustawia, ile miejsca na Google Drive może zająć ten Mac, i wypisuje polecenie ustawiające limit Time Machine.",
+    "Limit in GB.":
+      "Limit w GB.",
+    "Limit for this Mac: %@ GB.":
+      "Limit dla tego Maca: %@ GB.",
+    "Now set the Time Machine quota (needs an administrator password):":
+      "Teraz ustaw limit Time Machine (wymaga hasła administratora):",
     "CloudMachine - verification, Google Drive setup and installation. Called by launchd on a schedule, or by hand from Terminal.":
       "CloudMachine - weryfikacja, konfiguracja Google Drive i instalacja. Wołane przez launchd według harmonogramu albo ręcznie z Terminala.",
     "Generates and installs the launchd agents (Drive buffer, image attach, buffer guard).":
