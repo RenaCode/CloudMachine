@@ -1,10 +1,10 @@
 {
-  "_comment": "Skopiuj ten plik jako machines.json i dostosuj. Suma limit_gb obu Macow powinna zostac ponizej realnej pojemnosci dysku Google (zostaw margines bezpieczenstwa, np. 10-15%, na narzuty rclone/Google i przypadkowy wzrost miedzy sprawdzeniami watchdoga).",
+  "_comment": "Copy this file to machines.json and adjust it. The sum of limit_gb for both Macs should stay below the real capacity of the Google drive (leave a safety margin, e.g. 10-15%, for rclone/Google overhead and accidental growth between watchdog checks).",
   "drive_total_gb": 5000,
   "safety_margin_percent": 10,
   "remote_name": "gdrive-cloudmachine",
   "remote_root_folder": "CloudMachine",
-  "_bwlimit_comment": "Limit predkosci wysylania w Mbps (megabity/s, jak u dostawcow internetu) - to ustawienie jest per-Mac, wiec kazda maszyna moze miec inna wartosc w swoim lokalnym machines.json. 0 = bez limitu.",
+  "_bwlimit_comment": "Upload speed limit in Mbps (megabits/s, as internet providers quote it) - this setting is per-Mac, so each machine can have a different value in its local machines.json. 0 = no limit.",
   "bwlimit_mbps": 0,
   "machines": {
     "macbook-pro-marcin": {

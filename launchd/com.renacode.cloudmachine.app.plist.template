@@ -13,16 +13,16 @@
   <key>RunAtLoad</key>
   <true/>
   <!--
-    Autostart interfejsu. Przez `open`, a nie przez uruchomienie binarki
-    wprost: launchd odpalilby ja poza sesja Aqua, a aplikacja z ikona w pasku
-    menu nie ma tam czego rysowac.
+    Autostart of the UI. Through `open` rather than by running the binary
+    directly: launchd would start it outside the Aqua session, and a menu bar
+    app has nothing to draw there.
 
-    Bez KeepAlive - `open` konczy sie natychmiast po wystartowaniu aplikacji,
-    wiec KeepAlive uruchamialby ja w kolko. Zamkniecie okna przez uzytkownika
-    ma zostac zamknieciem, nie zaproszeniem do restartu.
+    No KeepAlive - `open` exits immediately after the app starts, so KeepAlive
+    would launch it over and over. The user closing the window should stay
+    closed, not be an invitation to restart.
 
-    Same backupy NIE zaleza od tej aplikacji - robia je agenty gdrive-buffer,
-    gdrive-attach i buffer-guard. To jest wylacznie podglad.
+    The backups themselves do NOT depend on this app - the gdrive-buffer,
+    gdrive-attach and buffer-guard agents do them. This is only a viewer.
   -->
   <key>StandardOutPath</key>
   <string>__CM_LOG_DIR__/launchd-app.out.log</string>

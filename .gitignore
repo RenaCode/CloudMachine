@@ -1,34 +1,34 @@
-# Konfiguracja z danymi osobistymi (nazwy maszyn, limity) - kazdy uzytkownik ma wlasna
+# Configuration with personal data (machine names, limits) - every user has their own
 config/machines.json
 
-# Logi
+# Logs
 *.log
 logs/
 
-# rclone config (zawiera tokeny OAuth) - nigdy nie commitowac
+# rclone config (contains OAuth tokens) - never commit
 rclone.conf
 *.conf
 
-# Wygenerowane pliki launchd (zawieraja lokalne sciezki uzytkownika)
+# Generated launchd files (contain the user's local paths)
 launchd/*.plist
 !launchd/*.plist.template
 
 # OS
 .DS_Store
 
-# Robocze/testowe sparsebundle uzywane recznie do eksperymentow z hdiutil/rclone -
-# to sa binarne pliki testowe, nie kod projektu.
+# Scratch/test sparsebundles used manually for hdiutil/rclone experiments -
+# these are binary test files, not project code.
 scratch/
 
-# Globalny ~/.gitignore_global na tym koncie ignoruje katalogi "scripts" -
-# to jest kluczowy kod tego projektu, wiec jawnie go odignorowujemy.
+# The global ~/.gitignore_global on this account ignores "scripts" directories -
+# that is key code for this project, so we explicitly un-ignore it.
 !scripts/
 !scripts/*.sh
 
-# Lokalny stan narzedzi Claude / claude-flow / ruflo.
-# To sa artefakty konkretnej maszyny i sesji (liczniki edycji, polityki,
-# przyjeta konfiguracja) - nie opisuja projektu i nie naleza do repozytorium.
-# Definicje agentow (.claude/agents/) i CLAUDE.md zostaja SLEDZONE celowo.
+# Local state of the Claude / claude-flow / ruflo tools.
+# These are artifacts of a specific machine and session (edit counters, policies,
+# adopted configuration) - they do not describe the project and do not belong in
+# the repository. Agent definitions (.claude/agents/) and CLAUDE.md stay TRACKED on purpose.
 .claude-flow/
 .claude/proven-config.json
 .claude/.proven-config-version

@@ -12,9 +12,9 @@
   <key>RunAtLoad</key>
   <true/>
   <!--
-    Dozorca dziala bez konca i sam przechodzi w czuwanie miedzy backupami -
-    dlatego KeepAlive jest tu bezpieczne. Gdyby konczyl prace po kazdym
-    zakonczonym backupie, KeepAlive zamienilby to w petle restartow.
+    The guard runs indefinitely and goes idle on its own between backups -
+    that is why KeepAlive is safe here. If it exited after every finished
+    backup, KeepAlive would turn that into a restart loop.
   -->
   <key>KeepAlive</key>
   <true/>

@@ -1,16 +1,16 @@
-// Generuje ikone aplikacji CloudMachine (klepsydra na tle chmury) jako .iconset
-// z plikow PNG w roznych rozdzielczosciach, gotowe do spakowania przez
-// `iconutil -c icns`. Uruchamiane raz przy zmianie wygladu ikony:
+// Generates the CloudMachine app icon (an hourglass on a cloud) as an .iconset
+// of PNG files in various resolutions, ready to be packed with
+// `iconutil -c icns`. Run once whenever the icon's look changes:
 //   swift Resources/icon-gen/generate_icon.swift Resources/AppIcon.iconset
 import AppKit
 
 let outputDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon.iconset"
 try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
 
-/// Rysuje symbol SF (obraz-szablon: czarny ksztalt na przezroczystym tle)
-/// wypelniony podanym kolorem, uzywajac go jako maski clipowania - to jedyny
-/// niezawodny sposob na "przekolorowanie" NSImage template poza kontekstem
-/// NSButton/NSImageView, gdzie automatyczne tintowanie by zadzialalo samo.
+/// Draws an SF Symbol (a template image: a black shape on a transparent
+/// background) filled with the given color, using it as a clipping mask - the
+/// only reliable way to "recolor" a template NSImage outside of an
+/// NSButton/NSImageView context, where automatic tinting would just work.
 func drawTintedSymbol(name: String, pointSize: CGFloat, weight: NSFont.Weight, in rect: NSRect, color: NSColor) {
     guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return }
     let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
@@ -32,7 +32,7 @@ func drawIcon(size: CGFloat) -> NSImage {
 
     let rect = NSRect(x: 0, y: 0, width: size, height: size)
 
-    // Tlo: zaokraglony kwadrat z gradientem niebieskim (klimat "dysk w chmurze").
+    // Background: a rounded square with a blue gradient (a "cloud drive" feel).
     let cornerRadius = size * 0.225
     let backgroundPath = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
     let gradient = NSGradient(colorsAndLocations:
@@ -41,7 +41,7 @@ func drawIcon(size: CGFloat) -> NSImage {
     )
     gradient?.draw(in: backgroundPath, angle: -90)
 
-    // Cien pod chmura, zeby nie "kleila sie" wizualnie do tla.
+    // Shadow under the cloud so it does not visually "stick" to the background.
     NSGraphicsContext.saveGraphicsState()
     let shadow = NSShadow()
     shadow.shadowColor = NSColor.black.withAlphaComponent(0.20)
@@ -49,13 +49,13 @@ func drawIcon(size: CGFloat) -> NSImage {
     shadow.shadowOffset = NSSize(width: 0, height: -size * 0.015)
     shadow.set()
 
-    // Chmura biala - symbolizuje Google Drive / backup w chmurze.
+    // White cloud - stands for Google Drive / cloud backup.
     let cloudSize = size * 0.80
     let cloudRect = NSRect(x: (size - cloudSize) / 2, y: size * 0.17, width: cloudSize, height: cloudSize)
     drawTintedSymbol(name: "cloud.fill", pointSize: cloudSize, weight: .regular, in: cloudRect, color: .white)
     NSGraphicsContext.restoreGraphicsState()
 
-    // Klepsydra bursztynowa na srodku chmury - symbolizuje historie / Time Machine.
+    // Amber hourglass in the middle of the cloud - stands for history / Time Machine.
     let hourglassSize = size * 0.34
     let hourglassRect = NSRect(x: (size - hourglassSize) / 2, y: size * 0.34, width: hourglassSize, height: hourglassSize)
     let amber = NSColor(calibratedRed: 0.80, green: 0.52, blue: 0.06, alpha: 1.0)
