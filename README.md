@@ -107,8 +107,8 @@ else on the account. `operations/about` through the rclone rc gives real bytes.
 
 - macOS 14 (Sonoma) or newer. Administrator rights for two commands, listed below.
 - A Google account with room to spare.
-- Xcode or a Swift 5.9+ toolchain, to build the app (there is no prebuilt
-  release yet — see below).
+- Homebrew, to install a release — or Xcode / a Swift 5.9+ toolchain, to build
+  the app yourself (see below).
 - Nothing else at runtime. CloudMachine installs its own `rclone` and its own
   copy of FUSE-T.
 
@@ -125,20 +125,43 @@ Worth knowing before you start, because none of them announce themselves:
 - **The interface speaks Polish.** The menu-bar app, the CLI output and the log
   lines are in Polish; there is no language switch yet. The examples below quote
   that output verbatim.
-- **Unsigned builds.** The app is signed ad hoc (or with a local self-signed
-  certificate, see below), not with an Apple Developer ID and not notarised, so
-  a downloaded copy gets Gatekeeper's "unidentified developer" warning.
+- **Not notarised.** Releases are signed with a self-signed certificate (local
+  builds ad hoc or with a local one, see below), not with an Apple Developer ID.
+  The Homebrew cask clears the quarantine flag; a DMG downloaded by hand gets
+  Gatekeeper's "unidentified developer" warning.
 
 ---
 
-## Building the app
+## Installing
+
+```sh
+brew install --cask renacode/tap/cloudmachine
+```
+
+The cask installs a universal (Apple Silicon + Intel) `CloudMachine.app` into
+`/Applications`. `brew upgrade` does not restart the Google Drive mount, and
+neither `brew uninstall` nor `--zap` touches the launchd agents or the upload
+buffer in `~/.cloudmachine`, which may hold backups that have not reached
+Google Drive yet. Run `cloudmachine-agent prepare-shutdown` before
+uninstalling. Releases, signing and the cask are described in
+[`packaging/README.md`](packaging/README.md).
+
+### Building the app
 
 ```sh
 cd mac-app
 swift run cloudmachine-agent setup-signing-cert   # optional, once per Mac
 swift run cloudmachine-agent build-app            # -> mac-app/build/CloudMachine.app
+rm -rf /Applications/CloudMachine.app             # never copy over a live bundle
 cp -R build/CloudMachine.app /Applications/
 ```
+
+Removing the installed copy first is not optional. `cp -R` onto an existing
+bundle overwrites its files in place; macOS still holds the old signature for
+them and kills every agent started from the bundle
+(`last exit reason = OS_REASON_CODESIGNING`), while `codesign --verify` keeps
+passing. Removed and copied anew, the files get new identities. The mount
+survives this: the rclone process that holds it lives outside the bundle.
 
 `build-app` puts the menu-bar app and `cloudmachine-agent` side by side in
 `Contents/MacOS/`, with the launchd templates as resources, so the installed app
@@ -151,9 +174,9 @@ macOS revokes permissions such as Full Disk Access after each rebuild. With it,
 `build-app` signs with that certificate automatically.
 
 `swift run cloudmachine-agent make-dmg` packs the built app into
-`mac-app/build/CloudMachine-<version>.dmg`. The same two steps run in
-`.github/workflows/release.yml` when a `vX.Y.Z` tag is pushed and attach the
-`.dmg` to a GitHub release; no such release has been published yet. The version
+`mac-app/build/CloudMachine-<version>.dmg`; `build-app --universal` builds for
+both architectures, as releases do. Releases are built by
+`.github/workflows/release.yml` from a `vX.Y.Z` tag. The version
 comes from `mac-app/VERSION`, and `cloudmachine-agent version` prints it
 together with the build number and the commit the binary was built from.
 
