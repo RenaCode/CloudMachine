@@ -3,18 +3,22 @@ import XCTest
 
 @testable import CloudMachineApp
 
-/// Testy jednego zdania, ktore uzytkownik naprawde czyta: zielony znaczek
-/// i naglowek w pasku menu.
+/// Tests of the one sentence the user actually reads: the green badge
+/// and the headline in the menu bar.
 ///
-/// Powstaly, bo mutacja wykazala luke: `healthy` i `headline` NIE mialy zadnego
-/// testu, wiec poprawka dokladajaca do nich `erroredFiles` i `outOfSpace`
-/// przechodzila, ale rownie dobrze przeszlaby jej odwrotnosc. Zepsute
-/// i sprawne wygladalo identycznie takze w zestawie testow.
+/// They exist because mutation testing exposed a gap: `healthy` and `headline` had NO
+/// test at all, so the fix adding `erroredFiles` and `outOfSpace` to them
+/// passed, but its inverse would have passed just as well. Broken
+/// and working looked identical in the test suite too.
+///
+/// Headlines that come from `UploadState` or `BackupHealth.formatAge` (CloudMachineCore)
+/// are compared with the core's own text: their wording is that module's business,
+/// what matters here is that `headline` routes to them.
 @MainActor
 final class AppStatusHealthTests: XCTestCase {
 
-  /// Stan, w ktorym wszystko naprawde dziala - punkt odniesienia.
-  private func zdrowy() -> AppStatus {
+  /// A state in which everything really works - the reference point.
+  private func healthy() -> AppStatus {
     let status = AppStatus()
     status.dependencyState = .ready
     status.remoteConfigured = true
@@ -22,159 +26,163 @@ final class AppStatusHealthTests: XCTestCase {
     var buffer = BufferStatus()
     buffer.mounted = true
     buffer.imageAttached = true
-    // Musi byc jawne: `BufferStatus` zaczyna od "kolejki nie odczytano", zeby
-    // swiezy, niesprawdzony stan nie uchodzil za pusta kolejke.
+    // Must be explicit: `BufferStatus` starts from "queue not read", so that
+    // a fresh, unchecked state does not pass for an empty queue.
     buffer.queueKnown = true
     buffer.freeDiskGB = 400
     status.buffer = buffer
-    // ZMIANA 23.09.2026: "wszystko podpiete" przestalo wystarczac do zielonego
-    // znaczka. Punkt odniesienia musi teraz zawierac takze fakt, ze kopia
-    // FAKTYCZNIE powstala - bo dokladnie tego brakowalo w awarii, dla ktorej
-    // `BackupHealth` w ogole powstal. Wczesniej ten helper opisywal stan
-    // urzadzen i milczal o tym, czy backup sie udal; test "zdrowy stan jest
-    // zdrowy" przechodzil wiec takze dla Maca, ktory nie zrobil kopii od
-    // dwoch dni.
+    // CHANGE 23.09.2026: "everything attached" stopped being enough for the green
+    // badge. The reference point now also has to contain the fact that a backup
+    // WAS ACTUALLY made - because that is exactly what was missing in the failure for which
+    // `BackupHealth` was created in the first place. Previously this helper described the state of the
+    // devices and said nothing about whether the backup succeeded; the test "a healthy state
+    // is healthy" therefore also passed for a Mac that had not made a backup for
+    // two days.
     status.backupCycle = BackupCycleStatus(
       known: true, lastSuccess: Date().addingTimeInterval(-1800), problems: [],
       checkedAt: Date())
     return status
   }
 
-  /// REGRESJA 23.09.2026: `rclone rc` nie odpowiedzial w limicie czasu,
-  /// wolajacy podstawil zera i pasek menu pokazal "Gotowe" przy 386 pasmach
-  /// czekajacych w kolejce.
-  func testNieodczytanaKolejkaOdbieraZielonyZnaczek() {
-    let status = zdrowy()
+  /// REGRESSION 23.09.2026: `rclone rc` did not answer within the time limit,
+  /// the caller substituted zeros and the menu bar showed "Ready" with 386 bands
+  /// waiting in the queue.
+  func testUnreadQueueTakesAwayGreenBadge() {
+    let status = healthy()
     status.buffer.queueKnown = false
-    XCTAssertFalse(status.healthy, "Nie wiadomo = nie zielono.")
-    XCTAssertNotEqual(status.headline, "Gotowe")
+    XCTAssertFalse(status.healthy, "Unknown = not green.")
+    XCTAssertNotEqual(status.headline, "Ready")
     XCTAssertEqual(status.buffer.uploadState, .queueUnknown)
   }
 
-  func testZdrowyStanJestZdrowy() {
-    let status = zdrowy()
+  func testHealthyStateIsHealthy() {
+    let status = healthy()
     XCTAssertTrue(status.healthy)
-    XCTAssertEqual(status.headline, "Gotowe")
+    XCTAssertEqual(status.headline, "Ready")
   }
 
-  /// TO jest ta awaria. Pasma, ktorych rclone nie wyslal, istnieja wylacznie
-  /// na tym Macu - czyli backup nie jest kopia. Interfejs pokazywal wtedy
-  /// zielony znaczek i "Gotowe".
-  func testNiewyslanePlikiOdbierajaZielonyZnaczek() {
-    let status = zdrowy()
+  /// THIS is the failure. Bands that rclone did not upload exist only
+  /// on this Mac - so the backup is not a copy. The interface then showed
+  /// a green badge and "Ready".
+  func testUnsentFilesTakeAwayGreenBadge() {
+    let status = healthy()
     status.buffer.erroredFiles = 7
-    XCTAssertFalse(status.healthy, "Niewyslane pasma NIE moga uchodzic za zdrowy stan.")
-    XCTAssertEqual(status.headline, "Nie wysłano 7 fragmentów kopii")
+    XCTAssertFalse(status.healthy, "Unsent bands MUST NOT pass for a healthy state.")
+    XCTAssertEqual(status.buffer.uploadState, .failedFiles(7))
+    XCTAssertEqual(status.headline, UploadState.failedFiles(7).headline)
   }
 
-  /// rclone melduje, ze nie ma juz gdzie odlozyc danych. Mocniejszy sygnal niz
-  /// jakikolwiek nasz prog, bo pochodzi od tego, kto naprawde wie.
-  func testPelnyBuforOdbieraZielonyZnaczek() {
-    let status = zdrowy()
+  /// rclone reports that it has nowhere left to put data. A stronger signal than
+  /// any threshold of ours, because it comes from the one who really knows.
+  func testFullBufferTakesAwayGreenBadge() {
+    let status = healthy()
     status.buffer.outOfSpace = true
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.headline, "Wysyłka nie nadąża za zapisem")
+    XCTAssertEqual(status.buffer.uploadState, .bufferFull)
+    XCTAssertEqual(status.headline, UploadState.bufferFull.headline)
   }
 
-  func testBrakMontowaniaOdbieraZielonyZnaczek() {
-    let status = zdrowy()
+  func testMissingMountTakesAwayGreenBadge() {
+    let status = healthy()
     status.buffer.mounted = false
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.headline, "Bufor nie dziala")
+    XCTAssertEqual(status.headline, "Buffer is not working")
   }
 
-  func testNiepodpietyObrazOdbieraZielonyZnaczek() {
-    let status = zdrowy()
+  func testDetachedImageTakesAwayGreenBadge() {
+    let status = healthy()
     status.buffer.imageAttached = false
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.headline, "Obraz backupu niepodpiety")
+    XCTAssertEqual(status.headline, "Backup image not attached")
   }
 
-  func testPrzestawionyCelTimeMachineOdbieraZielonyZnaczek() {
-    let status = zdrowy()
+  func testChangedTimeMachineDestinationTakesAwayGreenBadge() {
+    let status = healthy()
     status.timeMachineState = .notRegistered
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.headline, "Time Machine nie wskazuje na CloudMachine")
+    XCTAssertEqual(status.headline, "Time Machine does not point to CloudMachine")
   }
 
-  /// Limit dobowy NIE wymaga reakcji, ale pasma leza wtedy tylko na tym Macu -
-  /// wiec zielony znaczek sie nie nalezy.
-  func testWyczerpanyLimitDriveOdbieraZielonyZnaczek() {
-    let status = zdrowy()
+  /// The daily limit does NOT require action, but the bands then sit only on this Mac -
+  /// so the green badge is not deserved.
+  func testExhaustedDriveLimitTakesAwayGreenBadge() {
+    let status = healthy()
     status.buffer.dailyQuotaExhausted = true
     XCTAssertFalse(status.healthy)
     XCTAssertFalse(status.buffer.uploadState.needsAttention)
   }
 
-  /// Brak miejsca na Dysku to co INNEGO niz limit dobowy: nie minie samo.
-  func testBrakMiejscaNaDyskuWymagaReakcji() {
-    let status = zdrowy()
+  /// No space on the Drive is something DIFFERENT from the daily limit: it will not pass on its own.
+  func testNoSpaceOnDriveRequiresAction() {
+    let status = healthy()
     status.buffer.driveFull = true
     XCTAssertFalse(status.healthy)
     XCTAssertTrue(status.buffer.uploadState.needsAttention)
   }
 
-  func testNiepolaczonyDriveOdbieraZielonyZnaczek() {
-    let status = zdrowy()
+  func testUnconnectedDriveTakesAwayGreenBadge() {
+    let status = healthy()
     status.remoteConfigured = false
     XCTAssertFalse(status.healthy)
   }
 
-  /// Trwajaca wysylka to NIE awaria - dopoki kolejka maleje, wszystko idzie
-  /// zgodnie z projektem. Bez tego testu "naprawa" polegajaca na alarmowaniu
-  /// przy kazdej niepustej kolejce przeszlaby niezauwazona.
-  func testTrwajacaWysylkaNieJestAwaria() {
-    let status = zdrowy()
+  /// An upload in progress is NOT a failure - as long as the queue shrinks, everything goes
+  /// as designed. Without this test a "fix" consisting of raising an alarm
+  /// on every non-empty queue would have gone unnoticed.
+  func testUploadInProgressIsNotAFailure() {
+    let status = healthy()
     status.buffer.uploadsQueued = 12
     XCTAssertTrue(status.healthy)
-    XCTAssertEqual(status.headline, "Wysyłanie na Google Drive — 12 w kolejce")
+    XCTAssertEqual(status.buffer.uploadState, .flowing(queued: 12))
+    XCTAssertEqual(status.headline, UploadState.flowing(queued: 12).headline)
   }
 
-  // MARK: - Wiek ostatniej UDANEJ kopii
+  // MARK: - Age of the last SUCCESSFUL backup
 
-  /// TA awaria. Montowanie stoi, obraz podpiety, kolejka pusta, cel Time
-  /// Machine ustawiony - a ostatnia ZAKONCZONA kopia ma dwa dni. Panel
-  /// pokazywal wtedy "Sprawny / Gotowe", bo nie pytal o to ani razu:
-  /// `grep -rn "BackupHealth" Sources/CloudMachineApp/` nie dawal trafien.
-  func testStaraKopiaOdbieraZielonyZnaczek() {
-    let status = zdrowy()
+  /// THE failure. The mount is up, the image attached, the queue empty, the Time
+  /// Machine destination set - and the last COMPLETED backup is two days old. The panel
+  /// showed "Healthy / Ready" then, because it never asked about this even once:
+  /// `grep -rn "BackupHealth" Sources/CloudMachineApp/` gave no hits.
+  func testOldBackupTakesAwayGreenBadge() {
+    let status = healthy()
     status.backupCycle.lastSuccess = Date().addingTimeInterval(-48 * 3600)
     XCTAssertFalse(
       status.healthy,
-      "Wszystkie urzadzenia moga byc sprawne, a kopii moze nie byc od dwoch dni.")
-    XCTAssertEqual(status.headline, "Brak ukończonej kopii od 2 dni")
+      "All the devices can be fine while there has been no backup for two days.")
+    XCTAssertEqual(
+      status.headline, "No completed backup for \(BackupHealth.formatAge(48 * 3600))")
   }
 
-  /// Granica progu. Tuz pod nia jest jeszcze dobrze, tuz nad nia juz nie -
-  /// bez tego testu "naprawa" ustawiajaca prog na 100 lat przeszlaby cicho.
-  func testProgWiekuKopiiDzialaWObieStrony() {
-    let tuzPrzed = zdrowy()
-    tuzPrzed.backupCycle.lastSuccess = Date().addingTimeInterval(
+  /// The threshold boundary. Just below it is still fine, just above it no longer -
+  /// without this test a "fix" setting the threshold to 100 years would pass silently.
+  func testBackupAgeThresholdWorksBothWays() {
+    let justBefore = healthy()
+    justBefore.backupCycle.lastSuccess = Date().addingTimeInterval(
       -(BackupHealth.maxAgeHours * 3600 - 60))
-    XCTAssertTrue(tuzPrzed.healthy)
+    XCTAssertTrue(justBefore.healthy)
 
-    let tuzPo = zdrowy()
-    tuzPo.backupCycle.lastSuccess = Date().addingTimeInterval(
+    let justAfter = healthy()
+    justAfter.backupCycle.lastSuccess = Date().addingTimeInterval(
       -(BackupHealth.maxAgeHours * 3600 + 60))
-    XCTAssertFalse(tuzPo.healthy)
+    XCTAssertFalse(justAfter.healthy)
   }
 
-  /// Nieodczytany licznik kopii to NIE to samo, co kopia sprzed chwili.
-  /// Domyslny `BackupCycleStatus` ma `known == false` wlasnie po to, zeby
-  /// panel nie swiecil na zielono, zanim ktokolwiek o cokolwiek zapytal.
-  func testNieodczytanyLicznikKopiiOdbieraZielonyZnaczek() {
-    let status = zdrowy()
+  /// An unread backup counter is NOT the same as a backup made a moment ago.
+  /// The default `BackupCycleStatus` has `known == false` precisely so that
+  /// the panel does not show green before anyone has asked anything.
+  func testUnreadBackupCounterTakesAwayGreenBadge() {
+    let status = healthy()
     status.backupCycle = BackupCycleStatus()
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.headline, "Nie wiadomo, kiedy powstała ostatnia kopia")
+    XCTAssertEqual(status.headline, "Unknown when the last backup was made")
   }
 
-  /// Odczytano preferencje i nie ma w nich ANI JEDNEJ udanej kopii - co jest
-  /// czyms innym niz "nie udalo sie odczytac" i musi brzmiec inaczej.
-  func testBrakJakiejkolwiekKopiiOdbieraZielonyZnaczek() {
-    let status = zdrowy()
+  /// The preferences were read and there is NOT A SINGLE successful backup in them - which is
+  /// something other than "could not read" and must sound different.
+  func testNoBackupAtAllTakesAwayGreenBadge() {
+    let status = healthy()
     status.backupCycle = BackupCycleStatus(known: true, lastSuccess: nil, checkedAt: Date())
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.headline, "Nie ma ani jednej ukończonej kopii")
+    XCTAssertEqual(status.headline, "There is no completed backup at all")
   }
 }

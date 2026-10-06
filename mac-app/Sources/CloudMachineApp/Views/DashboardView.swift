@@ -1,8 +1,8 @@
 import CloudMachineCore
 import SwiftUI
 
-/// Główny interfejs aplikacji CloudMachine, utrzymany w nowoczesnym systemie
-/// wizualnym RenaCode (spójnym z Dietetyk-AI oraz Trader-AI).
+/// The main interface of the CloudMachine app, kept in the modern RenaCode
+/// visual system (consistent with Dietetyk-AI and Trader-AI).
 struct DashboardView: View {
   @EnvironmentObject private var controller: CloudMachineController
   @State private var clientID = ""
@@ -12,26 +12,26 @@ struct DashboardView: View {
 
   var body: some View {
     ZStack {
-      // Świetliste tło RenaCode
+      // Glowing RenaCode background
       AmbientGlowBackground()
 
       VStack(spacing: 0) {
-        // Górna belka / Nagłówek z logo i zakładkami
+        // Top bar / header with the logo and tabs
         topHeaderBar
 
-        // Główna zawartość
+        // Main content
         dashboardContent
       }
     }
     .task { controller.startAutoRefresh() }
   }
 
-  // MARK: - Górna Belka Nawigacyjna
+  // MARK: - Top Navigation Bar
 
   private var topHeaderBar: some View {
     VStack(spacing: 12) {
       HStack(spacing: 16) {
-        // Logo ikona z fioletowym i cyjanowym poświatem
+        // Logo icon with a violet and cyan glow
         ZStack {
           RoundedRectangle(cornerRadius: 12)
             .fill(RenaCodeTheme.aiGradient)
@@ -56,26 +56,26 @@ struct DashboardView: View {
             )
 
             RenaCodePillBadge(
-              text: controller.status.healthy ? "Sprawny" : "Uwaga",
+              text: controller.status.healthy ? L10n.tr("Healthy") : L10n.tr("Attention"),
               color: controller.status.healthy
                 ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning
             )
           }
 
-          Text("Lokalny bufor SSD & kopia zapasowa na Google Drive")
+          Text(L10n.tr("Local SSD buffer & backup to Google Drive"))
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(RenaCodeTheme.textMuted)
         }
 
         Spacer()
 
-        // Informacja o odświeżeniu i wskaźnik pracy
+        // Refresh information and activity indicator
         HStack(spacing: 12) {
           if let at = controller.status.lastRefresh {
             HStack(spacing: 5) {
               Image(systemName: "arrow.clockwise.circle")
                 .font(.system(size: 11))
-              Text("Odświeżono \(at.formatted(date: .omitted, time: .standard))")
+              Text(L10n.tr("Refreshed %@", at.formatted(date: .omitted, time: .standard)))
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
             }
             .foregroundStyle(RenaCodeTheme.textDim)
@@ -111,40 +111,40 @@ struct DashboardView: View {
     )
   }
 
-  // MARK: - Zawartość Panelu Głównego (Dashboard Content)
+  // MARK: - Dashboard Content
 
   private var dashboardContent: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 20) {
 
-        // Baner ewentualnego błędu
+        // Banner for an error, if any
         if let error = controller.status.errorMessage {
           errorBanner(error)
         }
 
-        // Siatka kart statystyk KPI (Top Row)
+        // Grid of KPI stat cards (top row)
         kpiSummaryGrid
 
-        // Czy kopia dolatuje na Dysk - i dlaczego nie, jesli nie
+        // Whether the backup reaches the Drive - and why not, if it does not
         uploadStateCard
 
-        // Karta aktywnego postępu backupu (jeśli trwa)
+        // Card with the progress of the running backup (if one is running)
         if let progress = controller.status.backupProgress {
           progressCard(progress)
         }
 
-        // Karta kroków konfiguracji ("Do zrobienia")
+        // Card with setup steps ("To do")
         if !setupSteps.isEmpty {
           setupCard
         }
 
-        // Szczegóły bufora i wysyłki
+        // Buffer and upload details
         bufferCard
 
-        // Poświadczenia Google OAuth
+        // Google OAuth credentials
         credentialsCard
 
-        // Dolny pasek akcji
+        // Bottom action bar
         actionsToolbar
       }
       .padding(22)
@@ -152,7 +152,7 @@ struct DashboardView: View {
     }
   }
 
-  // MARK: - Baner Błędu
+  // MARK: - Error Banner
 
   private func errorBanner(_ message: String) -> some View {
     HStack(spacing: 12) {
@@ -176,7 +176,7 @@ struct DashboardView: View {
     )
   }
 
-  // MARK: - Siatka Kart Statystyk (KPI Summary Grid)
+  // MARK: - KPI Summary Grid
 
   private var kpiSummaryGrid: some View {
     LazyVGrid(
@@ -188,8 +188,8 @@ struct DashboardView: View {
       ], spacing: 14
     ) {
       StatCard(
-        title: "Stan Systemu",
-        value: controller.status.healthy ? "Sprawny" : "Wymaga akcji",
+        title: L10n.tr("System Status"),
+        value: controller.status.healthy ? L10n.tr("Healthy") : L10n.tr("Action needed"),
         subtitle: controller.status.headline,
         systemImage: controller.status.healthy
           ? "checkmark.shield.fill" : "exclamationmark.shield.fill",
@@ -198,31 +198,34 @@ struct DashboardView: View {
       )
 
       StatCard(
-        title: "Rozmiar Bufora",
+        title: L10n.tr("Buffer Size"),
         value: "\(controller.status.buffer.sizeGB) GB",
-        // Brak pomiaru ma wygladac inaczej niz liczba - patrz
-        // `BufferGuardService.freeGB()`. Samo wstawienie opcjonalnej wartosci
-        // do tekstu dalo "Wolne na dysku: Optional(427) GB" i kompilator
-        // zglaszal to TYLKO jako ostrzezenie, wiec zaden test by tego nie zlapal.
-        subtitle:
-          "Wolne na dysku: \(controller.status.buffer.freeDiskGB.map { "\($0) GB" } ?? "nie zmierzono")",
+        // A missing measurement must look different from a number - see
+        // `BufferGuardService.freeGB()`. Simply putting the optional value
+        // into the text gave "Free on disk: Optional(427) GB", and the compiler
+        // reported it ONLY as a warning, so no test would have caught it.
+        subtitle: L10n.tr(
+          "Free on disk: %@",
+          controller.status.buffer.freeDiskGB.map { L10n.tr("%@ GB", "\($0)") }
+            ?? L10n.tr("not measured")),
         systemImage: "internaldrive.fill",
         iconColor: RenaCodeTheme.colorCyan
       )
 
       StatCard(
-        title: "Kolejka Wysyłki",
-        // Bez odczytu kolejki ta karta nie ma prawa powiedziec "Brak
-        // zaleglosci" - zera sa wtedy brakiem pomiaru, nie wynikiem.
+        title: L10n.tr("Upload Queue"),
+        // Without a queue reading this card has no right to say "Nothing
+        // pending" - the zeros are then a missing measurement, not a result.
         value: !controller.status.buffer.queueKnown
           ? "—"
           : (controller.status.buffer.draining
-            ? "\(controller.status.buffer.uploadsQueued) w kolejce" : "Brak zaległości"),
+            ? L10n.tr("%@ queued", "\(controller.status.buffer.uploadsQueued)")
+            : L10n.tr("Nothing pending")),
         subtitle: !controller.status.buffer.queueKnown
-          ? "rclone nie odpowiedział"
+          ? L10n.tr("rclone did not answer")
           : (controller.status.buffer.draining
-            ? "\(controller.status.buffer.uploadsInProgress) transferów w toku"
-            : "Wszystko w chmurze"),
+            ? L10n.tr("%@ transfers in progress", "\(controller.status.buffer.uploadsInProgress)")
+            : L10n.tr("Everything in the cloud")),
         systemImage: "icloud.and.arrow.up.fill",
         iconColor: !controller.status.buffer.queueKnown
           ? RenaCodeTheme.colorWarning
@@ -232,9 +235,10 @@ struct DashboardView: View {
 
       StatCard(
         title: "Time Machine",
-        value: controller.status.buffer.imageAttached ? "Podpięty" : "Niepodpięty",
+        value: controller.status.buffer.imageAttached
+          ? L10n.tr("Attached") : L10n.tr("Not attached"),
         subtitle: controller.status.buffer.mounted
-          ? "Google Drive zamontowany" : "Drive rozłączony",
+          ? L10n.tr("Google Drive mounted") : L10n.tr("Drive disconnected"),
         systemImage: "clock.arrow.circlepath",
         iconColor: controller.status.buffer.imageAttached
           ? RenaCodeTheme.colorPrimaryLight : RenaCodeTheme.textDim
@@ -242,7 +246,7 @@ struct DashboardView: View {
     }
   }
 
-  // MARK: - Postęp Backupu
+  // MARK: - Backup Progress
 
   private func progressCard(_ progress: BackupProgressInfo) -> some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -257,7 +261,7 @@ struct DashboardView: View {
               .foregroundStyle(RenaCodeTheme.colorCyan)
           }
 
-          Text("Kopia Zapasowa w Toku")
+          Text(L10n.tr("Backup in Progress"))
             .font(.system(size: 16, weight: .bold, design: .rounded))
             .foregroundStyle(RenaCodeTheme.textMain)
         }
@@ -292,7 +296,7 @@ struct DashboardView: View {
       HStack(spacing: 24) {
         if let done = progress.filesDone, let total = progress.filesTotal, total > 0 {
           VStack(alignment: .leading, spacing: 2) {
-            Text("Przetworzone pliki")
+            Text(L10n.tr("Files processed"))
               .font(.system(size: 11))
               .foregroundStyle(RenaCodeTheme.textMuted)
             Text("\(done) / \(total)")
@@ -303,7 +307,7 @@ struct DashboardView: View {
 
         if let rate = progress.transferRateMBs {
           VStack(alignment: .leading, spacing: 2) {
-            Text("Prędkość zapisu")
+            Text(L10n.tr("Write speed"))
               .font(.system(size: 11))
               .foregroundStyle(RenaCodeTheme.textMuted)
             Text(String(format: "%.1f MB/s", rate))
@@ -314,7 +318,7 @@ struct DashboardView: View {
 
         if let phase = progress.phase {
           VStack(alignment: .leading, spacing: 2) {
-            Text("Faza operacji")
+            Text(L10n.tr("Operation phase"))
               .font(.system(size: 11))
               .foregroundStyle(RenaCodeTheme.textMuted)
             Text(phase)
@@ -327,21 +331,21 @@ struct DashboardView: View {
     .glassCard(borderColor: RenaCodeTheme.colorCyan.opacity(0.35))
   }
 
-  // MARK: - Kroki Konfiguracji ("Do Zrobienia")
+  // MARK: - Setup Steps ("To Do")
 
   private var setupSteps: [(String, String?)] {
     var steps: [(String, String?)] = []
     if case .missing(let what, let how) = controller.status.dependencyState {
-      for (miss, remedy) in zip(what, how) { steps.append(("Brakuje: \(miss)", remedy)) }
+      for (miss, remedy) in zip(what, how) { steps.append((L10n.tr("Missing: %@", miss), remedy)) }
     }
     if !controller.status.remoteConfigured {
-      steps.append(("Google Drive niepołączony", controller.connectDriveCommand))
+      steps.append((L10n.tr("Google Drive not connected"), controller.connectDriveCommand))
     }
     if case .notRegistered = controller.status.timeMachineState,
       controller.status.buffer.imageAttached
     {
       steps.append(
-        ("Time Machine nie wskazuje na CloudMachine", controller.setDestinationCommand))
+        (L10n.tr("Time Machine does not point to CloudMachine"), controller.setDestinationCommand))
     }
     return steps
   }
@@ -352,7 +356,7 @@ struct DashboardView: View {
         Image(systemName: "wrench.and.screwdriver.fill")
           .font(.system(size: 15))
           .foregroundStyle(RenaCodeTheme.colorWarning)
-        Text("Wymagane Kroki Konfiguracji")
+        Text(L10n.tr("Required Setup Steps"))
           .font(.system(size: 15, weight: .bold, design: .rounded))
           .foregroundStyle(RenaCodeTheme.textMain)
       }
@@ -387,7 +391,7 @@ struct DashboardView: View {
                   HStack(spacing: 4) {
                     Image(systemName: "doc.on.doc")
                       .font(.system(size: 11))
-                    Text("Kopiuj")
+                    Text(L10n.tr("Copy"))
                       .font(.system(size: 11, weight: .medium))
                   }
                 }
@@ -408,7 +412,7 @@ struct DashboardView: View {
     .glassCard(borderColor: RenaCodeTheme.colorWarning.opacity(0.35))
   }
 
-  // MARK: - Szczegóły Bufora i Wysyłki
+  // MARK: - Buffer and Upload Details
 
   private var bufferCard: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -417,7 +421,7 @@ struct DashboardView: View {
           Image(systemName: "server.rack")
             .font(.system(size: 15))
             .foregroundStyle(RenaCodeTheme.colorCyan)
-          Text("Bufor Lokalny & Stan Wysyłki")
+          Text(L10n.tr("Local Buffer & Upload Status"))
             .font(.system(size: 15, weight: .bold, design: .rounded))
             .foregroundStyle(RenaCodeTheme.textMain)
         }
@@ -427,92 +431,97 @@ struct DashboardView: View {
 
       VStack(spacing: 10) {
         row(
-          "Montowanie Google Drive (FUSE-T)",
-          controller.status.buffer.mounted ? "Zamontowany" : "Nieaktywny",
+          L10n.tr("Google Drive mount (FUSE-T)"),
+          controller.status.buffer.mounted ? L10n.tr("Mounted") : L10n.tr("Inactive"),
           ok: controller.status.buffer.mounted
         )
 
         Divider().background(RenaCodeTheme.borderGlass)
 
         row(
-          "Obraz dysku backupu (.sparsebundle)",
-          controller.status.buffer.imageAttached ? "Podpięty do systemu" : "Odłączony",
+          L10n.tr("Backup disk image (.sparsebundle)"),
+          controller.status.buffer.imageAttached
+            ? L10n.tr("Attached to the system") : L10n.tr("Detached"),
           ok: controller.status.buffer.imageAttached
         )
 
         Divider().background(RenaCodeTheme.borderGlass)
 
         row(
-          "Zalokowany bufor na dysku SSD",
-          "\(controller.status.buffer.sizeGB) GB",
+          L10n.tr("Buffer allocated on the SSD"),
+          L10n.tr("%@ GB", "\(controller.status.buffer.sizeGB)"),
           ok: true
         )
 
         Divider().background(RenaCodeTheme.borderGlass)
 
-        // Brak pomiaru MUSI wygladac inaczej niz "0 GB" - patrz
-        // `BufferGuardService.freeGB()`. Nieudany statfs to awaria dozorcy
-        // bufora, a nie informacja o pustym dysku.
+        // A missing measurement MUST look different from "0 GB" - see
+        // `BufferGuardService.freeGB()`. A failed statfs is a failure of the buffer
+        // guard, not information about an empty disk.
         row(
-          "Wolne miejsce na lokalnym wolumenie",
-          controller.status.buffer.freeDiskGB.map { "\($0) GB" } ?? "nie zmierzono",
+          L10n.tr("Free space on the local volume"),
+          controller.status.buffer.freeDiskGB.map { L10n.tr("%@ GB", "\($0)") }
+            ?? L10n.tr("not measured"),
           ok: (controller.status.buffer.freeDiskGB ?? 0) > 80
         )
 
         Divider().background(RenaCodeTheme.borderGlass)
 
-        // Jedyny wiersz, ktory odpowiada na pytanie "czy kopia POWSTALA".
-        // Wszystkie pozostale opisuja stan urzadzen i moga byc zielone, gdy
-        // Time Machine od dwoch dni nie dokonczyl backupu.
+        // The only row that answers the question "WAS a backup made".
+        // All the others describe the state of the devices and can be green while
+        // Time Machine has not finished a backup for two days.
         row(
-          "Ostatnia ukończona kopia",
+          L10n.tr("Last completed backup"),
           controller.status.backupCycle.ageText(),
           ok: controller.status.backupCycle.isFresh()
         )
 
         Divider().background(RenaCodeTheme.borderGlass)
 
-        // Kto pilnuje czujki. Wiersz wyzej mowi, czy kopia powstala; ten mowi,
-        // czy ktokolwiek to jeszcze SPRAWDZA. Czujka chodzi bez KeepAlive, wiec
-        // wyladowana albo zawieszona nie daje objawu poza cisza - patrz
+        // Who watches the watchdog. The row above says whether a backup was made; this one says
+        // whether anyone is still CHECKING that. The watchdog runs without KeepAlive, so
+        // when unloaded or hung it gives no symptom other than silence - see
         // `WatchdogHeartbeat`.
         row(
-          "Ostatni przebieg czujki backupu",
-          controller.status.watchdog.map { StatusLines.watchdogRun($0) } ?? "nie sprawdzono",
+          L10n.tr("Last backup watchdog run"),
+          controller.status.watchdog.map { StatusLines.watchdogRun($0) }
+            ?? L10n.tr("not checked"),
           ok: controller.status.watchdogRunning
         )
 
         Divider().background(RenaCodeTheme.borderGlass)
 
         row(
-          "Kolejka synchronizacji z chmurą",
+          L10n.tr("Cloud sync queue"),
           !controller.status.buffer.queueKnown
-            ? "nie odczytano"
+            ? L10n.tr("not read")
             : (controller.status.buffer.draining
-              ? "\(controller.status.buffer.uploadsInProgress) w toku, \(controller.status.buffer.uploadsQueued) w kolejce"
-              : "Wszystko wysłane"),
+              ? L10n.tr(
+                "%@ in progress, %@ queued", "\(controller.status.buffer.uploadsInProgress)",
+                "\(controller.status.buffer.uploadsQueued)")
+              : L10n.tr("Everything uploaded")),
           ok: controller.status.buffer.queueKnown && controller.status.buffer.erroredFiles == 0
         )
 
         if controller.status.buffer.erroredFiles > 0 {
           Divider().background(RenaCodeTheme.borderGlass)
           row(
-            "Błędy wysyłki plików",
-            "\(controller.status.buffer.erroredFiles) plików",
+            L10n.tr("File upload errors"),
+            L10n.tr("%@ files", "\(controller.status.buffer.erroredFiles)"),
             ok: false
           )
         }
 
         if controller.status.buffer.driveFull {
           Divider().background(RenaCodeTheme.borderGlass)
-          row("Miejsce na Google Drive", "Brak miejsca", ok: false)
+          row(L10n.tr("Space on Google Drive"), L10n.tr("Out of space"), ok: false)
         }
 
         if controller.status.buffer.dailyQuotaExhausted {
           Divider().background(RenaCodeTheme.borderGlass)
           row(
-            "Limit Google Drive",
-            "Dobowe 750 GB wyczerpane",
+            L10n.tr("Google Drive limit"),
+            L10n.tr("Daily 750 GB exhausted"),
             ok: false
           )
         }
@@ -521,12 +530,12 @@ struct DashboardView: View {
     .glassCard()
   }
 
-  // MARK: - Poświadczenia Google OAuth
+  // MARK: - Google OAuth Credentials
 
-  /// Poswiadczenia sa zwiniete domyslnie. Wpisuje sie je RAZ, przy zakladaniu
-  /// wlasnego klienta OAuth, a potem juz nigdy - trzymanie dwoch pol na haslo
-  /// na wierzchu panelu, ktory ma odpowiadac na pytanie o stan kopii, tylko
-  /// odciaga uwage. Znaczek przy naglowku mowi, czy jest co rozwijac.
+  /// The credentials are collapsed by default. They are entered ONCE, when setting up
+  /// your own OAuth client, and then never again - keeping two password fields
+  /// on top of a panel that is meant to answer the question about the backup's state only
+  /// distracts. The badge next to the header says whether there is anything to expand.
   private var credentialsCard: some View {
     VStack(alignment: .leading, spacing: 14) {
       Button {
@@ -537,14 +546,15 @@ struct DashboardView: View {
             .font(.system(size: 15))
             .foregroundStyle(RenaCodeTheme.colorPrimaryLight)
 
-          Text("Poświadczenia Google Drive (OAuth 2.0)")
+          Text(L10n.tr("Google Drive Credentials (OAuth 2.0)"))
             .font(.system(size: 15, weight: .bold, design: .rounded))
             .foregroundStyle(RenaCodeTheme.textMain)
 
           Spacer()
 
           RenaCodePillBadge(
-            text: controller.credentials.isComplete ? "Keychain OK" : "Brak własnych kluczy",
+            text: controller.credentials.isComplete
+              ? L10n.tr("Keychain OK") : L10n.tr("No custom keys"),
             icon: controller.credentials.isComplete ? "checkmark.seal.fill" : "lock.open.fill",
             color: controller.credentials.isComplete
               ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning
@@ -573,7 +583,7 @@ struct DashboardView: View {
               .foregroundStyle(RenaCodeTheme.textMuted)
               .frame(width: 100, alignment: .leading)
 
-            SecureField("Wklej client_id...", text: $clientID)
+            SecureField(L10n.tr("Paste client_id..."), text: $clientID)
               .textFieldStyle(.plain)
               .padding(8)
               .background(RenaCodeTheme.bgInset)
@@ -590,7 +600,7 @@ struct DashboardView: View {
               .foregroundStyle(RenaCodeTheme.textMuted)
               .frame(width: 100, alignment: .leading)
 
-            SecureField("Wklej client_secret...", text: $clientSecret)
+            SecureField(L10n.tr("Paste client_secret..."), text: $clientSecret)
               .textFieldStyle(.plain)
               .padding(8)
               .background(RenaCodeTheme.bgInset)
@@ -603,7 +613,7 @@ struct DashboardView: View {
         }
 
         HStack {
-          Button("Zapisz bezpiecznie w Keychainie") {
+          Button(L10n.tr("Save securely in the Keychain")) {
             let id = clientID
             let secret = clientSecret
             Task {
@@ -632,7 +642,7 @@ struct DashboardView: View {
     .glassCard()
   }
 
-  // MARK: - Dolny Pasek Akcji
+  // MARK: - Bottom Action Bar
 
   private var actionsToolbar: some View {
     HStack(spacing: 12) {
@@ -640,7 +650,7 @@ struct DashboardView: View {
         Button(action: { Task { await controller.startBackup() } }) {
           HStack(spacing: 6) {
             Image(systemName: "play.fill")
-            Text("Zrób backup teraz")
+            Text(L10n.tr("Back up now"))
           }
         }
         .buttonStyle(PrimaryGradientButtonStyle())
@@ -649,7 +659,7 @@ struct DashboardView: View {
         Button(action: { Task { await controller.stopBackup() } }) {
           HStack(spacing: 6) {
             Image(systemName: "stop.fill")
-            Text("Wstrzymaj backup")
+            Text(L10n.tr("Stop backup"))
           }
         }
         .buttonStyle(SecondaryGlassButtonStyle())
@@ -658,7 +668,7 @@ struct DashboardView: View {
       Button(action: { Task { await controller.verifyImage() } }) {
         HStack(spacing: 6) {
           Image(systemName: "checkmark.shield")
-          Text("Sprawdź spójność obrazu")
+          Text(L10n.tr("Check image consistency"))
         }
       }
       .buttonStyle(SecondaryGlassButtonStyle())
@@ -667,7 +677,7 @@ struct DashboardView: View {
       Button(action: { Task { await controller.refreshAll() } }) {
         HStack(spacing: 6) {
           Image(systemName: "arrow.clockwise")
-          Text("Odśwież")
+          Text(L10n.tr("Refresh"))
         }
       }
       .buttonStyle(SecondaryGlassButtonStyle())
@@ -676,18 +686,18 @@ struct DashboardView: View {
     }
   }
 
-  // MARK: - Stan Wysylki na Google Drive
+  // MARK: - Google Drive Upload Status
 
-  /// Odpowiada na jedyne pytanie, ktore uzytkownik naprawde zadaje: czy moja
-  /// kopia jest bezpieczna. Jedno zdanie, pod nim wyjasnienie po ludzku.
+  /// Answers the only question the user really asks: is my
+  /// backup safe. One sentence, with a plain-language explanation below it.
   ///
-  /// Kolor rozroznia TRZY rzeczy, nie dwie. Zielony - jest dobrze. Bursztynowy -
-  /// nie jest nominalnie, ale nic nie rob, minie samo (limit dobowy Google).
-  /// Czerwony - trzeba zareagowac. Bez srodkowego stanu wyczerpany limit
-  /// musialby udawac albo awarie, albo porzadek, a nie jest ani jednym, ani drugim.
+  /// The color distinguishes THREE things, not two. Green - all is well. Amber -
+  /// not nominal, but do nothing, it will pass on its own (the Google daily limit).
+  /// Red - you need to act. Without the middle state an exhausted limit
+  /// would have to pretend to be either a failure or all-clear, and it is neither.
   ///
-  /// Teksty nie ida przez `.localized` celowo: wiekszosc wariantow wstawia
-  /// liczbe do zdania, wiec i tak nie trafilaby w slownik tlumaczen.
+  /// The texts deliberately do not go through `.localized`: most variants insert
+  /// a number into the sentence, so they would not have matched the translation dictionary anyway.
   private var uploadStateCard: some View {
     let state = controller.status.buffer.uploadState
     let accent = uploadAccent(state)
@@ -734,8 +744,8 @@ struct DashboardView: View {
     return RenaCodeTheme.colorSuccess
   }
 
-  /// Etykieta idzie prosto z `UploadState`. Skladanie jej tutaj z dwoch bool-i
-  /// ograniczalo interfejs do trzech wariantow, a stanow jest wiecej.
+  /// The label comes straight from `UploadState`. Assembling it here from two bools
+  /// limited the interface to three variants, and there are more states.
   private func uploadBadge(_ state: UploadState) -> String { state.badge }
 
   private func uploadIcon(_ state: UploadState) -> String {
@@ -751,7 +761,7 @@ struct DashboardView: View {
     }
   }
 
-  // MARK: - Pomocniczy Wiersz Tabela
+  // MARK: - Helper Table Row
 
   private func row(_ label: String, _ value: String, ok: Bool) -> some View {
     HStack {

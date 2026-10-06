@@ -12,14 +12,14 @@ enum ShellError: LocalizedError {
   }
 }
 
-/// Cienka warstwa nad NSAppleScript do uruchamiania polecen z podniesionymi
-/// uprawnieniami. Uruchamianie zwyklych (nieuprzywilejowanych) polecen -
-/// patrz `ProcessRunner` w CloudMachineCore, dzielone z CLI.
+/// A thin layer over NSAppleScript for running commands with elevated
+/// privileges. For running ordinary (unprivileged) commands -
+/// see `ProcessRunner` in CloudMachineCore, shared with the CLI.
 enum Shell {
-  /// Uruchamia polecenie z podniesionymi uprawnieniami przez natywny dialog
-  /// autoryzacji macOS (Touch ID / haslo administratora) - bez potrzeby
-  /// wczesniejszej konfiguracji sudoers. Uzywane do jednorazowych akcji
-  /// wykonywanych z poziomu GUI, gdy uzytkownik jest przy komputerze.
+  /// Runs a command with elevated privileges through the native macOS
+  /// authorization dialog (Touch ID / administrator password) - without any need
+  /// to configure sudoers beforehand. Used for one-off actions
+  /// performed from the GUI, while the user is at the computer.
   static func runPrivileged(_ shellCommand: String) async throws -> String {
     try await withCheckedThrowingContinuation { continuation in
       DispatchQueue.global(qos: .userInitiated).async {
@@ -30,14 +30,15 @@ enum Shell {
         let source = "do shell script \"\(escaped)\" with administrator privileges"
         guard let script = NSAppleScript(source: source) else {
           continuation.resume(
-            throwing: ShellError.privilegedFailed("Nie udalo sie przygotowac AppleScript."))
+            throwing: ShellError.privilegedFailed(L10n.tr("Could not prepare the AppleScript.")))
           return
         }
         var errorDict: NSDictionary?
         let output = script.executeAndReturnError(&errorDict)
         if let errorDict {
           let message =
-            errorDict[NSAppleScript.errorMessage] as? String ?? "Nieznany blad autoryzacji."
+            errorDict[NSAppleScript.errorMessage] as? String
+            ?? L10n.tr("Unknown authorization error.")
           continuation.resume(throwing: ShellError.privilegedFailed(message))
           return
         }
