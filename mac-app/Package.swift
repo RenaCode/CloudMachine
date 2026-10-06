@@ -50,7 +50,7 @@ let package = Package(
             // the harnesses measure the behaviour of hdiutil and FUSE-T, but
             // the WAY they report on it is ordinary code and it broke
             // silently - `pullplug` reported "The image survived every
-            // pulled plug" after a run in which writing never started. The
+            // floor pull" after a run in which writing never started. The
             // tests touch ONLY the pure parts (result classification,
             // summary, attempting to write to a directory that does not
             // exist) - none of them creates a disk image.

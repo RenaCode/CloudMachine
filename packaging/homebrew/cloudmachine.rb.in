@@ -29,7 +29,7 @@ cask "cloudmachine" do
   # the upgrade replaces the bundle with new files (new inodes), and that is
   # exactly the procedure after which the agents start correctly. Should the
   # watchdog stop anyway, `drive-status` and the app window will show a
-  # "watchdog may not be running" warning.
+  # "THE WATCHDOG MAY NOT BE RUNNING" warning.
   postflight_steps do
     run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/CloudMachine.app"]
   end

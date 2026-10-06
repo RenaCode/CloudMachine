@@ -9,15 +9,15 @@ final class MachineIdentityTests: XCTestCase {
 
   func testNormalizedKey_lowercasesAndReplacesSpaces() {
     XCTAssertEqual(
-      MachineIdentity.normalizedKey(fromComputerName: "Marcin Mac Studio"),
-      "marcin-mac-studio"
+      MachineIdentity.normalizedKey(fromComputerName: "Alex Mac Studio"),
+      "alex-mac-studio"
     )
   }
 
   func testNormalizedKey_stripsDisallowedCharacters() {
     XCTAssertEqual(
-      MachineIdentity.normalizedKey(fromComputerName: "Marcin's MacBook Pro (2)"),
-      "marcins-macbook-pro-2"
+      MachineIdentity.normalizedKey(fromComputerName: "Alex's MacBook Pro (2)"),
+      "alexs-macbook-pro-2"
     )
   }
 

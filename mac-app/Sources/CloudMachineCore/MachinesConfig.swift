@@ -101,7 +101,7 @@ public struct MachinesConfig: Codable, Equatable {
   }
 
   /// Counterpart of `cm_remote_path_for` from common.sh, e.g.
-  /// `gdrive-cloudmachine:CloudMachine/marcin-mac-studio`.
+  /// `gdrive-cloudmachine:CloudMachine/alex-mac-studio`.
   public func remotePath(forMachineKey key: String) -> String {
     "\(remoteName):\(remoteRootFolder)/\(key)"
   }

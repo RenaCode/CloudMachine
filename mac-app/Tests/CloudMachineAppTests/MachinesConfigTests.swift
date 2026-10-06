@@ -91,15 +91,15 @@ final class MachinesConfigTests: XCTestCase {
           "remote_name": "gdrive-cloudmachine",
           "remote_root_folder": "CloudMachine",
           "machines": {
-              "marcin-mac-studio": { "display_name": "Marcin's Mac Studio", "limit_gb": 3000 }
+              "alex-mac-studio": { "display_name": "Alex's Mac Studio", "limit_gb": 3000 }
           }
       }
       """.data(using: .utf8)!
 
     let config = try JSONDecoder().decode(MachinesConfig.self, from: json)
     XCTAssertEqual(config.machines.count, 1)
-    XCTAssertEqual(config.machines.first?.key, "marcin-mac-studio")
-    XCTAssertEqual(config.machines.first?.displayName, "Marcin's Mac Studio")
+    XCTAssertEqual(config.machines.first?.key, "alex-mac-studio")
+    XCTAssertEqual(config.machines.first?.displayName, "Alex's Mac Studio")
     XCTAssertEqual(config.machines.first?.limitGB, 3000)
   }
 
@@ -110,8 +110,8 @@ final class MachinesConfigTests: XCTestCase {
       driveTotalGB: 5000, safetyMarginPercent: 10, remoteName: "gdrive-cloudmachine",
       remoteRootFolder: "CloudMachine", machines: [])
     XCTAssertEqual(
-      config.remotePath(forMachineKey: "marcin-mac-studio"),
-      "gdrive-cloudmachine:CloudMachine/marcin-mac-studio")
+      config.remotePath(forMachineKey: "alex-mac-studio"),
+      "gdrive-cloudmachine:CloudMachine/alex-mac-studio")
   }
 
   func testLimitGB_returnsLimitForKnownMachine() {
@@ -150,6 +150,6 @@ final class MachinesConfigTests: XCTestCase {
     XCTAssertEqual(config.remoteName, "gdrive-cloudmachine")
     XCTAssertEqual(config.remoteRootFolder, "CloudMachine")
     XCTAssertEqual(config.machines.count, 2)
-    XCTAssertEqual(config.machines.map(\.key).sorted(), ["imac-domowy", "macbook-pro-marcin"])
+    XCTAssertEqual(config.machines.map(\.key).sorted(), ["imac-home", "macbook-pro"])
   }
 }

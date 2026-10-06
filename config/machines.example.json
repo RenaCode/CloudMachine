@@ -7,12 +7,12 @@
   "_bwlimit_comment": "Upload speed limit in Mbps (megabits/s, as internet providers quote it) - this setting is per-Mac, so each machine can have a different value in its local machines.json. 0 = no limit.",
   "bwlimit_mbps": 0,
   "machines": {
-    "macbook-pro-marcin": {
-      "display_name": "MacBook Pro Marcin",
+    "macbook-pro": {
+      "display_name": "MacBook Pro",
       "limit_gb": 3000
     },
-    "imac-domowy": {
-      "display_name": "iMac domowy",
+    "imac-home": {
+      "display_name": "iMac (home)",
       "limit_gb": 1500
     }
   }
