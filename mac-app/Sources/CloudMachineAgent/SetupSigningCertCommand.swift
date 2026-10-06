@@ -74,10 +74,17 @@ struct SetupSigningCert: AsyncParsableCommand {
     // nie rozumie - bez tej flagi import konczy sie mylacym "MAC
     // verification failed (wrong password?)" mimo poprawnego hasla. -legacy
     // wraca do 3DES/RC2, ktore macOS poprawnie parsuje.
+    //
+    // Ale `/usr/bin/openssl` na macOS to LibreSSL, ktory flagi -legacy NIE
+    // ZNA i konczy sie bledem (sprawdzone na LibreSSL 3.3.6) - a 3DES/RC2 ma
+    // juz domyslnie. Flage dokladamy wiec tylko prawdziwemu OpenSSL 3.
+    let versionOutput =
+      (try? await ProcessRunner.run("/usr/bin/openssl", ["version"]))?.stdout ?? ""
+    let legacyFlag = versionOutput.hasPrefix("OpenSSL 3") ? ["-legacy"] : []
     let pkcs12Status = try await InteractiveProcess.run(
       "/usr/bin/openssl",
-      [
-        "pkcs12", "-export", "-legacy", "-out", p12File.path, "-inkey", keyFile.path,
+      ["pkcs12", "-export"] + legacyFlag + [
+        "-out", p12File.path, "-inkey", keyFile.path,
         "-in", certFile.path, "-passout", "pass:cloudmachine-local",
       ])
     guard pkcs12Status == 0 else {
