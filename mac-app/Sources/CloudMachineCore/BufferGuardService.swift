@@ -1,102 +1,104 @@
 import Foundation
 
-/// Pilnuje, zeby bufor nie zjadl dysku - port `gdrive/buffer-guard.sh`.
+/// Keeps the buffer from eating the disk - a port of `gdrive/buffer-guard.sh`.
 ///
-/// Time Machine pisze do podpietego obrazu z predkoscia SSD (zmierzone
-/// 267 MB/s), a rclone wysyla z predkoscia lacza (~41 MB/s przy 332 Mb/s
-/// uploadu). Roznica laduje w buforze.
+/// Time Machine writes to the attached image at SSD speed (measured 267 MB/s),
+/// while rclone uploads at link speed (~41 MB/s with a 332 Mb/s upload). The
+/// difference lands in the buffer.
 ///
-/// `--vfs-cache-max-size` jest limitem MIEKKIM: rclone usuwa z bufora tylko
-/// dane juz wyslane, wiec gdy wszystko czeka w kolejce, bufor rosnie dalej
-/// i moze zapelnic dysk. Przy pierwszym backupie liczonym w terabajtach to nie
-/// jest teoria - zmierzony przyrost netto na starcie wynosil 32 MB/s.
+/// `--vfs-cache-max-size` is a SOFT limit: rclone evicts from the buffer only
+/// data already uploaded, so when everything is waiting in the queue the
+/// buffer keeps growing and can fill the disk. With a first backup measured in
+/// terabytes this is not theory - the measured net growth at the start was
+/// 32 MB/s.
 ///
-/// Dozorca wstrzymuje Time Machine, gdy ZALEGLOSC NIEWYSLANA przekroczy prog,
-/// i wznawia, gdy wysylka nadgoni. Backup staje sie wolniejszy, ale konczy sie
-/// zamiast wysypac maszyne.
+/// The watchdog pauses Time Machine when the UNSENT BACKLOG exceeds a
+/// threshold, and resumes it when the upload catches up. The backup becomes
+/// slower, but it finishes instead of crashing the machine.
 ///
-/// Trzy rzeczy, ktore trzeba tu wiedziec, bo kazda byla kiedys zrobiona
-/// odwrotnie i kazda kosztowala cala ochrone:
+/// Three things you need to know here, because each was once done the other
+/// way round and each cost the whole protection:
 ///
-/// 1. Mierzymy ZALEGLOSC, nie rozmiar cache'a. Rozmiar cache'a stoi pod
-///    limitem stale i nie odpowiada na pytanie, czy wysylka nadaza
-///    (patrz `backlogGB` i `Thresholds.init`).
-/// 2. "Nie wiem" nie jest ani pauza, ani wznowieniem. Brak odpowiedzi rclone
-///    nie zamienia sie na liczbe, a nieczytelny log rclone nie zamienia sie
-///    na "nie ma problemu".
-/// 3. Pauza trwa tyle, ile ja podtrzymujemy. `tmutil stopbackup` anuluje
-///    TRWAJACY backup i nie rusza harmonogramu, wiec macOS startuje kolejny
-///    w swoim cyklu godzinowym - dlatego wstrzymanie ponawia sie przy kazdym
-///    tyknieciu, a nie tylko przy zmianie stanu (patrz `keepPaused`).
+/// 1. We measure the BACKLOG, not the cache size. The cache size sits at the
+///    limit permanently and does not answer whether the upload is keeping up
+///    (see `backlogGB` and `Thresholds.init`).
+/// 2. "I do not know" is neither a pause nor a resume. No answer from rclone
+///    is not turned into a number, and an unreadable rclone log is not turned
+///    into "no problem".
+/// 3. A pause lasts as long as we keep it up. `tmutil stopbackup` cancels the
+///    RUNNING backup and does not touch the schedule, so macOS starts another
+///    one in its hourly cycle - which is why the pause is repeated on every
+///    tick, not only on a state change (see `keepPaused`).
 public actor BufferGuardService {
 
   public struct Thresholds: Sendable {
-    /// Powyzej tylu GB ZALEGLOSCI NIEWYSLANEJ wstrzymujemy Time Machine.
+    /// Above this many GB of UNSENT BACKLOG we pause Time Machine.
     ///
-    /// Zaleglosc, nie rozmiar cache'a - patrz `backlogGB` po powod.
+    /// Backlog, not cache size - see `backlogGB` for the reason.
     public var highGB: Int
-    /// Ponizej tylu GB zaleglosci wznawiamy.
+    /// Below this many GB of backlog we resume.
     public var lowGB: Int
-    /// Ponizej tylu GB wolnych na dysku wstrzymujemy niezaleznie od bufora.
+    /// Below this many GB free on disk we pause regardless of the buffer.
     public var minFreeGB: Int
-    /// Ponizej tylu GB wolnych NA DYSKU GOOGLE nie wolno zdjac pauzy
-    /// zalozonej z powodu braku miejsca na Dysku.
+    /// Below this many GB free ON GOOGLE DRIVE a pause put in place because of
+    /// lack of space on Drive must not be lifted.
     ///
-    /// Ta sama liczba, ktora `BackupHealth` uwaza za prog ostrzegawczy dla
-    /// Dysku - jedno zrodlo prawdy. Przy przyroscie rzedu 600 MB na cykl
-    /// godzinowy 30 GB to okolo dwoch tygodni zapasu, czyli tyle, zeby
-    /// wznowiony backup mial gdzie sie zmiescic, a nie wrocil pod sciane
-    /// w kolejnej godzinie.
+    /// The same number that `BackupHealth` considers the warning threshold for
+    /// Drive - one source of truth. With growth of around 600 MB per hourly
+    /// cycle, 30 GB is about two weeks of headroom, i.e. enough for the resumed
+    /// backup to have room, rather than hitting the wall again in the next hour.
     public var minDriveFreeGB: Int
 
-    /// Progi wyliczane z rozmiaru bufora, nie wpisane z palca - ale liczone
-    /// OD NOWA, odkad dozorca mierzy zaleglosc niewyslana, a nie rozmiar
-    /// cache'a. Dawne 1,5x i 0,4x `cacheSizeGB` nie sa tu przeliczone, bo
-    /// odnosily sie do innej wielkosci i w tej nie znacza nic.
+    /// Thresholds derived from the buffer size, not typed in by hand - but
+    /// computed ANEW since the watchdog measures the unsent backlog rather than
+    /// the cache size. The old 1.5x and 0.4x of `cacheSizeGB` are not carried
+    /// over, because they referred to a different quantity and mean nothing in
+    /// this one.
     ///
-    /// CO BYLO ZLE
+    /// WHAT WAS WRONG
     ///
-    /// Stara para (150 GB / 40 GB) odnosila sie do `bytesUsed`, czyli do
-    /// rozmiaru CALEGO cache'a. Ten przy `--vfs-cache-max-size 100G` i
-    /// `--vfs-cache-max-age 9999h` stoi pod limitem stale: w dzienniku 281
-    /// pomiarow, minimum 99 GB. Prog wznowienia 40 GB byl wiec wartoscia
-    /// NIEOSIAGALNA, a prog pauzy 150 GB - osiagalnym tylko przez wynik
-    /// obchodu katalogu, czyli przez INNA miare. Widac to w logu wprost:
-    /// JEDNA linia PAUZA (23.09.2026 03:34, "bufor 155 GB") i ZERO linii
-    /// WZNOWIENIE.
+    /// The old pair (150 GB / 40 GB) referred to `bytesUsed`, i.e. the size of
+    /// the WHOLE cache. With `--vfs-cache-max-size 100G` and
+    /// `--vfs-cache-max-age 9999h` that sits at the limit permanently: 281
+    /// measurements in the journal, minimum 99 GB. The 40 GB resume threshold
+    /// was therefore UNREACHABLE, and the 150 GB pause threshold reachable only
+    /// through the result of the directory walk, i.e. through a DIFFERENT
+    /// measure. The log shows it plainly: ONE PAUSE line (23.09.2026 03:34,
+    /// "buffer 155 GB") and ZERO RESUME lines.
     ///
-    /// DLACZEGO PROGI SA FRAKCJA `cacheSizeGB`, ALE PONIZEJ NIEGO
+    /// WHY THE THRESHOLDS ARE A FRACTION OF `cacheSizeGB`, BUT BELOW IT
     ///
-    /// Zaleglosc niewyslana to dokladnie ta czesc cache'a, ktorej rclone NIE
-    /// MOZE usunac - usuwa tylko to, co juz wyslal. Dopoki zaleglosc jest
-    /// mniejsza od `cacheSizeGB`, cache ma z czego sie kurczyc i limit
-    /// dziala. Gdy zaleglosc dobija do `cacheSizeGB`, zapasu nie ma i kazdy
-    /// kolejny gigabajt zapisu idzie PONAD limit, prosto w wolne miejsce na
-    /// dysku. Prog pauzy musi wiec lezec PONIZEJ rozmiaru cache'a - odwrotnie
-    /// niz dawne 150 GB, ktore lezalo powyzej.
+    /// The unsent backlog is exactly the part of the cache that rclone CANNOT
+    /// evict - it only evicts what it has already uploaded. As long as the
+    /// backlog is smaller than `cacheSizeGB`, the cache has something to shrink
+    /// from and the limit works. When the backlog reaches `cacheSizeGB`, there is
+    /// no headroom and every further gigabyte written goes OVER the limit,
+    /// straight into free disk space. So the pause threshold must lie BELOW the
+    /// cache size - unlike the old 150 GB, which lay above it.
     ///
-    /// `highGB` = polowa bufora, dzis 50 GB:
-    ///  - zostawia 50 GB zapasu usuwalnego, czyli okolo 26 minut przy
-    ///    zmierzonym przyroscie netto 32 MB/s - z zapasem na tykniecie co
-    ///    30 s i na to, zeby `tmutil stopbackup` zdazyl zadzialac;
-    ///  - lezy ponad trzykrotnie powyzej najwyzszej zaleglosci widzianej
-    ///    w normalnej pracy (462 pozycje, czyli okolo 15 GB), wiec zwykly
-    ///    backup ani zator na dobowym limicie Google nie wstrzymuja kopii.
-    ///    To ostatnie jest zamierzone i opisane nizej w `step()`.
+    /// `highGB` = half the buffer, 50 GB today:
+    ///  - leaves 50 GB of evictable headroom, i.e. about 26 minutes at the
+    ///    measured net growth of 32 MB/s - with margin for a tick every 30 s and
+    ///    for `tmutil stopbackup` to take effect;
+    ///  - lies more than three times above the highest backlog seen in normal
+    ///    operation (462 items, i.e. about 15 GB), so neither an ordinary backup
+    ///    nor a jam on Google's daily limit pauses the backups. The latter is
+    ///    intended and described below in `step()`.
     ///
-    /// `lowGB` = jedna dziesiata bufora, dzis 10 GB:
-    ///  - musi byc OSIAGALNY, bo na tym przewrocila sie poprzednia wersja.
-    ///    Po pauzie nowe pasma nie powstaja, odroczenie `writeBackSeconds`
-    ///    mija i kolejka schodzi z predkoscia lacza (zmierzone 23.09: 96 Mb/s,
-    ///    czyli okolo 43 GB/h), wiec droga 50 -> 10 GB to okolo godziny;
-    ///  - histereza 40 GB to przy zmierzonej roznicy predkosci (267 MB/s
-    ///    zapisu Time Machine, 41 MB/s wysylki, netto 226 MB/s) okolo trzech
-    ///    minut pracy miedzy kolejnymi pauzami. Prog wznowienia blisko progu
-    ///    pauzy dawalby start/stop przy niemal kazdym tyknieciu.
+    /// `lowGB` = a tenth of the buffer, 10 GB today:
+    ///  - must be REACHABLE, because that is what the previous version tripped
+    ///    over. After a pause no new bands are created, the `writeBackSeconds`
+    ///    delay passes and the queue drains at link speed (measured 23.09:
+    ///    96 Mb/s, i.e. about 43 GB/h), so the way from 50 -> 10 GB is about an
+    ///    hour;
+    ///  - a 40 GB hysteresis is, at the measured speed difference (267 MB/s of
+    ///    Time Machine writes, 41 MB/s of upload, 226 MB/s net), about three
+    ///    minutes of work between consecutive pauses. A resume threshold close to
+    ///    the pause threshold would give start/stop on almost every tick.
     ///
-    /// Ochrona dysku NIE zalezy od tych dwoch liczb: `minFreeGB` i zglaszany
-    /// przez rclone `outOfSpace` dzialaja niezaleznie od zaleglosci i w KAZDYM
-    /// stanie dozorcy (patrz `step()`).
+    /// Disk protection does NOT depend on these two numbers: `minFreeGB` and the
+    /// `outOfSpace` reported by rclone work independently of the backlog and in
+    /// EVERY watchdog state (see `step()`).
     public init(
       highGB: Int = DriveBufferService.cacheSizeGB / 2,
       lowGB: Int = DriveBufferService.cacheSizeGB / 10,
@@ -111,72 +113,72 @@ public actor BufferGuardService {
   }
 
   public enum State: String, Sendable {
-    /// Nadzorujemy trwajacy backup.
+    /// We are supervising a running backup.
     case running
     case pausedForBuffer
     case pausedForQuota
-    /// Backup nie trwa - czuwamy do nastepnego.
+    /// No backup running - we keep watch until the next one.
     ///
-    /// Dozorca NIE konczy pracy po skonczonym backupie. Dziala pod launchd
-    /// z KeepAlive, wiec wyjscie oznaczaloby natychmiastowy restart, a przy
-    /// niedzialajacym Time Machine - ciasna petle restartow ograniczana tylko
-    /// przez ThrottleInterval.
+    /// The watchdog does NOT exit after a finished backup. It runs under
+    /// launchd with KeepAlive, so exiting would mean an immediate restart, and
+    /// with Time Machine not working - a tight restart loop limited only by
+    /// ThrottleInterval.
     case idle
   }
 
   public struct Snapshot: Sendable {
     public var state: State
-    /// Zaleglosc niewyslana w GB. `nil` = rclone nie odpowiedzial, czyli NIE
-    /// WIADOMO - i wtedy dozorca ANI nie wstrzymuje, ANI nie wznawia backupu.
+    /// Unsent backlog in GB. `nil` = rclone did not answer, i.e. UNKNOWN - and
+    /// then the watchdog NEITHER pauses NOR resumes the backup.
     public var backlogGB: Int?
-    /// `nil` = pomiaru NIE BYLO (statfs zawiodl), a nie "zero gigabajtow".
+    /// `nil` = there was NO measurement (statfs failed), not "zero gigabytes".
     public var freeGB: Int?
-    /// `nil` = tmutil nie odpowiedzial, czyli nie wiadomo.
+    /// `nil` = tmutil did not answer, i.e. unknown.
     public var backupRunning: Bool?
     public var percent: Double
   }
 
-  /// Zrodla pomiarow i sterowania.
+  /// Sources of measurements and control.
   ///
-  /// Domyslne (`live`) czytaja prawdziwy system. Test podstawia wlasne i dzieki
-  /// temu przechodzi CALA sciezke decyzji dozorcy - pauze, zmiane stanu,
-  /// wznowienie - bez tmutil, rclone i prawdziwego backupu. Ten sam wzorzec,
-  /// co `preferencesFile` w `BackupHealth.currentReport`: nie da sie inaczej
-  /// wstrzyknac ZNANEJ ZLEJ probki, a wlasnie w decyzjach dozorcy (a nie
-  /// w parsowaniu) siedzialy tu ciche awarie.
+  /// The defaults (`live`) read the real system. A test substitutes its own and
+  /// thanks to that walks the WHOLE decision path of the watchdog - pause, state
+  /// change, resume - without tmutil, rclone and a real backup. The same pattern
+  /// as `preferencesFile` in `BackupHealth.currentReport`: there is no other way
+  /// to inject a KNOWN BAD sample, and it is precisely in the watchdog's
+  /// decisions (not in parsing) that the silent failures lived here.
   public struct Probes: Sendable {
     public var queueStats: @Sendable () async -> DriveBufferService.QueueStats?
-    /// Rozmiar cache'a na dysku - WYLACZNIE do jednej linii w logu.
+    /// Cache size on disk - ONLY for one line in the log.
     ///
-    /// Osobna sonda, a nie wywolanie w miejscu, z dwoch powodow. Pierwszy:
-    /// wolamy ja tylko wtedy, gdy raportujemy brak odpowiedzi rclone, bo
-    /// w wersji `live` to obchod 6504 plikow na dysku, po ktorym leci backup.
-    /// Drugi: test musi umiec pokazac, ze ta liczba nie bierze udzialu w
-    /// ZADNEJ decyzji - podaje jej 155 GB z produkcyjnego przebiegu 23.09
-    /// i sprawdza, ze dozorca nadal nie wstrzymuje Time Machine.
+    /// A separate probe rather than a call in place, for two reasons. First:
+    /// we call it only when reporting that rclone is not answering, because in
+    /// the `live` version it is a walk of 6504 files on the disk the backup is
+    /// going to. Second: the test must be able to show that this number takes
+    /// part in NO decision - it feeds it the 155 GB from the production run of
+    /// 23.09 and checks that the watchdog still does not pause Time Machine.
     public var cacheSizeGB: @Sendable (DriveBufferService.QueueStats?) -> Int?
-    /// `nil` = nie zmierzono.
+    /// `nil` = not measured.
     public var freeGB: @Sendable () -> Int?
-    /// `nil` = tmutil nie odpowiedzial.
+    /// `nil` = tmutil did not answer.
     public var backupRunning: @Sendable () async -> Bool?
     public var progressPercent: @Sendable () async -> Double
-    /// Czy na Dysku Google skonczylo sie miejsce. `nil` = LOGU RCLONE NIE DA
-    /// SIE PRZECZYTAC, czyli nie wiadomo - a nie "nie ma problemu".
+    /// Whether Google Drive has run out of space. `nil` = THE RCLONE LOG CANNOT
+    /// BE READ, i.e. unknown - not "no problem".
     public var hitStorageQuota: @Sendable () -> Bool?
-    /// Czy wysylka stoi na dobowym limicie. `nil` jak wyzej.
+    /// Whether the upload is stuck on the daily limit. `nil` as above.
     public var uploadStalled: @Sendable () -> Bool?
-    /// Wolne bajty na Dysku Google. `nil` = NIE WIADOMO (rclone nie
-    /// odpowiedzial) - i to nie jest zgoda na wznowienie.
+    /// Free bytes on Google Drive. `nil` = UNKNOWN (rclone did not answer) -
+    /// and that is not consent to resume.
     public var driveFreeBytes: @Sendable () async -> UInt64?
-    /// `true` TYLKO gdy tmutil potwierdzil wykonanie polecenia.
+    /// `true` ONLY when tmutil confirmed that the command was carried out.
     public var stopBackup: @Sendable () async -> Bool
     public var startBackup: @Sendable () async -> Bool
-    /// Zgloszenie zatoru wysylki. `nil` ("nie wiem") NIE MA PRAWA gasic
-    /// znacznika zatoru - patrz `reportUploadStall`.
+    /// Reporting an upload jam. `nil` ("I do not know") HAS NO RIGHT to clear
+    /// the jam marker - see `reportUploadStall`.
     public var reportStall: @Sendable (Bool?) async -> Void
-    /// Wydzielone, zeby test nie dopisywal swoich zmyslonych "PAUZA (prog)"
-    /// do produkcyjnego `cloudmachine.log` - ten log sluzy do diagnozy
-    /// prawdziwych awarii i nie moze zawierac zdarzen, ktore sie nie zdarzyly.
+    /// Split out so that a test does not append its made-up "PAUSE (threshold)"
+    /// to the production `cloudmachine.log` - that log serves to diagnose real
+    /// failures and must not contain events that did not happen.
     public var log: @Sendable (String) -> Void
 
     public init(
@@ -213,8 +215,8 @@ public actor BufferGuardService {
       freeGB: { BufferGuardService.freeGB() },
       backupRunning: { await TimeMachineStatus.runningState() },
       progressPercent: { (await TimeMachineStatus.currentProgress())?.percent ?? 0 },
-      // Wersje `...State()`, nie `hitStorageQuota()`/`uploadStalled()`: te
-      // drugie sa do wyswietlenia i zamieniaja "nie wiem" na `false`.
+      // The `...State()` versions, not `hitStorageQuota()`/`uploadStalled()`:
+      // the latter are for display and turn "I do not know" into `false`.
       hitStorageQuota: { DriveBufferService.hitStorageQuotaState() },
       uploadStalled: { DriveBufferService.uploadStalledState() },
       driveFreeBytes: { await DriveBufferService.remoteQuota()?.free },
@@ -227,22 +229,23 @@ public actor BufferGuardService {
   private let thresholds: Thresholds
   private let probes: Probes
   private var state: State = .idle
-  /// Czy od ostatniego przejscia w czuwanie widzielismy dzialajacy backup -
-  /// zeby zameldowac zakonczenie raz, a nie przy kazdym tyknieciu.
+  /// Whether since the last transition to idle we have seen a running backup -
+  /// so that the end is reported once, not on every tick.
   private var sawBackupRunning = false
-  /// Czy poprzedni krok juz zglosil nieudane wstrzymanie - zeby przy awarii
-  /// trwajacej godzinami log nie urosl o linie co 30 sekund, ale zeby samo
-  /// zdarzenie NIE zniknelo (patrz `EdgeTriggeredLog`, ten sam powod).
+  /// Whether the previous step already reported a failed pause - so that with a
+  /// failure lasting hours the log does not grow by a line every 30 seconds,
+  /// but the event itself does NOT disappear (see `EdgeTriggeredLog`, same
+  /// reason).
   private var reportedStopFailure = false
-  /// To samo dla braku pomiaru wolnego miejsca.
+  /// The same for a missing free-space measurement.
   private var reportedFreeUnknown = false
-  /// To samo dla braku odpowiedzi o zaleglosci niewyslanej.
+  /// The same for no answer about the unsent backlog.
   private var reportedBacklogUnknown = false
-  /// To samo dla nieczytelnego logu rclone.
+  /// The same for an unreadable rclone log.
   private var reportedLogUnreadable = false
-  /// To samo dla Time Machine, ktory ruszyl w trakcie pauzy.
+  /// The same for Time Machine starting during a pause.
   private var reportedRestop = false
-  /// To samo dla pauzy z powodu braku miejsca na Dysku trzymanej bez dowodu.
+  /// The same for a pause for lack of space on Drive held without proof.
   private var reportedQuotaHold = false
 
   public init(thresholds: Thresholds = Thresholds(), probes: Probes = .live) {
@@ -250,90 +253,91 @@ public actor BufferGuardService {
     self.probes = probes
   }
 
-  // MARK: - Pomiary
+  // MARK: - Measurements
 
-  /// ZALEGLOSC NIEWYSLANA w GB - jedyna miara, na ktorej dozorca decyduje
-  /// o pauzie i o wznowieniu. `nil` = rclone nie odpowiedzial, czyli NIE WIEMY.
+  /// UNSENT BACKLOG in GB - the only measure on which the watchdog decides to
+  /// pause and to resume. `nil` = rclone did not answer, i.e. WE DO NOT KNOW.
   ///
-  /// DLACZEGO NIE ROZMIAR CACHE'A
+  /// WHY NOT THE CACHE SIZE
   ///
-  /// Do 25.09.2026 dozorca patrzyl na `stats.bytesUsed`, czyli na rozmiar
-  /// calego cache'a rclone. Przy `--vfs-cache-max-size 100G` i
-  /// `--vfs-cache-max-age 9999h` ta liczba stoi pod limitem zawsze - rclone
-  /// trzyma w cache'u takze to, co dawno wyslal. Dozorca mierzyl wiec stan
-  /// prawie STALY i pytal go o rzecz ZMIENNA: czy wysylka nadaza za zapisem.
-  /// Skutek w dzienniku: 281 pomiarow, minimum 99 GB, jedna pauza i ani jedno
-  /// wznowienie. Zaleglosc niewyslana to ta sama wielkosc, ktora decyduje
-  /// o tym, czy cache w ogole moze sie skurczyc - patrz `Thresholds.init`.
+  /// Until 25.09.2026 the watchdog looked at `stats.bytesUsed`, i.e. the size of
+  /// the whole rclone cache. With `--vfs-cache-max-size 100G` and
+  /// `--vfs-cache-max-age 9999h` that number always sits at the limit - rclone
+  /// also keeps in the cache what it uploaded long ago. So the watchdog measured
+  /// an almost CONSTANT state and asked it about a CHANGING thing: whether the
+  /// upload is keeping up with the writes. Result in the journal: 281
+  /// measurements, minimum 99 GB, one pause and not a single resume. The unsent
+  /// backlog is the same quantity that decides whether the cache can shrink at
+  /// all - see `Thresholds.init`.
   ///
-  /// DLACZEGO Z LICZBY POZYCJI, A NIE Z BAJTOW
+  /// WHY FROM THE ITEM COUNT, NOT FROM BYTES
   ///
-  /// `vfs/stats` nie podaje liczby niewyslanych BAJTOW: ma liczniki pozycji
-  /// (`uploadsQueued`, `uploadsInProgress`) i `bytesUsed` calego cache'a.
-  /// Rozmiary pozycji wystawia `vfs/queue`, ale to DRUGIE wywolanie interfejsu
-  /// rc w kazdym tyknieciu, a samo `vfs/stats` bylo tu zmierzone na 36,7 s
-  /// przy zapchanym buforze (patrz `DriveBufferService.queueStats`) -
-  /// podwojenie tego kosztu wydluza reakcje dokladnie wtedy, gdy zaleglosc
-  /// rosnie najszybciej. I prawie nic by nie dalo: kazda pozycja w tej kolejce
-  /// to pasmo sparsebundle o STALYM rozmiarze `BackupImageService.bandSectors`
-  /// (32 MiB), wiec suma rozmiarow to niemal dokladnie liczba pozycji razy
-  /// 32 MiB. Kontrola na prawdziwych liczbach: 462 pozycje z 23.09 daja stad
-  /// 14 GB, a wlasciciel liczyl "okolo 15 GB".
+  /// `vfs/stats` does not report the number of unsent BYTES: it has item
+  /// counters (`uploadsQueued`, `uploadsInProgress`) and `bytesUsed` of the
+  /// whole cache. Item sizes are exposed by `vfs/queue`, but that is a SECOND rc
+  /// interface call on every tick, and `vfs/stats` alone was measured here at
+  /// 36.7 s with a clogged buffer (see `DriveBufferService.queueStats`) -
+  /// doubling that cost lengthens the reaction exactly when the backlog grows
+  /// fastest. And it would give almost nothing: every item in this queue is a
+  /// sparsebundle band of a FIXED size `BackupImageService.bandSectors`
+  /// (32 MiB), so the sum of sizes is almost exactly the item count times
+  /// 32 MiB. Check against real numbers: the 462 items of 23.09 give 14 GB from
+  /// here, and the owner estimated "about 15 GB".
   ///
-  /// TO JEST SZACUNEK, nie pomiar - i tak jest opisany w logu (znak "~").
-  /// Blad idzie w JEDNA strone: pasma niepelne i drobne pliki metadanych sa
-  /// MNIEJSZE niz 32 MiB, wiec szacunek zawyza zaleglosc, a zawyzona zaleglosc
-  /// wstrzymuje backup wczesniej. Przy ochronie dysku to wlasciwy kierunek
-  /// pomylki.
+  /// THIS IS AN ESTIMATE, not a measurement - and it is described as such in the
+  /// log (the "~" sign). The error goes ONE way: partial bands and small metadata
+  /// files are SMALLER than 32 MiB, so the estimate overstates the backlog, and an
+  /// overstated backlog pauses the backup earlier. For disk protection that is
+  /// the right direction to err in.
   public static func backlogGB(stats: DriveBufferService.QueueStats?) -> Int? {
     guard let stats else { return nil }
     let bandBytes = UInt64(BackupImageService.bandSectors) * 512
     return Int(UInt64(max(0, stats.unsentItems)) * bandBytes / 1_073_741_824)
   }
 
-  /// Rozmiar cache'a rclone w GB - do PODGLADU I LOGU, nigdy do decyzji.
-  /// `nil` = nie zmierzono ani jedna droga.
+  /// rclone cache size in GB - for THE VIEW AND THE LOG, never for decisions.
+  /// `nil` = not measured either way.
   ///
-  /// Dwa zrodla tej liczby NIE SA ROWNOWAZNE i dlatego nie wolno ich mieszac
-  /// w decyzji: rclone podaje rozmiar wlasnego cache'a, a obchod katalogu
-  /// MIEJSCE ZAJETE NA DYSKU, ktore limit `--vfs-cache-max-size` potrafi
-  /// przekroczyc (stad "155 GB" przy limicie 100 GB). Do wiersza statusu oba
-  /// nadaja sie na tyle, na ile nadaje sie kazde przyblizenie; do wstrzymania
-  /// Time Machine nie nadaje sie zadne - patrz
-  /// `DriveBufferService.cacheSizeBytesByWalk`.
+  /// The two sources of this number are NOT EQUIVALENT, and that is why they
+  /// must not be mixed in a decision: rclone reports the size of its own cache,
+  /// while the directory walk reports DISK SPACE TAKEN, which can exceed the
+  /// `--vfs-cache-max-size` limit (hence "155 GB" with a 100 GB limit). For a
+  /// status line both are as good as any approximation; for pausing Time
+  /// Machine neither is - see `DriveBufferService.cacheSizeBytesByWalk`.
   public static func cacheSizeGB(stats: DriveBufferService.QueueStats? = nil) -> Int? {
     if let bytes = stats?.bytesUsed, bytes > 0 { return Int(bytes / 1_073_741_824) }
     guard let walked = DriveBufferService.cacheSizeBytesByWalk() else { return nil }
     return Int(walked / 1_073_741_824)
   }
 
-  /// Rozmiar cache'a dla interfejsu, ktory nie ma gdzie pokazac "nie wiem"
-  /// (`BufferStatus.sizeGB`). Zachowuje sie dokladnie tak, jak zachowywal sie
-  /// dawny `bufferGB` - z podstawionym zerem wlacznie.
+  /// Cache size for an interface that has nowhere to show "I do not know"
+  /// (`BufferStatus.sizeGB`). Behaves exactly as the old `bufferGB` did -
+  /// substituted zero included.
   ///
-  /// ZADNA DECYZJA nie ma prawa tego wolac; dozorca uzywa `backlogGB`. Zero za
-  /// brak pomiaru zostaje tu do usuniecia razem z `BufferStatus` i
-  /// `CloudMachineController`, ktore trzeba nauczyc trzeciego stanu - to
-  /// osobna zmiana, poza ta galezia.
+  /// NO DECISION may call this; the watchdog uses `backlogGB`. The zero for a
+  /// missing measurement stays here until it is removed together with
+  /// `BufferStatus` and `CloudMachineController`, which have to learn a third
+  /// state - that is a separate change, outside this branch.
   public static func bufferGB(stats: DriveBufferService.QueueStats? = nil) -> Int {
     cacheSizeGB(stats: stats) ?? 0
   }
 
-  /// Wolne miejsce liczone tak, jak liczy je `df` - czyli PESYMISTYCZNIE.
+  /// Free space counted the way `df` counts it - i.e. PESSIMISTICALLY.
   ///
-  /// Kusi, zeby uzyc `volumeAvailableCapacityForImportantUsageKey`, ale to
-  /// miara optymistyczna: wlicza miejsce zajete przez lokalne migawki, ktore
-  /// system dopiero MOGLBY zwolnic. Na tej maszynie pokazywala 1202 GB, gdy
-  /// `df` mowilo 427 GB. Dozorca ma wstrzymywac backup, zanim dysk sie zapelni,
-  /// wiec musi patrzec na miejsce faktycznie dostepne teraz, a nie na obietnice.
+  /// It is tempting to use `volumeAvailableCapacityForImportantUsageKey`, but
+  /// that is an optimistic measure: it includes space taken by local snapshots
+  /// that the system only COULD free. On this machine it showed 1202 GB while
+  /// `df` said 427 GB. The watchdog is supposed to pause the backup before the
+  /// disk fills up, so it has to look at the space actually available now, not
+  /// at a promise.
   ///
-  /// `nil` znaczy "NIE ZMIERZONO", i to nie jest kosmetyka. Wczesniej nieudany
-  /// `statfs` zwracal `0`, czyli liczbe - a wtedy warunek pauzy
-  /// (`free <= minFreeGB`) byl spelniony natychmiast, warunek wznowienia
-  /// (`free > minFreeGB`) NIGDY, i dozorca wstrzymywal Time Machine na zawsze.
-  /// Rownolegle czujka meldowala "Konczy sie miejsce na dysku Maca (0 GB)" -
-  /// alarm o stanie, ktorego nikt nie zmierzyl. To samo rozroznienie, ktore
-  /// `BufferStatus.queueKnown` wprowadzil juz dla kolejki wysylki.
+  /// `nil` means "NOT MEASURED", and that is not cosmetic. Previously a failed
+  /// `statfs` returned `0`, i.e. a number - and then the pause condition
+  /// (`free <= minFreeGB`) was met immediately, the resume condition
+  /// (`free > minFreeGB`) NEVER, and the watchdog paused Time Machine forever.
+  /// In parallel the monitor reported "The Mac's disk is running out of space
+  /// (0 GB)" - an alarm about a state nobody measured. The same distinction that
+  /// `BufferStatus.queueKnown` already introduced for the upload queue.
   public static func freeGB() -> Int? {
     var stats = statfs()
     guard statfs("/System/Volumes/Data", &stats) == 0 else { return nil }
@@ -341,45 +345,46 @@ public actor BufferGuardService {
     return Int(available / 1_073_741_824)
   }
 
-  /// Czy wolno wznowic Time Machine, patrzac WYLACZNIE na pomiary lokalne.
+  /// Whether Time Machine may be resumed, looking ONLY at local measurements.
   ///
-  /// Czysta funkcja - decyzja da sie sprawdzic testem bez dysku i bez tmutil.
-  /// `free == nil` nie wznawia: brak pomiaru to nie jest dowod, ze miejsce
-  /// jest. Wznowienie sprawdza wolne miejsce TAK SAMO jak pauza, bo pauza
-  /// chroniaca dysk nie moze byc odwolywana przez warunek, ktory o dysku nic
-  /// nie wie.
+  /// A pure function - the decision can be tested without a disk and without
+  /// tmutil. `free == nil` does not resume: a missing measurement is not proof
+  /// that space is there. Resuming checks free space THE SAME WAY as pausing,
+  /// because a pause protecting the disk must not be lifted by a condition that
+  /// knows nothing about the disk.
   ///
-  /// `backlog == nil` tez nie wznawia, i to jest ta sama regula zastosowana do
-  /// drugiej liczby. Wczesniej brak odpowiedzi rclone konczyl sie obchodem
-  /// katalogu, a nieudany obchod - zerem; zero zas spelnia warunek wznowienia
-  /// natychmiast, czyli ZDEJMOWALO pauze zalozona dlatego, ze bufor byl pelny.
+  /// `backlog == nil` does not resume either, and that is the same rule applied
+  /// to the second number. Previously no answer from rclone ended in a directory
+  /// walk, and a failed walk - in zero; and zero meets the resume condition
+  /// immediately, i.e. it LIFTED a pause put in place because the buffer was
+  /// full.
   static func canResumeLocally(backlog: Int?, free: Int?, thresholds: Thresholds) -> Bool {
     guard let backlog, let free else { return false }
     return backlog <= thresholds.lowGB && free > thresholds.minFreeGB
   }
 
-  /// Czy na Dysku Google jest DOWIEDZIONE miejsce na dalsza prace.
+  /// Whether there is PROVEN room on Google Drive for further work.
   ///
-  /// `nil` (rclone nie odpowiedzial) to NIE jest zgoda - patrz `step()`.
+  /// `nil` (rclone did not answer) is NOT consent - see `step()`.
   static func driveHasRoom(freeBytes: UInt64?, minGB: Int) -> Bool {
     guard let freeBytes else { return false }
     return freeBytes / 1_073_741_824 >= UInt64(max(0, minGB))
   }
 
-  // MARK: - Jeden krok
+  // MARK: - One step
 
-  /// Wykonuje jeden krok nadzoru i zwraca stan. Wydzielone z petli, zeby dalo
-  /// sie sprawdzic decyzje testem bez czekania w czasie rzeczywistym.
+  /// Performs one supervision step and returns the state. Split out of the loop
+  /// so that decisions can be tested without waiting in real time.
   ///
-  /// UKLAD TEJ FUNKCJI JEST CZESCIA POPRAWKI. Do 25.09.2026 sprawdzenia
-  /// `stats?.outOfSpace` i wolnego miejsca siedzialy WYLACZNIE w galezi
-  /// `.running`, a galaz `.pausedForBuffer` nie patrzyla na nic poza warunkiem
-  /// wznowienia. Po jednej pauzie dozorca przestawal wiec pilnowac dysku -
-  /// czyli ochrona, dla ktorej ten proces istnieje, wylaczala sie do restartu
-  /// agenta. Zmierzone: 53 godziny w tym stanie (pauza 23.09.2026 03:34 ->
-  /// restart procesu 25.09.2026 08:46). Dlatego ochrona dysku i `outOfSpace`
-  /// stoja TERAZ PRZED `switch state` i nie da sie ich pominac zadna sciezka
-  /// przez te funkcje.
+  /// THE LAYOUT OF THIS FUNCTION IS PART OF THE FIX. Until 25.09.2026 the checks
+  /// of `stats?.outOfSpace` and free space sat ONLY in the `.running` branch,
+  /// and the `.pausedForBuffer` branch looked at nothing except the resume
+  /// condition. After one pause the watchdog therefore stopped guarding the
+  /// disk - i.e. the protection this process exists for switched off until the
+  /// agent restarted. Measured: 53 hours in this state (pause 23.09.2026 03:34
+  /// -> process restart 25.09.2026 08:46). That is why disk protection and
+  /// `outOfSpace` NOW stand BEFORE `switch state`, and no path through this
+  /// function can skip them.
   @discardableResult
   public func step() async -> Snapshot {
     let stats = await probes.queueStats()
@@ -387,8 +392,8 @@ public actor BufferGuardService {
     let free = probes.freeGB()
     let running = await probes.backupRunning()
     let percent = await probes.progressPercent()
-    // Oba pytania ida do logu rclone i oba sa trzystanowe: nieczytelny plik
-    // to "nie wiem", nie "nie ma problemu".
+    // Both questions go to the rclone log and both are three-state: an
+    // unreadable file is "I do not know", not "no problem".
     let quota = probes.hitStorageQuota()
     let stalled = probes.uploadStalled()
 
@@ -397,111 +402,112 @@ public actor BufferGuardService {
         state: state, backlogGB: backlog, freeGB: free, backupRunning: running, percent: percent)
     }
 
-    // Nieudany pomiar wolnego miejsca NIE moze przejsc po cichu: od tej liczby
-    // zalezy jedyna ochrona dysku przed zapelnieniem, a bez niej dozorca nie
-    // wstrzyma Time Machine (i slusznie - nie zgaduje). Czlowiek musi o tym
-    // wiedziec z logu, a nie z pelnego dysku.
+    // A failed free-space measurement must NOT pass silently: the only
+    // protection of the disk against filling up depends on this number, and
+    // without it the watchdog will not pause Time Machine (and rightly so - it
+    // does not guess). A person must learn about it from the log, not from a
+    // full disk.
     if free == nil, !reportedFreeUnknown {
       probes.log(
-        "UWAGA: nie da sie zmierzyc wolnego miejsca na dysku (statfs zawiodl) - dozorca nie wstrzyma Time Machine z powodu dysku, bo nie ma na czym oprzec decyzji."
+        "WARNING: cannot measure free disk space (statfs failed) - the watchdog will not pause Time Machine because of the disk, as it has nothing to base the decision on."
       )
     }
     reportedFreeUnknown = (free == nil)
 
-    // Brak odpowiedzi rclone tez nie moze przejsc po cichu - ale tym razem NIE
-    // ZAMIENIAMY go na liczbe. 23.09.2026 dozorca w tej sytuacji schodzil na
-    // obchod katalogu, dostawal 155 GB (miejsce zajete na dysku - miara
-    // nieporownywalna z limitem 100 GB), przekraczal tym prog i wstrzymywal
-    // Time Machine; godzine pozniej czujka zapisala "Interfejs sterujacy
-    // rclone nie odpowiada". Pauza stala wiec na liczbie wzietej stad, ze
-    // pomiaru nie bylo. Rozmiar cache'a wypisujemy nadal - ale JAKO CO INNEGO,
-    // raz na epizod i bez zadnego wplywu na decyzje.
+    // No answer from rclone must not pass silently either - but this time we do
+    // NOT TURN it into a number. On 23.09.2026 in this situation the watchdog
+    // fell back to the directory walk, got 155 GB (disk space taken - a measure
+    // not comparable with the 100 GB limit), crossed the threshold with it and
+    // paused Time Machine; an hour later the monitor wrote "rclone remote
+    // control is not answering". So the pause rested on a number taken from the
+    // fact that there was no measurement. We still print the cache size - but AS
+    // SOMETHING ELSE, once per episode and with no effect on decisions.
     if backlog == nil, !reportedBacklogUnknown {
       let cache = probes.cacheSizeGB(stats)
       probes.log(
-        "UWAGA: interfejs sterujacy rclone nie odpowiada - nie wiadomo, ile zostalo do wyslania. Dozorca ANI nie wstrzyma, ANI nie wznowi Time Machine na tej podstawie. Cache zajmuje na dysku \(cache.map { "\($0) GB" } ?? "nie wiadomo ile") - to MIEJSCE NA DYSKU, nie zaleglosc do wyslania, i nie jest podstawa do pauzy. Ochrona dysku dziala dalej: wolne \(describe(free)), prog \(thresholds.minFreeGB) GB."
+        "WARNING: rclone remote control is not answering - unknown how much is left to upload. The watchdog will NEITHER pause NOR resume Time Machine on that basis. The cache takes \(cache.map { "\($0) GB" } ?? "an unknown amount") on disk - that is DISK SPACE, not a backlog to upload, and it is no basis for a pause. Disk protection keeps working: free \(describe(free)), threshold \(thresholds.minFreeGB) GB."
       )
     }
     reportedBacklogUnknown = (backlog == nil)
 
-    // Nieczytelny log rclone znaczy "nie wiem" po OBU pytaniach zadawanych
-    // temu plikowi. Wczesniej znaczyl "nie ma problemu", a to mialo dwa
-    // skutki: dozorca nie wstrzymywal backupu przy braku miejsca na Dysku,
-    // a `reportStall(false)` KASOWAL znacznik zatoru i meldowal "Wysylka na
-    // Google Drive ruszyla z powrotem" - twierdzenie o zdarzeniu, ktorego
-    // nikt nie sprawdzil. Log ma prawa `-rw-r-----`, a przy starcie rclone
-    // jest przenoszony na `.1`, wiec nieczytelny log to stan spodziewany,
-    // nie hipoteza.
+    // An unreadable rclone log means "I do not know" for BOTH questions asked
+    // of this file. Previously it meant "no problem", and that had two effects:
+    // the watchdog did not pause the backup when Drive was out of space, and
+    // `reportStall(false)` DELETED the jam marker and reported "Upload to Google
+    // Drive has resumed" - a claim about an event nobody checked. The log has
+    // `-rw-r-----` permissions, and at rclone start-up it is moved to `.1`, so
+    // an unreadable log is an expected state, not a hypothesis.
     let logUnreadable = (quota == nil || stalled == nil)
     if logUnreadable, !reportedLogUnreadable {
       probes.log(
-        "UWAGA: nie da sie przeczytac logu rclone (\(DriveBufferService.logFile.path)) - dozorca nie rozpozna ani braku miejsca na Google Drive, ani zatoru wysylki. Znacznik zatoru zostaje bez zmian, bo 'nie wiem' go nie gasi."
+        "WARNING: cannot read the rclone log (\(DriveBufferService.logFile.path)) - the watchdog will recognise neither lack of space on Google Drive nor an upload jam. The jam marker stays unchanged, because 'I do not know' does not clear it."
       )
     }
     reportedLogUnreadable = logUnreadable
 
-    // Dobowy limit uploadu to CO INNEGO i celowo NIE wstrzymuje backupu.
+    // The daily upload limit is SOMETHING ELSE and deliberately does NOT pause
+    // the backup.
     //
-    // Zmierzone na dwoch epizodach (12 i 15 wrzesnia 2026): przy zatorze
-    // trwajacym kilka godzin bufor ani drgnal - 99-103 GB, dokladnie tyle,
-    // co zwykle - a kolejka rozeszla sie sama, gdy okno kroczace 24 h
-    // przesunelo sie do przodu. Pauza kosztowalaby wtedy kopie i nie dalaby
-    // nic w zamian. Przed zapelnieniem dysku chronia progi ponizej i one
-    // dzialaja niezaleznie od tego, co jest przyczyna zatoru.
+    // Measured on two episodes (12 and 15 September 2026): during a jam lasting
+    // several hours the buffer did not budge - 99-103 GB, exactly as usual -
+    // and the queue cleared by itself once the rolling 24 h window moved
+    // forward. A pause would then have cost backups and given nothing in
+    // return. The thresholds below protect against filling the disk, and they
+    // work regardless of what causes the jam.
     //
-    // Zglaszamy natomiast ZAWSZE, bo zator z 12 wrzesnia przeszedl zupelnie
-    // niezauwazony - trzy godziny bez wysylki i ani jednego sladu poza
-    // surowym logiem rclone. `nil` idzie dalej jako `nil`: zgloszenie samo
-    // wie, ze "nie wiem" niczego nie gasi.
+    // We do, however, ALWAYS report it, because the jam of 12 September went
+    // completely unnoticed - three hours without uploads and not a single trace
+    // except the raw rclone log. `nil` is passed on as `nil`: the report itself
+    // knows that "I do not know" clears nothing.
     await probes.reportStall(stalled)
 
-    // Brak MIEJSCA na Dysku ma pierwszenstwo i nie minie sam: dopoki
-    // uzytkownik czegos nie skasuje, wysylka nie ruszy, a dalsza praca
-    // Time Machine tylko pompuje bufor. `nil` (nieczytelny log) NIE wstrzymuje
-    // - brak odpowiedzi nie jest dowodem awarii, tak samo jak nie jest
-    // dowodem jej braku; zglosilismy go wyzej w logu.
+    // Lack of SPACE on Drive takes precedence and will not pass by itself:
+    // until the user deletes something, the upload will not move, and further
+    // Time Machine work only pumps up the buffer. `nil` (unreadable log) does
+    // NOT pause - no answer is not proof of a failure, just as it is not proof
+    // of its absence; we reported it in the log above.
     if quota == true {
       if state == .pausedForQuota {
         await keepPaused(backupRunning: running)
       } else {
         await pause(
           reason:
-            "PAUZA (brak miejsca na Google Drive): zaleglosc \(describeBacklog(backlog)), wolne \(describe(free))",
+            "PAUSE (no space on Google Drive): backlog \(describeBacklog(backlog)), free \(describe(free))",
           into: .pausedForQuota, backupRunning: running)
       }
       return snapshot()
     }
 
-    // OCHRONA DYSKU - W KAZDYM STANIE, nie tylko w `.running`.
+    // DISK PROTECTION - IN EVERY STATE, not only in `.running`.
     //
-    // `outOfSpace` pochodzi od rclone i znaczy "nie mam juz gdzie odlozyc
-    // danych" - to twardszy fakt niz jakikolwiek nasz prog, i nie przestaje
-    // byc faktem dlatego, ze dozorca wlasnie stoi w pauzie.
+    // `outOfSpace` comes from rclone and means "I have nowhere left to put
+    // data" - a harder fact than any threshold of ours, and it does not stop
+    // being a fact because the watchdog happens to be paused.
     //
-    // Brak pomiaru wolnego miejsca (`free == nil`) NIE wstrzymuje backupu.
-    // Wczesniej nieudany `statfs` dawal zero, zero spelnialo warunek pauzy
-    // i dozorca wstrzymywal Time Machine na podstawie liczby, ktorej nigdy
-    // nie zmierzyl - a potem nie umial go wznowic, bo warunek wznowienia
-    // przy zerze nie zachodzi nigdy.
+    // A missing free-space measurement (`free == nil`) does NOT pause the
+    // backup. Previously a failed `statfs` gave zero, zero met the pause
+    // condition and the watchdog paused Time Machine based on a number it
+    // never measured - and then could not resume it, because the resume
+    // condition never holds at zero.
     let lowDisk = free.map { $0 <= thresholds.minFreeGB } ?? false
     let bufferFull = stats?.outOfSpace == true
     if bufferFull || lowDisk {
       let why =
-        bufferFull ? "rclone zglasza brak miejsca w buforze" : "malo wolnego miejsca na dysku"
+        bufferFull ? "rclone reports no space in the buffer" : "little free disk space"
       switch state {
       case .pausedForBuffer, .pausedForQuota:
-        // Juz stoimy, wiec nie ma czego oglaszac - ale Time Machine mogl
-        // ruszyc sam w swoim cyklu godzinowym, wiec wstrzymanie ponawiamy.
-        // WAZNE: nie wracamy stad do wznawiania. Dopoki dysk jest pod sciana,
-        // zaden warunek wznowienia nie ma prawa zdjac pauzy.
+        // Already paused, so there is nothing to announce - but Time Machine may
+        // have started by itself in its hourly cycle, so we repeat the pause.
+        // IMPORTANT: we do not go on to resuming from here. As long as the disk
+        // is against the wall, no resume condition may lift the pause.
         await keepPaused(backupRunning: running)
       case .running, .idle:
-        // Takze z `.idle`: dysk zapelnia sie niezaleznie od tego, czy backup
-        // trwa w tej sekundzie, a macOS zaczyna kolejny co godzine. Wejscie
-        // w pauze sprawia, ze nastepne tykniecie go zatrzyma.
+        // Also from `.idle`: the disk fills up regardless of whether a backup
+        // is running this second, and macOS starts another one every hour.
+        // Entering the pause makes the next tick stop it.
         await pause(
           reason:
-            "PAUZA (\(why)): zaleglosc \(describeBacklog(backlog)), wolne \(describe(free)) - czekam na wysylke",
+            "PAUSE (\(why)): backlog \(describeBacklog(backlog)), free \(describe(free)) - waiting for the upload",
           into: .pausedForBuffer, backupRunning: running)
       }
       return snapshot()
@@ -509,36 +515,36 @@ public actor BufferGuardService {
 
     switch state {
     case .idle:
-      // Tylko JAWNE "tak". `nil` (tmutil nie odpowiedzial) zostawia stan bez
-      // zmiany - nie zaczynamy nadzoru nad czyms, o czym nic nie wiemy.
+      // Only an EXPLICIT "yes". `nil` (tmutil did not answer) leaves the state
+      // unchanged - we do not start supervising something we know nothing about.
       if running == true {
-        probes.log("Backup ruszyl - nadzoruje zaleglosc wysylki")
+        probes.log("Backup started - supervising the upload backlog")
         sawBackupRunning = true
         state = .running
       }
 
     case .running:
-      // `backlog == nil` NIE wstrzymuje: to ten sam wzorzec, co przy `free`.
-      // Brak odpowiedzi rclone nie jest liczba i nie ma prawa uruchomic
-      // nieodwracalnej pauzy.
+      // `backlog == nil` does NOT pause: the same pattern as with `free`.
+      // No answer from rclone is not a number and has no right to trigger an
+      // irreversible pause.
       if let backlog, backlog >= thresholds.highGB {
         await pause(
           reason:
-            "PAUZA (prog zaleglosci \(thresholds.highGB) GB): zaleglosc \(describeBacklog(backlog)), wolne \(describe(free)) - czekam na wysylke",
+            "PAUSE (backlog threshold \(thresholds.highGB) GB): backlog \(describeBacklog(backlog)), free \(describe(free)) - waiting for the upload",
           into: .pausedForBuffer, backupRunning: running)
       } else if running == false {
         if sawBackupRunning {
-          probes.log("Time Machine zakonczyl. Zaleglosc \(describeBacklog(backlog))")
+          probes.log("Time Machine finished. Backlog \(describeBacklog(backlog))")
           sawBackupRunning = false
         }
         state = .idle
       }
 
     case .pausedForBuffer:
-      // Wznawiamy dopiero, gdy wysylka faktycznie nadgonila - inaczej
-      // wpadlibysmy w oscylacje start/stop przy progu. Dopoki nie nadgonila,
-      // PODTRZYMUJEMY wstrzymanie: `tmutil stopbackup` z chwili pauzy dotyczyl
-      // tylko tego jednego przebiegu.
+      // We resume only when the upload has actually caught up - otherwise we
+      // would fall into start/stop oscillation at the threshold. Until it has
+      // caught up, we KEEP UP the pause: the `tmutil stopbackup` from the moment
+      // of pausing applied only to that one run.
       if Self.canResumeLocally(backlog: backlog, free: free, thresholds: thresholds) {
         await resume(backlogGB: backlog, freeGB: free)
       } else {
@@ -546,32 +552,31 @@ public actor BufferGuardService {
       }
 
     case .pausedForQuota:
-      // Pauza z powodu BRAKU MIEJSCA na Dysku wymaga do zdjecia POZYTYWNEGO
-      // dowodu, ze miejsce jest. To nie jest ostroznosc na zapas:
+      // A pause for LACK OF SPACE on Drive needs POSITIVE proof that space is
+      // there before it is lifted. This is not extra caution:
       //
-      // `hitStorageQuota()` czyta wpisy z ostatnich 30 minut logu rclone.
-      // Po wstrzymaniu Time Machine nowe pasma przestaja powstawac, rclone
-      // przestaje probowac wysylac, wpisy sie starzeja i funkcja zaczyna
-      // zwracac `false` - mimo ze na Dysku jak nie bylo miejsca, tak nie ma.
-      // Przy spokojnym buforze (a po pauzie bufor sie wlasnie oprozni)
-      // wspolny warunek wznowienia byl wtedy spelniony natychmiast: dozorca
-      // puszczal Time Machine, ten pisal kolejne pasma, ktorych nie ma jak
-      // wyslac, i cala pauza konczyla sie po kilkudziesieciu minutach bez
-      // zmiany czegokolwiek po stronie Dysku. `UploadState` mowi wprost, ze
-      // ten stan NIE mija sam.
+      // `hitStorageQuota()` reads entries from the last 30 minutes of the rclone
+      // log. After Time Machine is paused no new bands are created, rclone stops
+      // trying to upload, the entries age and the function starts returning
+      // `false` - even though Drive has as little space as before. With a quiet
+      // buffer (and after a pause the buffer does empty) the shared resume
+      // condition was then met immediately: the watchdog let Time Machine go, it
+      // wrote more bands that cannot be uploaded, and the whole pause ended after
+      // a few dozen minutes without anything changing on the Drive side.
+      // `UploadState` says plainly that this state does NOT pass by itself.
       guard Self.canResumeLocally(backlog: backlog, free: free, thresholds: thresholds) else {
         await keepPaused(backupRunning: running)
         break
       }
       let driveFree = await probes.driveFreeBytes()
       guard Self.driveHasRoom(freeBytes: driveFree, minGB: thresholds.minDriveFreeGB) else {
-        // Brak odpowiedzi od rclone PODTRZYMUJE pauze - "nie wiem" nigdy nie
-        // jest zgoda na wznowienie czegos, co zapelnia dysk.
+        // No answer from rclone KEEPS the pause - "I do not know" is never
+        // consent to resume something that fills up the disk.
         if !reportedQuotaHold {
-          let ile =
-            driveFree.map { "\($0 / 1_073_741_824) GB" } ?? "nie wiadomo (rclone nie odpowiedzial)"
+          let amount =
+            driveFree.map { "\($0 / 1_073_741_824) GB" } ?? "unknown (rclone did not answer)"
           probes.log(
-            "PAUZA (brak miejsca na Dysku) utrzymana: wolne na Google Drive \(ile), wymagane co najmniej \(thresholds.minDriveFreeGB) GB."
+            "PAUSE (no space on Drive) kept: free on Google Drive \(amount), required at least \(thresholds.minDriveFreeGB) GB."
           )
           reportedQuotaHold = true
         }
@@ -587,41 +592,42 @@ public actor BufferGuardService {
 
   public func currentState() -> State { state }
 
-  /// Wolne miejsce do logu. Brak pomiaru MUSI wygladac inaczej niz zero,
-  /// inaczej linia w logu klamie tak samo, jak klamala sama liczba.
+  /// Free space for the log. A missing measurement MUST look different from
+  /// zero, otherwise the log line lies just as the number itself used to.
   private func describe(_ freeGB: Int?) -> String {
-    freeGB.map { "\($0) GB" } ?? "nie zmierzono"
+    freeGB.map { "\($0) GB" } ?? "not measured"
   }
 
-  /// Zaleglosc do logu. Znak "~" nie jest ozdoba: ta liczba jest SZACOWANA
-  /// z liczby pozycji w kolejce (patrz `backlogGB`), a log, ktory podaje
-  /// szacunek jako pomiar, klamie o tym, jak mocna jest podstawa decyzji.
+  /// Backlog for the log. The "~" sign is not decoration: this number is
+  /// ESTIMATED from the number of items in the queue (see `backlogGB`), and a
+  /// log that gives an estimate as a measurement lies about how solid the basis
+  /// of the decision is.
   private func describeBacklog(_ gb: Int?) -> String {
-    gb.map { "~\($0) GB" } ?? "nie wiadomo (rclone nie odpowiedzial)"
+    gb.map { "~\($0) GB" } ?? "unknown (rclone did not answer)"
   }
 
-  // MARK: - Sterowanie Time Machine
+  // MARK: - Controlling Time Machine
 
-  /// Wstrzymuje Time Machine i przechodzi w `into` TYLKO gdy sie udalo.
+  /// Pauses Time Machine and moves to `into` ONLY when that succeeded.
   ///
-  /// TO jest ta poprawka. Wczesniej wynik `tmutil stopbackup` byl wyrzucany
-  /// (`_ = try? await ...`), a stan zmienial sie BEZWARUNKOWO. Gdy polecenie
-  /// padalo - brak uprawnien, przekroczony limit czasu - dozorca uznawal pauze
-  /// za wykonana, a poniewaz `stopBackup()` wola sie wylacznie przy ZMIANIE
-  /// stanu, nie ponawial jej nigdy. Time Machine pisal dalej, dozorca czekal
-  /// na drenaz, dysk zapelnial sie do konca, a w logu stalo "PAUZA ... czekam
-  /// na wysylke".
+  /// THIS is the fix. Previously the result of `tmutil stopbackup` was thrown
+  /// away (`_ = try? await ...`), and the state changed UNCONDITIONALLY. When
+  /// the command failed - no permissions, time limit exceeded - the watchdog
+  /// considered the pause done, and since `stopBackup()` was called only on a
+  /// state CHANGE, it never retried. Time Machine kept writing, the watchdog
+  /// waited for the drain, the disk filled up completely, and the log said
+  /// "PAUSE ... waiting for the upload".
   ///
-  /// Przy niepowodzeniu stan zostaje na `.running`, wiec warunek pauzy
-  /// (nadal spelniony) wyzwoli kolejna probe przy nastepnym tyknieciu - czyli
-  /// za 30 sekund, bez zadnego dodatkowego mechanizmu ponawiania.
+  /// On failure the state stays at `.running`, so the pause condition (still
+  /// met) triggers another attempt on the next tick - i.e. in 30 seconds,
+  /// without any extra retry mechanism.
   ///
-  /// `backupRunning == false` (tmutil mowi WPROST, ze backup nie trwa) jest
-  /// osobna sciezka: nie ma wtedy czego wstrzymywac, a wolanie `stopbackup`
-  /// bez trwajacego backupu potrafi zwrocic blad - i dozorca zameldowalby
-  /// wtedy "Time Machine PISZE DALEJ", czyli twierdzenie o zdarzeniu, ktorego
-  /// nikt nie sprawdzil. `nil` ("tmutil nie odpowiedzial") idzie sciezka
-  /// scisla, bo brak odpowiedzi nie jest dowodem ciszy.
+  /// `backupRunning == false` (tmutil says EXPLICITLY that no backup is
+  /// running) is a separate path: there is nothing to pause then, and calling
+  /// `stopbackup` without a running backup can return an error - and the
+  /// watchdog would then report "Time Machine KEEPS WRITING", i.e. a claim
+  /// about an event nobody checked. `nil` ("tmutil did not answer") takes the
+  /// strict path, because no answer is not proof of quiet.
   private func pause(reason: String, into paused: State, backupRunning: Bool?) async {
     probes.log(reason)
     if backupRunning == false {
@@ -636,38 +642,39 @@ public actor BufferGuardService {
     }
     if !reportedStopFailure {
       probes.log(
-        "NIE UDALO SIE wstrzymac Time Machine (tmutil stopbackup). Stan zostaje na '\(state.rawValue)', ponawiam przy kazdym kolejnym sprawdzeniu. Time Machine PISZE DALEJ - dysk moze sie zapelnic."
+        "FAILED to pause Time Machine (tmutil stopbackup). State stays at '\(state.rawValue)', retrying on every subsequent check. Time Machine KEEPS WRITING - the disk may fill up."
       )
       reportedStopFailure = true
     }
   }
 
-  /// PODTRZYMUJE wstrzymanie w stanie pauzy - przy kazdym tyknieciu.
+  /// KEEPS UP the pause while in a paused state - on every tick.
   ///
-  /// TO jest ta poprawka. `stopBackup()` wolalo sie WYLACZNIE przy zmianie
-  /// stanu, a `tmutil stopbackup` anuluje tylko TRWAJACY backup i nie rusza
-  /// harmonogramu (`tmutil disable` nie wystepuje w tym repo ani razu).
-  /// Godzine po pauzie macOS startowal wiec kolejny backup: dozorca go nie
-  /// zatrzymywal i nie nadzorowal, bo galaz `.pausedForBuffer` nie patrzyla na
-  /// nic poza warunkiem wznowienia - a w logu stalo "czekam na wysylke".
-  /// Pauza wstrzymywala zapis na jeden przebieg, choc sam stan trwal
-  /// 53 godziny. Dokladnie te wade opisuje i naprawia `pause` dla galezi
-  /// PORAZKI `stopbackup`; dla powodzenia zostala nietknieta do 25.09.2026.
+  /// THIS is the fix. `stopBackup()` was called ONLY on a state change, and
+  /// `tmutil stopbackup` cancels only the RUNNING backup and does not touch the
+  /// schedule (`tmutil disable` does not appear in this repo even once). An
+  /// hour after the pause macOS therefore started another backup: the watchdog
+  /// neither stopped nor supervised it, because the `.pausedForBuffer` branch
+  /// looked at nothing except the resume condition - and the log said "waiting
+  /// for the upload". The pause held back writes for one run, even though the
+  /// state itself lasted 53 hours. `pause` describes and fixes exactly this
+  /// flaw for the FAILURE branch of `stopbackup`; for success it stayed
+  /// untouched until 25.09.2026.
   ///
-  /// Ponawiamy tylko wtedy, gdy tmutil nie mowi wprost "backup nie trwa":
-  /// "nie wiem" (`nil`) liczy sie tu jak "trwa", bo brak odpowiedzi nie jest
-  /// dowodem ciszy. Przy stojacym Time Machine oszczedza to dwa procesy
-  /// (sudo + tmutil) co 30 sekund przez cala pauze - w epizodzie z 23.09
-  /// byloby ich ponad 12 tysiecy.
+  /// We repeat only when tmutil does not say plainly "no backup running":
+  /// "I do not know" (`nil`) counts here as "running", because no answer is not
+  /// proof of quiet. With Time Machine idle this saves two processes (sudo +
+  /// tmutil) every 30 seconds for the whole pause - in the 23.09 episode it
+  /// would have been over 12 thousand of them.
   ///
-  /// ODRZUCONA ALTERNATYWA: `tmutil disable`. Wylacza harmonogram raz i na
-  /// dobre, wiec pauza trzymalaby sie bez ponawiania - ale stan pauzy dozorca
-  /// trzyma W PAMIECI PROCESU, a chodzi pod launchd z `KeepAlive`. Po jego
-  /// smierci (albo po restarcie Maca) nikt nie wiedzialby, ze Time Machine
-  /// zostal wylaczony i ze trzeba go wlaczyc z powrotem - cicha utrata
-  /// backupu na zawsze zamiast wolniejszego backupu. Ponawiane `stopbackup`
-  /// jest odwracalne samo z siebie: gdy dozorca przestaje dzialac, Time
-  /// Machine wraca do pracy w swoim cyklu godzinowym.
+  /// REJECTED ALTERNATIVE: `tmutil disable`. It turns the schedule off once and
+  /// for good, so the pause would hold without repeating - but the watchdog
+  /// keeps the pause state IN PROCESS MEMORY, and it runs under launchd with
+  /// `KeepAlive`. After its death (or after a Mac restart) nobody would know
+  /// that Time Machine had been disabled and has to be turned back on - a
+  /// silent loss of backups forever instead of a slower backup. A repeated
+  /// `stopbackup` is reversible by itself: when the watchdog stops working,
+  /// Time Machine goes back to work in its hourly cycle.
   private func keepPaused(backupRunning: Bool?) async {
     guard backupRunning != false else {
       reportedRestop = false
@@ -675,7 +682,7 @@ public actor BufferGuardService {
     }
     if !reportedRestop {
       probes.log(
-        "Time Machine pracuje w trakcie pauzy (stan '\(state.rawValue)') - ponawiam wstrzymanie. `tmutil stopbackup` anuluje tylko trwajacy przebieg, a macOS startuje kolejny w swoim cyklu godzinowym."
+        "Time Machine is running during a pause (state '\(state.rawValue)') - repeating the pause. `tmutil stopbackup` cancels only the running run, and macOS starts another one in its hourly cycle."
       )
       reportedRestop = true
     }
@@ -685,39 +692,39 @@ public actor BufferGuardService {
     }
     if !reportedStopFailure {
       probes.log(
-        "NIE UDALO SIE ponowic wstrzymania Time Machine (tmutil stopbackup) w stanie '\(state.rawValue)'. Time Machine PISZE DALEJ do bufora, ktorego oprozniania wlasnie czekamy - dysk moze sie zapelnic."
+        "FAILED to repeat the Time Machine pause (tmutil stopbackup) in state '\(state.rawValue)'. Time Machine KEEPS WRITING to the buffer we are waiting to drain - the disk may fill up."
       )
       reportedStopFailure = true
     }
   }
 
-  /// Wznawia Time Machine.
+  /// Resumes Time Machine.
   ///
-  /// Asymetria wzgledem `pause` jest celowa. Nieudane `stopbackup` grozi
-  /// zapelnieniem dysku, wiec nie wolno udawac, ze pauza zaszla. Nieudane
-  /// `startbackup` nie grozi niczym: Time Machine i tak ruszy sam w swoim
-  /// cyklu godzinowym, a `startbackup` jest tylko przyspieszeniem tego.
-  /// Gdybysmy przy jego niepowodzeniu zostawali w pauzie, dozorca tkwilby
-  /// w stanie, z ktorego jedyne wyjscie wlasnie nie dziala.
+  /// The asymmetry with `pause` is deliberate. A failed `stopbackup` risks
+  /// filling the disk, so we must not pretend the pause happened. A failed
+  /// `startbackup` risks nothing: Time Machine will start by itself in its
+  /// hourly cycle anyway, and `startbackup` only speeds that up. If we stayed
+  /// paused when it failed, the watchdog would be stuck in a state whose only
+  /// exit is exactly what is not working.
   private func resume(backlogGB: Int?, freeGB: Int?) async {
-    probes.log("WZNOWIENIE: zaleglosc \(describeBacklog(backlogGB)), wolne \(describe(freeGB))")
+    probes.log("RESUME: backlog \(describeBacklog(backlogGB)), free \(describe(freeGB))")
     reportedRestop = false
     if await probes.startBackup() == false {
       probes.log(
-        "tmutil startbackup nie powiodlo sie - Time Machine ruszy sam w swoim cyklu godzinowym.")
+        "tmutil startbackup failed - Time Machine will start by itself in its hourly cycle.")
     }
     state = .running
   }
 
-  /// Co zrobic ze znacznikiem zatoru. Czysta funkcja, zeby "nie wiem" dalo sie
-  /// sprawdzic testem bez pliku znacznika, bez powiadomienia i bez logu.
+  /// What to do with the jam marker. A pure function, so that "I do not know"
+  /// can be tested without a marker file, without a notification and without
+  /// a log.
   ///
-  /// `stalled == nil` to `.doNothing`, i to jest cala poprawka. Wczesniej
-  /// nieczytelny log rclone wychodzil z `uploadStalled()` jako `false`, `false`
-  /// oznaczal "zator minal" - wiec znacznik byl USUWANY, a do logu szlo
-  /// "Wysylka na Google Drive ruszyla z powrotem". Twierdzenie o zdarzeniu,
-  /// ktorego nikt nie sprawdzil, i zgaszenie zgloszenia dokladnie w tym
-  /// przypadku, dla ktorego ono istnieje.
+  /// `stalled == nil` is `.doNothing`, and that is the whole fix. Previously an
+  /// unreadable rclone log came out of `uploadStalled()` as `false`, `false`
+  /// meant "the jam is over" - so the marker was DELETED, and the log got
+  /// "Upload to Google Drive has resumed". A claim about an event nobody
+  /// checked, and the report cleared in exactly the case it exists for.
   enum StallAction: Equatable {
     case raise
     case clear
@@ -730,13 +737,14 @@ public actor BufferGuardService {
     return stalled ? .raise : .clear
   }
 
-  /// Zglasza poczatek i koniec zatoru wysylki - raz na zmiane stanu.
+  /// Reports the start and end of an upload jam - once per state change.
   ///
-  /// Stan trzymamy w pliku, a nie w polu, bo `buffer-guard` chodzi pod
-  /// launchd z `KeepAlive`: po kazdym wskrzeszeniu procesu pole zaczynaloby
-  /// od zera i ten sam zator zglaszalby sie od nowa co 30 sekund.
+  /// We keep the state in a file, not a field, because `buffer-guard` runs
+  /// under launchd with `KeepAlive`: after every resurrection of the process the
+  /// field would start from zero and the same jam would be reported anew every
+  /// 30 seconds.
   ///
-  /// `nil` = "nie wiem" i wtedy nie ruszamy NICZEGO - patrz `stallAction`.
+  /// `nil` = "I do not know", and then we touch NOTHING - see `stallAction`.
   static func reportUploadStall(_ stalled: Bool?) async {
     let marker = CMPaths.appSupportDir.appendingPathComponent(".upload-stalled")
     let reported = FileManager.default.fileExists(atPath: marker.path)
@@ -744,58 +752,62 @@ public actor BufferGuardService {
     guard action != .doNothing else { return }
 
     if action == .raise {
-      let message = "Wysylka na Google Drive stoi - wyczerpany limit dobowy."
-      CMLogger.log("\(message) Kopie ida dalej, zator mija sam w kilka godzin.")
-      // Znacznik zakladamy DOPIERO po doreczeniu powiadomienia. Zalozony
-      // wczesniej zamykal sprawe takze wtedy, gdy powiadomienie nie doszlo -
-      // czyli gasil zgloszenie dokladnie w przypadku, dla ktorego istnieje
-      // (ten sam blad, co w `HealthAlert.report`, patrz tamtejszy komentarz).
-      if await HealthAlert.notify(title: "CloudMachine: wysylka na Dysk stoi", message: message) {
+      CMLogger.log(
+        "Upload to Google Drive is stalled - daily limit exhausted. Backups continue, the jam passes by itself within a few hours."
+      )
+      // The marker is created ONLY after the notification is delivered. Created
+      // earlier, it closed the matter even when the notification did not get
+      // through - i.e. it cleared the report in exactly the case it exists for
+      // (the same bug as in `HealthAlert.report`, see the comment there).
+      if await HealthAlert.notify(
+        title: L10n.tr("CloudMachine: upload to Drive is stalled"),
+        message: L10n.tr("Upload to Google Drive is stalled - daily limit exhausted."))
+      {
         FileManager.default.createFile(atPath: marker.path, contents: nil)
       } else {
         CMLogger.log(
-          "Powiadomienie o zatorze wysylki NIE zostalo doreczone - sprobuje ponownie przy nastepnym sprawdzeniu."
+          "The upload jam notification was NOT delivered - will retry on the next check."
         )
       }
     } else {
       try? FileManager.default.removeItem(at: marker)
-      CMLogger.log("Wysylka na Google Drive ruszyla z powrotem.")
+      CMLogger.log("Upload to Google Drive has resumed.")
     }
   }
 
-  /// Wola `tmutil <polecenie>` i mowi, czy NAPRAWDE sie udalo.
+  /// Calls `tmutil <command>` and says whether it REALLY succeeded.
   ///
-  /// Najpierw przez `sudo -n`: `tmutil stopbackup` i `startbackup` wymagaja
-  /// uprawnien roota, a dozorca chodzi pod launchd w sesji uzytkownika.
-  /// Istniejacy `runTmutilUnattended` byl tu nieuzyty, mimo ze powstal
-  /// dokladnie do tego. Regula NOPASSWD w `/etc/sudoers.d/cloudmachine` nie
-  /// jest przez nic w tym repo zakladana (sprawdzone: zaden instalator jej
-  /// nie pisze), wiec `sudo -n` dzis odmawia natychmiast - i wlasnie dlatego
-  /// przy odmowie AUTORYZACJI probujemy jeszcze bez sudo, zamiast uznawac
-  /// sprawe za przegrana. `isSudoAuthFailure` odroznia "sudo nas nie wpuscilo"
-  /// od "polecenie sie wykonalo i zwrocilo blad".
+  /// First via `sudo -n`: `tmutil stopbackup` and `startbackup` need root
+  /// privileges, and the watchdog runs under launchd in the user session. The
+  /// existing `runTmutilUnattended` was unused here, even though it was made
+  /// exactly for this. The NOPASSWD rule in `/etc/sudoers.d/cloudmachine` is not
+  /// set up by anything in this repo (checked: no installer writes it), so
+  /// `sudo -n` refuses immediately today - and that is exactly why, on an
+  /// AUTHORIZATION refusal, we still try without sudo instead of giving up.
+  /// `isSudoAuthFailure` tells "sudo did not let us in" apart from "the command
+  /// ran and returned an error".
   static func tmutil(_ command: String) async -> Bool {
     if let viaSudo = try? await ProcessRunner.runTmutilUnattended([command], timeout: 120) {
       if viaSudo.succeeded { return true }
       if !viaSudo.isSudoAuthFailure {
         CMLogger.log(
-          "sudo tmutil \(command): kod \(viaSudo.exitCode) \(shortError(viaSudo))")
+          "sudo tmutil \(command): exit code \(viaSudo.exitCode) \(shortError(viaSudo))")
         return false
       }
     }
     guard let direct = try? await ProcessRunner.run("/usr/bin/tmutil", [command], timeout: 120)
     else {
-      CMLogger.log("tmutil \(command): BRAK ODPOWIEDZI w limicie czasu.")
+      CMLogger.log("tmutil \(command): NO ANSWER within the time limit.")
       return false
     }
     if !direct.succeeded {
-      CMLogger.log("tmutil \(command): kod \(direct.exitCode) \(shortError(direct))")
+      CMLogger.log("tmutil \(command): exit code \(direct.exitCode) \(shortError(direct))")
     }
     return direct.succeeded
   }
 
   private static func shortError(_ result: ProcessResult) -> String {
     let text = (result.stderr + " " + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
-    return text.isEmpty ? "(bez komunikatu)" : text.replacingOccurrences(of: "\n", with: " ")
+    return text.isEmpty ? "(no message)" : text.replacingOccurrences(of: "\n", with: " ")
   }
 }

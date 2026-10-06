@@ -1,51 +1,52 @@
 import Foundation
 
-/// Czekanie, az rclone wysle zaleglosc, ZANIM ruszy `hdiutil attach`.
+/// Waiting for rclone to upload the backlog BEFORE `hdiutil attach` starts.
 ///
-/// Do 01.10.2026 `attach()` czekal na pusta kolejke sztywne 120 s. To starcza
-/// przy zwyklym podpieciu, ale nie po restarcie Maca bez `prepare-shutdown`:
-/// przy `--vfs-write-back 600s` w buforze zostaje wtedy ~10 min zapisow
-/// (01.10 - ~19 GB, ~600 pasm). Zmierzone tego dnia: rclone wczytywal brudny
-/// cache 15:32-15:36, wysylal 15:37-15:42 (~120 pasm/min), a 120 s minelo
-/// w polowie. Pierwsze `hdiutil attach` ruszylo o 15:39 w pelnej wysylce,
-/// otworzylo plik blokady i WISIALO 5 min, po czym padlo z "image not
-/// recognized"; druga proba padla po 90 s, trzecia - juz w ciszy - przeszla
-/// w 15 s. Time Machine stal bez celu 17 min, a czujka krzyczala AWARIA.
+/// Until 01.10.2026 `attach()` waited a fixed 120 s for an empty queue. That is
+/// enough for an ordinary attach, but not after a Mac restart without
+/// `prepare-shutdown`: with `--vfs-write-back 600s` about 10 min of writes are
+/// left in the buffer (01.10 - ~19 GB, ~600 bands). Measured that day: rclone
+/// read the dirty cache 15:32-15:36, uploaded 15:37-15:42 (~120 bands/min), and
+/// the 120 s ran out halfway through. The first `hdiutil attach` started at
+/// 15:39 in the middle of the full upload, opened the lock file and HUNG for
+/// 5 min, then failed with "image not recognized"; the second attempt failed
+/// after 90 s, the third - by then in quiet - succeeded in 15 s. Time Machine
+/// sat without a destination for 17 min, and the monitor was shouting FAILURE.
 ///
-/// Sztywny dluzszy limit nie jest odpowiedzia: przy wyczerpanym dobowym
-/// limicie Google kolejka nie zejdzie wcale i kazde podpiecie placilo by go
-/// w calosci. Czekamy wiec tak dlugo, jak wysylka ROBI POSTEP, a poddajemy
-/// sie, gdy przez `stallTimeout` liczba niewyslanych pozycji nie spadla
-/// ponizej dotychczasowego minimum. `maxTotal` to twardy sufit - launchd
-/// czeka na ten proces, a obraz bez podpiecia to Time Machine bez celu.
+/// A longer fixed limit is not the answer: with Google's daily limit exhausted
+/// the queue will not drain at all, and every attach would pay the whole limit.
+/// So we wait as long as the upload IS MAKING PROGRESS, and give up when for
+/// `stallTimeout` the number of unsent items has not dropped below its minimum
+/// so far. `maxTotal` is a hard ceiling - launchd waits for this process, and
+/// an image that is not attached means Time Machine has no destination.
 public enum UploadDrain {
 
   public static let defaultStallTimeout: TimeInterval = 120
-  /// 20 min: zaleglosc z 01.10 (~19 GB) zeszla w ~6 min, wiec to trzy razy
-  /// tyle. Wiecej i tak nie ma sensu - kolejka, ktora rosnie szybciej, niz
-  /// schodzi, to juz nie rozruch, tylko zator, i zglosi go dozorca.
+  /// 20 min: the backlog of 01.10 (~19 GB) drained in ~6 min, so this is three
+  /// times that. More makes no sense anyway - a queue that grows faster than it
+  /// drains is no longer a start-up but a jam, and the watchdog will report it.
   public static let defaultMaxTotal: TimeInterval = 1200
   public static let defaultPoll: TimeInterval = 5
-  /// Co ile ponawiamy przesuniecie terminow wysylki. Po starcie rclone
-  /// wczytuje brudny cache pasmo po pasmie (01.10: cztery minuty) i kazde
-  /// dostaje termin `writeBackSeconds` w przod - jedno przesuniecie na
-  /// poczatku nie obejmie tych wczytanych pozniej.
+  /// How often we repeat moving the upload deadlines forward. After start-up
+  /// rclone reads the dirty cache band by band (01.10: four minutes) and each
+  /// one gets a deadline `writeBackSeconds` ahead - a single move at the start
+  /// would not cover the ones read later.
   public static let defaultExpiryInterval: TimeInterval = 60
 
   public enum Outcome: Equatable {
-    /// Kolejka pusta - mozna montowac.
+    /// Queue empty - safe to mount.
     case idle
-    /// Przez `stallTimeout` brak postepu.
+    /// No progress for `stallTimeout`.
     case stalled(unsent: Int)
-    /// Postep byl, ale nie zdazyl przed `maxTotal`.
+    /// There was progress, but it did not finish before `maxTotal`.
     case timedOut(unsent: Int)
-    /// rclone nie odpowiadal przez caly `stallTimeout`.
+    /// rclone did not answer for the whole `stallTimeout`.
     case noAnswer
   }
 
-  /// `unsent` zwraca liczbe niewyslanych pozycji albo `nil`, gdy rclone nie
-  /// odpowiedzial. Brak odpowiedzi nie jest postepem: liczy sie do
-  /// `stallTimeout` tak samo jak stojaca kolejka.
+  /// `unsent` returns the number of unsent items, or `nil` when rclone did not
+  /// answer. No answer is not progress: it counts towards `stallTimeout` just
+  /// like a queue that is standing still.
   public static func wait(
     stallTimeout: TimeInterval = defaultStallTimeout,
     maxTotal: TimeInterval = defaultMaxTotal,

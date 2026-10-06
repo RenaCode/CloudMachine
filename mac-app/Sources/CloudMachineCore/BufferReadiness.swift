@@ -1,38 +1,39 @@
 import Foundation
 
-/// Kiedy bufor jest na tyle gotowy, zeby podpiac na nim obraz.
+/// When the buffer is ready enough to attach the image on it.
 ///
-/// Wydzielone z `attach-image`, zeby dalo sie sprawdzic testem bez montowania
-/// czegokolwiek - tak samo jak `CooldownGate` i `TimeMachineStatus`.
+/// Split out of `attach-image` so that it can be tested without mounting
+/// anything - just like `CooldownGate` and `TimeMachineStatus`.
 public enum BufferReadiness {
-  /// Ile czekac na gotowy bufor, zanim uznamy to za awarie.
+  /// How long to wait for a ready buffer before we treat it as a failure.
   ///
-  /// Dwie minuty wystarczaly, dopoki bufor startowal pusty. Po nieczystym
-  /// zamknieciu jest inaczej: 13 wrz 2026 rclone wczytywal po starcie 225
-  /// brudnych pozycji (9,4 GB), montowanie stanelo o 07:56:30, a czekanie
-  /// poddalo sie o 07:56:20 - dziesiec sekund za wczesnie. Time Machine
-  /// zostal bez celu az do nastepnego tykniecia launchd, czyli na 15 minut,
-  /// i nikt sie o tym nie dowiedzial poza kodem wyjscia, ktorego nikt nie czyta.
+  /// Two minutes were enough as long as the buffer started empty. After an
+  /// unclean shutdown it is different: on 13 Sep 2026 rclone read 225 dirty
+  /// items (9.4 GB) after start-up, the mount came up at 07:56:30, and the wait
+  /// gave up at 07:56:20 - ten seconds too early. Time Machine was left without
+  /// a destination until the next launchd tick, i.e. for 15 minutes, and nobody
+  /// found out except through an exit code that nobody reads.
   ///
-  /// Czekanie jest darmowe - `attach` na juz podpietym obrazie tylko mowi
-  /// "Juz podpiete" - a przegapione okno kosztuje kwadrans bez backupu.
+  /// Waiting is free - `attach` on an already attached image only says
+  /// "Already attached" - while a missed window costs a quarter of an hour
+  /// without a backup.
   public static let defaultTimeout: TimeInterval = 900
 
-  /// Co ile odpytywac.
+  /// How often to poll.
   public static let defaultPoll: TimeInterval = 2
 
-  /// Samo montowanie nie wystarczy.
+  /// The mount alone is not enough.
   ///
-  /// rclone wystawia montowanie, ZANIM wczyta brudny cache, wiec przez chwile
-  /// katalog jest pusty. Podpiecie odpadloby wtedy na "Brak obrazu" - czyli na
-  /// tym samym wyscigu, tyle ze o krok pozniej.
+  /// rclone exposes the mount BEFORE it reads the dirty cache, so for a while
+  /// the directory is empty. The attach would then fail with "No image" - that
+  /// is, on the same race, just one step later.
   public static func isReady(mounted: Bool, imageVisible: Bool) -> Bool {
     mounted && imageVisible
   }
 
-  /// Czeka na gotowosc bufora. Zwraca `true`, jesli sie doczekal.
+  /// Waits for the buffer to become ready. Returns `true` if it did.
   ///
-  /// Zegar i uspienie sa wstrzykiwane, zeby test nie musial czekac naprawde.
+  /// The clock and sleep are injected so that a test does not have to really wait.
   public static func wait(
     timeout: TimeInterval = defaultTimeout,
     poll: TimeInterval = defaultPoll,

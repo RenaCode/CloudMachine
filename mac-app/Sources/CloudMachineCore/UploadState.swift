@@ -1,60 +1,61 @@
 import Foundation
 
-/// Odpowiedz na jedyne pytanie, ktore uzytkownik naprawde zadaje: czy kopia
-/// dolatuje na Google Drive, a jesli nie - dlaczego i czy trzeba cos zrobic.
+/// The answer to the only question the user really asks: is the backup
+/// reaching Google Drive, and if not - why, and do I have to do something.
 ///
-/// Powod istnienia: dotychczas interfejs pokazywal liczniki (kolejka, bledy,
-/// rozmiar bufora) i surowy dziennik. Z jednego i drugiego da sie wyczytac
-/// odpowiedz, ale trzeba wiedziec, czego szukac - a przy zatorze 12 wrzesnia
-/// 2026 nie wyczytal jej nikt. Liczby opisuja stan, nie tlumacza go.
+/// Reason to exist: until now the interface showed counters (queue, errors,
+/// buffer size) and the raw log. The answer can be read from both, but you have
+/// to know what to look for - and during the jam of 12 September 2026 nobody
+/// read it. Numbers describe the state, they do not explain it.
 ///
-/// Rozroznienie, ktore najbardziej tu wazy: **limit dobowy mija sam, brak
-/// miejsca nie**. Jedno znaczy "poczekaj", drugie "zrob cos". Wygladaja
-/// podobnie w kazdym liczniku i roznia sie wszystkim, co z nich wynika.
+/// The distinction that matters most here: **the daily limit passes by itself,
+/// lack of space does not**. One means "wait", the other "do something". They
+/// look alike in every counter and differ in everything that follows from them.
 public enum UploadState: Equatable, Sendable {
 
-  /// Nie ma polaczenia z Dyskiem - kopie zapisuja sie tylko lokalnie.
+  /// No connection to Drive - backups are only written locally.
   case mountDown
-  /// Dysk pelny. NIE minie samo.
+  /// Drive is full. It will NOT pass by itself.
   case driveFull
-  /// rclone odpuscil te pliki. Istnieja wylacznie na tym Macu.
+  /// rclone gave up on these files. They exist only on this Mac.
   case failedFiles(Int)
-  /// Bufor zapchany samymi niewyslanymi danymi.
+  /// Buffer clogged with nothing but unsent data.
   case bufferFull
-  /// Dobowy limit zapisu Google wyczerpany. Mija SAM.
+  /// Google's daily write limit is exhausted. It passes BY ITSELF.
   case dailyQuotaExhausted
-  /// Wysylka idzie.
+  /// Upload is moving.
   case flowing(queued: Int)
-  /// Nic nie czeka - wszystko jest na Dysku.
+  /// Nothing waiting - everything is on Drive.
   case upToDate
-  /// Nie udalo sie odczytac kolejki - stan wysylki jest NIEZNANY.
+  /// The queue could not be read - the upload state is UNKNOWN.
   ///
-  /// Trzeci stan obok "dobrze" i "zle", i musi istniec osobno. Wczesniej brak
-  /// odpowiedzi od `rclone rc` konczyl sie podstawieniem zer, z czego wychodzil
-  /// `.upToDate`: przy 386 pasmach w kolejce interfejs pisal "Wszystko wyslane
-  /// na Google Drive". Falszywy spokoj jest gorszy od braku odpowiedzi, bo
-  /// gasi czujke dokladnie wtedy, gdy nikt nie wie, co sie dzieje.
+  /// A third state next to "good" and "bad", and it must exist on its own.
+  /// Previously no answer from `rclone rc` ended with zeros substituted, which
+  /// gave `.upToDate`: with 386 bands in the queue the interface said
+  /// "Everything uploaded to Google Drive". False calm is worse than no answer,
+  /// because it silences the monitor exactly when nobody knows what is going on.
   case queueUnknown
 
-  /// Czy stan wymaga reakcji czlowieka. `false` znaczy "samo sie ulozy",
-  /// a nie "wszystko dobrze" - patrz `dailyQuotaExhausted`.
+  /// Whether the state needs a person to react. `false` means "it will sort
+  /// itself out", not "all good" - see `dailyQuotaExhausted`.
   public var needsAttention: Bool {
     switch self {
     case .mountDown, .driveFull, .failedFiles, .bufferFull: return true
-    // Nieznany stan NIE wola o czlowieka: pojedyncze przekroczenie limitu
-    // czasu zdarza sie przy obciazonym rclone i mija samo. Gdy nie mija,
-    // alarmuje `backup-health` - od trwalosci jest on, nie kolor karty.
+    // An unknown state does NOT call for a person: a single timeout happens
+    // when rclone is under load and passes by itself. When it does not pass,
+    // `backup-health` raises the alarm - persistence is its job, not the
+    // card's colour.
     case .dailyQuotaExhausted, .flowing, .upToDate, .queueUnknown: return false
     }
   }
 
-  /// Czy stan jest NOMINALNY.
+  /// Whether the state is NOMINAL.
   ///
-  /// Rozne od `needsAttention` i celowo: przy wyczerpanym limicie dobowym nikt
-  /// nie musi nic robic, ale pasma leza wtedy wylacznie na tym Macu - a pasek
-  /// menu nie ma prawa swiecic wtedy na zielono. Audyt wrzesniowy zaczal sie
-  /// dokladnie od tego, ze "Gotowe" wyswietlalo sie przy pasmach, ktore nigdy
-  /// nie dolecialy na Dysk.
+  /// Different from `needsAttention`, on purpose: with the daily limit
+  /// exhausted nobody has to do anything, but the bands then sit only on this
+  /// Mac - and the menu bar has no business glowing green then. The September
+  /// audit started exactly from "Ready" being shown for bands that never made
+  /// it to Drive.
   public var isNominal: Bool {
     switch self {
     case .flowing, .upToDate: return true
@@ -63,101 +64,88 @@ public enum UploadState: Equatable, Sendable {
     }
   }
 
-  /// Czy kopia faktycznie dolatuje na Dysk w tej chwili.
+  /// Whether the backup is actually reaching Drive right now.
   public var isMovingData: Bool {
     if case .flowing = self { return true }
     return false
   }
 
-  /// Etykieta nad naglowkiem karty: co uzytkownik ma z tym zrobic.
+  /// Label above the card heading: what the user should do about it.
   ///
-  /// Wczesniej interfejs skladal ja z dwoch bool-i (`needsAttention`,
-  /// `isNominal`), wiec umial wyrazic tylko trzy warianty i kazdy nowy stan
-  /// musial sie do ktoregos wcisnac. `queueUnknown` nie pasuje do zadnego:
-  /// nie jest awaria, nie jest porzadkiem i nie jest tez "minie samo", bo nikt
-  /// nie wie, czy jest co przeczekiwac.
+  /// Previously the interface built it from two bools (`needsAttention`,
+  /// `isNominal`), so it could express only three variants and every new state
+  /// had to squeeze into one of them. `queueUnknown` fits none: it is not a
+  /// failure, it is not fine, and it is not "passes by itself" either, because
+  /// nobody knows whether there is anything to wait out.
   public var badge: String {
     switch self {
-    case .mountDown, .driveFull, .failedFiles, .bufferFull: return "WYMAGA REAKCJI"
-    case .dailyQuotaExhausted: return "MINIE SAMO — NIC NIE RÓB"
-    case .queueUnknown: return "NIE WIADOMO — SPRAWDŹ ZA CHWILĘ"
-    case .flowing, .upToDate: return "W PORZĄDKU"
+    case .mountDown, .driveFull, .failedFiles, .bufferFull: return L10n.tr("ACTION NEEDED")
+    case .dailyQuotaExhausted: return L10n.tr("WILL PASS BY ITSELF — DO NOTHING")
+    case .queueUnknown: return L10n.tr("UNKNOWN — CHECK AGAIN SHORTLY")
+    case .flowing, .upToDate: return L10n.tr("ALL GOOD")
     }
   }
 
-  /// Jedno zdanie do paska i naglowka karty.
+  /// One sentence for the menu bar and the card heading.
   public var headline: String {
     switch self {
-    case .mountDown: return "Wysyłka nie działa"
-    case .driveFull: return "Wysyłka stoi — brak miejsca na Google Drive"
-    case .failedFiles(let count): return "Nie wysłano \(count) fragmentów kopii"
-    case .bufferFull: return "Wysyłka nie nadąża za zapisem"
-    case .dailyQuotaExhausted: return "Wysyłka wstrzymana — dobowy limit Google"
-    case .flowing(let queued): return "Wysyłanie na Google Drive — \(queued) w kolejce"
-    case .upToDate: return "Wszystko wysłane na Google Drive"
-    case .queueUnknown: return "Nie wiadomo, co czeka w kolejce"
+    case .mountDown: return L10n.tr("Upload is not working")
+    case .driveFull: return L10n.tr("Upload stopped — no space left on Google Drive")
+    case .failedFiles(let count): return L10n.tr("%@ backup fragments not uploaded", "\(count)")
+    case .bufferFull: return L10n.tr("Upload cannot keep up with writes")
+    case .dailyQuotaExhausted: return L10n.tr("Upload paused — Google daily limit")
+    case .flowing(let queued): return L10n.tr("Uploading to Google Drive — %@ queued", "\(queued)")
+    case .upToDate: return L10n.tr("Everything uploaded to Google Drive")
+    case .queueUnknown: return L10n.tr("Unknown what is waiting in the queue")
     }
   }
 
-  /// Co to znaczy i co z tym zrobic. Pisane do czytania, nie do diagnozy -
-  /// komu potrzebne liczby, ten ma `cloudmachine-agent drive-status`.
+  /// What it means and what to do about it. Written for reading, not for
+  /// diagnosis - whoever needs numbers has `cloudmachine-agent drive-status`.
   public var explanation: String {
     switch self {
     case .mountDown:
-      return """
-        Nie ma połączenia z Google Drive, więc kopie powstają tylko na tym Macu. \
-        Jeśli to nie minie samo w kilka minut, sprawdź sieć i połączenie z Dyskiem.
-        """
+      return L10n.tr(
+        "There is no connection to Google Drive, so backups are only made on this Mac. If this does not pass by itself within a few minutes, check the network and the connection to Drive."
+      )
     case .driveFull:
-      return """
-        Na Google Drive nie ma już miejsca. To NIE minie samo — trzeba zwolnić \
-        miejsce na Dysku. Do tego czasu Time Machine jest wstrzymany, żeby nie \
-        zapełnić dysku tego Maca.
-        """
+      return L10n.tr(
+        "There is no space left on Google Drive. This will NOT pass by itself — you need to free up space on Drive. Until then Time Machine is paused, so that it does not fill up this Mac's disk."
+      )
     case .failedFiles(let count):
-      return """
-        \(count) fragmentów kopii nie udało się wysłać i rclone przestał próbować. \
-        Te fragmenty istnieją wyłącznie na tym Macu, więc kopia na Dysku jest \
-        niekompletna. To wymaga sprawdzenia.
-        """
+      return L10n.tr(
+        "%@ backup fragments could not be uploaded and rclone stopped trying. These fragments exist only on this Mac, so the backup on Drive is incomplete. This needs checking.",
+        "\(count)")
     case .bufferFull:
-      return """
-        Time Machine pisze szybciej, niż idzie wysyłka, i bufor się zapełnił. \
-        Backup zostanie wstrzymany, aż wysyłka nadgoni — to zabezpieczenie przed \
-        zapełnieniem dysku, nie awaria.
-        """
+      return L10n.tr(
+        "Time Machine is writing faster than the upload goes, and the buffer has filled up. The backup will be paused until the upload catches up — this is a safeguard against filling up the disk, not a failure."
+      )
     case .dailyQuotaExhausted:
-      return """
-        Google przyjmuje 750 GB na dobę i ten limit został wyczerpany. \
-        Nie trzeba nic robić: limit odnawia się sam, zwykle w kilka godzin. \
-        Kopie Time Machine powstają przez ten czas normalnie i czekają w buforze — \
-        wyślą się, gdy tylko Google znów zacznie przyjmować.
-        """
+      return L10n.tr(
+        "Google accepts 750 GB per day and that limit has been used up. There is nothing to do: the limit renews by itself, usually within a few hours. Time Machine backups are made normally in the meantime and wait in the buffer — they will be uploaded as soon as Google starts accepting again."
+      )
     case .flowing(let queued):
-      return "\(queued) fragmentów kopii czeka w kolejce i leci na Dysk."
+      return L10n.tr("%@ backup fragments are queued and on their way to Drive.", "\(queued)")
     case .upToDate:
-      return "Nic nie czeka w kolejce — kopia na Google Drive jest kompletna."
+      return L10n.tr("Nothing is waiting in the queue — the backup on Google Drive is complete.")
     case .queueUnknown:
-      return """
-        rclone nie odpowiedział na pytanie o kolejkę, więc nie wiadomo, ile kopii \
-        czeka jeszcze na wysłanie. To nie znaczy, że coś się zepsuło — pod obciążeniem \
-        odpowiedź potrafi się spóźnić. Znaczy tylko tyle, że w tej chwili nikt tego \
-        nie wie. Jeśli utrzymuje się dłużej, zgłosi to kontrola cyklu backupu.
-        """
+      return L10n.tr(
+        "rclone did not answer the question about the queue, so it is unknown how many backups are still waiting to be uploaded. This does not mean something broke — under load the answer can be late. It only means that right now nobody knows. If it persists, the backup cycle check will report it."
+      )
     }
   }
 
-  /// Sklada stan z pojedynczych faktow.
+  /// Builds the state from individual facts.
   ///
-  /// Kolejnosc NIE jest dowolna - od najtwardszego faktu do najmiekszego.
-  /// `failedFiles` wyprzedza limit dobowy, bo "rclone odpuscil" znaczy, ze
-  /// kopia jest niekompletna TERAZ, a limit znaczy tylko, ze poczeka.
-  /// `queueKnown` NIE ma wartosci domyslnej i to jest celowe. Wszystkie
-  /// liczniki ponizej pochodza z `vfs/stats`; gdy rclone nie odpowie, wolajacy
-  /// ma pod reka same zera i zadne z nich nie znaczy "zero". Wymuszony
-  /// argument zmusza kazde miejsce w kodzie do odpowiedzi na pytanie, ktore
-  /// wczesniej przemilczano - stad brala sie plansza "Wszystko wyslane" przy
-  /// pelnej kolejce.
+  /// The order is NOT arbitrary - from the hardest fact to the softest.
+  /// `failedFiles` comes before the daily limit, because "rclone gave up" means
+  /// the backup is incomplete NOW, while the limit only means it will wait.
+  /// `queueKnown` has NO default value, and that is deliberate. All counters
+  /// below come from `vfs/stats`; when rclone does not answer, the caller has
+  /// only zeros at hand and none of them means "zero". The required argument
+  /// forces every place in the code to answer the question that used to be
+  /// skipped - that is where the "Everything uploaded" screen with a full queue
+  /// came from.
   public static func from(
     mounted: Bool,
     queueKnown: Bool,
@@ -170,10 +158,11 @@ public enum UploadState: Equatable, Sendable {
   ) -> UploadState {
     if !mounted { return .mountDown }
     if driveFull { return .driveFull }
-    // Przed kazdym stanem liczonym z licznikow, bo bez odczytu kolejki nie da
-    // sie odroznic "nic nie czeka" od "nie wiem, co czeka". Limit dobowy tez
-    // tu przepada, i slusznie: skoro nie wiadomo, czy rclone czegos nie
-    // porzucil, to "poczekaj, minie samo" nie jest uczciwa odpowiedzia.
+    // Before every state computed from counters, because without reading the
+    // queue "nothing is waiting" cannot be told from "I do not know what is
+    // waiting". The daily limit is lost here too, and rightly so: when it is
+    // unknown whether rclone has abandoned something, "wait, it will pass" is
+    // not an honest answer.
     if !queueKnown { return .queueUnknown }
     if failedFiles > 0 { return .failedFiles(failedFiles) }
     if bufferOutOfSpace { return .bufferFull }

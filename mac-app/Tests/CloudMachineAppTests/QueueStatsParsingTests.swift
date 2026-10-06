@@ -2,14 +2,14 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Parsowanie odpowiedzi interfejsu sterujacego rclone. Kazdy przypadek tutaj
-/// to inny sposob, na jaki "nie wiem" zamienialo sie w "zero" - a "zero"
-/// czytalo sie na ekranie jako "Wszystko wyslane na Google Drive".
+/// Parsing responses of rclone's remote control interface. Each case here is a
+/// different way in which "I do not know" turned into "zero" - and "zero" read
+/// on screen as "Everything uploaded to Google Drive".
 final class QueueStatsParsingTests: XCTestCase {
 
   // MARK: - vfs/stats
 
-  private let pelnaOdpowiedz = """
+  private let fullResponse = """
     {
       "diskCache": {
         "bytesUsed": 12345678,
@@ -23,8 +23,8 @@ final class QueueStatsParsingTests: XCTestCase {
     }
     """
 
-  func testPelnaOdpowiedzDajeLiczniki() throws {
-    let stats = try XCTUnwrap(DriveBufferService.parseQueueStats(pelnaOdpowiedz))
+  func testFullResponseGivesCounters() throws {
+    let stats = try XCTUnwrap(DriveBufferService.parseQueueStats(fullResponse))
     XCTAssertEqual(stats.uploadsInProgress, 2)
     XCTAssertEqual(stats.uploadsQueued, 386)
     XCTAssertEqual(stats.files, 40)
@@ -33,19 +33,20 @@ final class QueueStatsParsingTests: XCTestCase {
     XCTAssertFalse(stats.outOfSpace)
   }
 
-  /// Sedno poprawki. Odpowiedz bez sekcji `diskCache` wpadala na `?? json`,
-  /// gdzie zadnego z licznikow nie ma, a brakujacy klucz dawal 0 - wychodzil
-  /// z tego komplet zer, czyli `queueKnown == true` i "Wszystko wyslane".
-  func testOdpowiedzBezDiskCacheToBrakWiedzy() {
-    let bezSekcji = """
+  /// The heart of the fix. A response without the `diskCache` section fell
+  /// through to `?? json`, where none of the counters are, and a missing key
+  /// gave 0 - the result was a full set of zeros, i.e. `queueKnown == true` and
+  /// "Everything uploaded".
+  func testResponseWithoutDiskCacheMeansNotKnowing() {
+    let withoutSection = """
       { "metadataCache": { "dirs": 1, "files": 40 } }
       """
-    XCTAssertNil(DriveBufferService.parseQueueStats(bezSekcji))
+    XCTAssertNil(DriveBufferService.parseQueueStats(withoutSection))
   }
 
-  /// Ten sam blad o jeden poziom nizej: sekcja jest, ale licznika w niej nie ma.
-  func testBrakujacyLicznikToBrakWiedzy() {
-    let bezBledow = """
+  /// The same bug one level down: the section is there, but the counter is not.
+  func testMissingCounterMeansNotKnowing() {
+    let withoutErrors = """
       {
         "diskCache": {
           "bytesUsed": 1, "files": 40,
@@ -54,19 +55,19 @@ final class QueueStatsParsingTests: XCTestCase {
       }
       """
     XCTAssertNil(
-      DriveBufferService.parseQueueStats(bezBledow),
-      "brak erroredFiles nie znaczy 'zero bledow'")
+      DriveBufferService.parseQueueStats(withoutErrors),
+      "missing erroredFiles does not mean 'zero errors'")
   }
 
-  func testPustaOdpowiedzToBrakWiedzy() {
+  func testEmptyResponseMeansNotKnowing() {
     XCTAssertNil(DriveBufferService.parseQueueStats(""))
     XCTAssertNil(DriveBufferService.parseQueueStats("connection refused"))
   }
 
-  /// `outOfSpace` to jedyne pole, ktorego brak wolno nadrobic domyslna
-  /// wartoscia - to flaga, a nie licznik.
-  func testBrakFlagiOutOfSpaceNiePsujeOdczytu() throws {
-    let bezFlagi = """
+  /// `outOfSpace` is the only field whose absence may be made up with a default
+  /// value - it is a flag, not a counter.
+  func testMissingOutOfSpaceFlagDoesNotBreakTheReading() throws {
+    let withoutFlag = """
       {
         "diskCache": {
           "bytesUsed": 1, "erroredFiles": 0, "files": 2,
@@ -74,23 +75,23 @@ final class QueueStatsParsingTests: XCTestCase {
         }
       }
       """
-    let stats = try XCTUnwrap(DriveBufferService.parseQueueStats(bezFlagi))
+    let stats = try XCTUnwrap(DriveBufferService.parseQueueStats(withoutFlag))
     XCTAssertFalse(stats.outOfSpace)
   }
 
-  // MARK: - Cisza kontra bezczynnosc
+  // MARK: - Quiet versus idle
 
-  func testPustaKolejkaZPorzuconymiPasmamiNieJestCisza() {
+  func testEmptyQueueWithAbandonedBandsIsNotQuiet() {
     let stats = DriveBufferService.QueueStats(
       uploadsInProgress: 0, uploadsQueued: 0, files: 40,
       erroredFiles: 5, bytesUsed: 1024, outOfSpace: false)
-    XCTAssertTrue(stats.isIdle, "rclone faktycznie nic nie robi - hdiutil moze dzialac")
+    XCTAssertTrue(stats.isIdle, "rclone really is doing nothing - hdiutil can work")
     XCTAssertFalse(
       stats.isQuiet,
-      "ale 5 pasm nie dolecialo na Dysk, wiec 'wszystko wyslane' byloby klamstwem")
+      "but 5 bands did not reach Drive, so 'everything uploaded' would be a lie")
   }
 
-  func testPustaKolejkaBezBledowJestCisza() {
+  func testEmptyQueueWithoutErrorsIsQuiet() {
     let stats = DriveBufferService.QueueStats(
       uploadsInProgress: 0, uploadsQueued: 0, files: 40,
       erroredFiles: 0, bytesUsed: 1024, outOfSpace: false)
@@ -98,7 +99,7 @@ final class QueueStatsParsingTests: XCTestCase {
     XCTAssertTrue(stats.isQuiet)
   }
 
-  func testTrwajacaWysylkaToAniCiszaAniBezczynnosc() {
+  func testOngoingUploadIsNeitherQuietNorIdle() {
     let stats = DriveBufferService.QueueStats(
       uploadsInProgress: 1, uploadsQueued: 12, files: 40,
       erroredFiles: 0, bytesUsed: 1024, outOfSpace: false)
@@ -108,8 +109,8 @@ final class QueueStatsParsingTests: XCTestCase {
 
   // MARK: - vfs/queue
 
-  func testKolejkaPomijaPozycjeJuzWysylane() throws {
-    let odpowiedz = """
+  func testQueueSkipsItemsAlreadyUploading() throws {
+    let response = """
       {
         "queue": [
           { "id": 1, "name": "bands/0001", "uploading": false, "expiry": 480.2 },
@@ -118,14 +119,14 @@ final class QueueStatsParsingTests: XCTestCase {
         ]
       }
       """
-    let ids = try XCTUnwrap(DriveBufferService.parseQueueIDs(odpowiedz))
-    XCTAssertEqual(ids, [1, 3], "pozycji juz wysylanej rclone i tak nie przyspieszy")
+    let ids = try XCTUnwrap(DriveBufferService.parseQueueIDs(response))
+    XCTAssertEqual(ids, [1, 3], "rclone will not speed up an item already uploading anyway")
   }
 
-  /// Pusta kolejka i brak odpowiedzi to DWIE ROZNE RZECZY - obie wychodzily
-  /// wczesniej z `expireQueuedUploads()` jako `0`, wiec log milczal dokladnie
-  /// wtedy, gdy terminow NIE przesunieto i drenaz mogl potrwac 10 minut.
-  func testPustaKolejkaToNieToSamoCoBrakOdpowiedzi() {
+  /// An empty queue and no answer are TWO DIFFERENT THINGS - both used to come
+  /// out of `expireQueuedUploads()` as `0`, so the log was silent exactly when
+  /// the deadlines were NOT moved and the drain could take 10 minutes.
+  func testEmptyQueueIsNotTheSameAsNoAnswer() {
     XCTAssertEqual(DriveBufferService.parseQueueIDs(#"{ "queue": [] }"#), [])
     XCTAssertNil(DriveBufferService.parseQueueIDs(""))
     XCTAssertNil(DriveBufferService.parseQueueIDs("{}"))
