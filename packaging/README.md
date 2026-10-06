@@ -9,15 +9,32 @@ and is generated: `.github/workflows/release.yml` fills
 `homebrew/cloudmachine.rb.in` with the version and the DMG's sha256 and pushes
 it to the tap. Edit the template here, never the copy in the tap.
 
-## Cutting a release
+## Releases
 
-1. Bump `mac-app/VERSION` on `main`.
-2. `git tag v$(cat mac-app/VERSION) && git push origin --tags`
+Nothing to do by hand: **every merge to `main` that changes the app is
+released.** "Changes the app" means `mac-app/Sources`, `mac-app/Resources`,
+`Package.swift`/`Package.resolved`, `mac-app/VERSION`, `launchd/`, `config/`
+or the cask template; docs-only and test-only merges are not released.
 
-The workflow refuses a tag that does not match `VERSION`, runs the tests,
-builds a universal (Apple Silicon + Intel) `CloudMachine.app`, publishes
-`CloudMachine-<version>.dmg` with its `.sha256` as a GitHub Release, and
-updates the cask.
+The version number:
+
+- `mac-app/VERSION` is the base. If `v<VERSION>` is not tagged yet, that is the
+  release.
+- Otherwise the patch number goes up from the highest tag of that
+  `major.minor`: 1.3.0 → 1.3.1 → 1.3.2.
+- For a minor or major release, bump `VERSION` in the pull request (e.g. to
+  `1.4.0`).
+- The computed number is written into the build, so `cloudmachine-agent
+  version` and the app report the version they were released as.
+
+Each release runs the tests, builds a universal (Apple Silicon + Intel)
+`CloudMachine.app`, publishes `CloudMachine-<version>.dmg` with its `.sha256`
+as a GitHub Release tagged on the merge commit, and updates the cask. Users
+get it with `brew upgrade`.
+
+**Run workflow** on the Actions tab releases the current `main` the same way,
+for example after a failed run. A `vX.Y.Z` tag pushed by hand releases exactly
+that version.
 
 A pull request that touches the build or the cask runs the same pipeline dry:
 ad-hoc signature, no release, no tap push; the DMG and the rendered cask are
