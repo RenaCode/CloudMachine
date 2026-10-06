@@ -686,7 +686,7 @@ final class BufferGuardDecisionTests: XCTestCase {
     // `first`, not `[0]`: if this assertion failed, the index would abort the
     // WHOLE run with a fatal error instead of reporting one failed test.
     // The exact wording belongs to `BackupHealth`, so only its presence is checked here.
-    XCTAssertFalse(problems.first?.summary.isEmpty ?? true)
+    XCTAssertFalse(problems.first?.summary.isEmpty ?? true)  // TODO(merge): exact BackupHealth text
 
     XCTAssertTrue(
       BackupHealth.unmeasuredLocalDiskProblems(localFreeGB: 400).isEmpty,
