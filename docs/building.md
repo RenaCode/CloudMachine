@@ -60,9 +60,10 @@ on any `L10n.tr` key without a Polish entry. User-facing text goes through
 
 ## Releases
 
-Releases are built by `.github/workflows/release.yml` from a `vX.Y.Z` tag and
-published to Homebrew. The procedure and the one-time setup (signing
-certificate, tap token) are in [`packaging/README.md`](../packaging/README.md).
+Every merge to `main` that changes the app is released automatically by
+`.github/workflows/release.yml` and published to Homebrew. How the version is
+chosen and the one-time setup (signing certificate, tap token) are in
+[`packaging/README.md`](../packaging/README.md).
 
 ## Measurement harnesses
 

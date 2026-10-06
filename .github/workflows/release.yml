@@ -1,14 +1,27 @@
 name: Release
 
-# Tag vX.Y.Z -> universal CloudMachine.app (Apple Silicon + Intel) signed with
-# a STABLE certificate, a .dmg in the GitHub Release and an updated cask in
+# A release: universal CloudMachine.app (Apple Silicon + Intel) signed with a
+# STABLE certificate, a .dmg in the GitHub Release and an updated cask in
 # RenaCode/homebrew-tap (`brew install --cask renacode/tap/cloudmachine`).
+#
+# Continuous delivery: every merge to main that changes what goes into the
+# app (sources, resources, launchd templates, the cask) is released, tagged
+# on that commit. Docs-only and test-only merges are not.
+#
+# Version: mac-app/VERSION is the base. If v<VERSION> is not tagged yet, that
+# is the release; otherwise the patch number goes up from the highest tag of
+# that major.minor (1.3.0 -> 1.3.1 -> 1.3.2). Bump VERSION by hand only for a
+# minor or major release. The computed number is written into the build, so
+# the app reports the version it was released as.
+#
+# Also: "Run workflow" on the Actions tab (same as a merge), and a vX.Y.Z tag
+# pushed by hand, which releases exactly that version.
 #
 # A pull request that changes the build or the cask goes through the same
 # pipeline as a dry run: ad-hoc signature, no release and no tap, artifacts
 # downloadable from the run.
 #
-# Secrets (tag only):
+# Secrets (publishing runs only):
 #   CM_SIGNING_P12_BASE64, CM_SIGNING_P12_PASSWORD - the self-signed
 #     "CloudMachine Release Signing" certificate (see packaging/README.md).
 #     Without it the release does NOT build: an ad-hoc signature changes the
@@ -23,6 +36,18 @@ on:
   push:
     tags:
       - "v*.*.*"
+    branches:
+      - main
+    paths:
+      - "mac-app/VERSION"
+      - "mac-app/Package.swift"
+      - "mac-app/Package.resolved"
+      - "mac-app/Sources/**"
+      - "mac-app/Resources/**"
+      - "launchd/**"
+      - "config/**"
+      - "packaging/homebrew/**"
+  workflow_dispatch:
   pull_request:
     paths:
       - ".github/workflows/release.yml"
@@ -33,28 +58,80 @@ on:
 
 env:
   CM_SIGNING_CERT_NAME: CloudMachine Release Signing
-  IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
+# One release at a time: a VERSION merge and a hand-pushed tag for the same
+# version must not race each other to publish it twice.
+concurrency:
+  group: release-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: false
 
 jobs:
+  # Decides on a cheap Linux runner whether this run publishes, so a VERSION
+  # change that is already released costs no macOS minutes.
+  decide:
+    name: Decide
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      skip: ${{ steps.decide.outputs.skip }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: decide
+        run: |
+          base="$(tr -d '[:space:]' < mac-app/VERSION)"
+          release=false
+          skip=false
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            version="$base"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            release=true
+          elif git ls-remote --exit-code --tags origin "refs/tags/v${base}" >/dev/null; then
+            # Base already released: next patch after the highest tag of
+            # this major.minor. Sorted as versions, not strings (1.3.10 > 1.3.9).
+            minor="${base%.*}"
+            last="$(git ls-remote --tags --refs origin "refs/tags/v${minor}.*" \
+              | sed 's|.*refs/tags/v||' | grep -E "^${minor//./\\.}\.[0-9]+$" | sort -V | tail -1)"
+            version="${minor}.$(( ${last##*.} + 1 ))"
+            release=true
+          else
+            version="$base"
+            release=true
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'${version}' is not a version (X.Y.Z)."
+            exit 1
+          fi
+          if [ "$release" = "true" ] && [[ "$GITHUB_REF" != refs/tags/* ]] \
+            && git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null; then
+            echo "::notice::v${version} already exists - nothing to release."
+            skip=true
+          fi
+          echo "Version: ${version} (release=${release})"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "release=${release}" >> "$GITHUB_OUTPUT"
+          echo "skip=${skip}" >> "$GITHUB_OUTPUT"
+
   release:
     name: Build, release, update tap
+    needs: decide
+    if: needs.decide.outputs.skip != 'true'
     runs-on: macos-14
     permissions:
       contents: write
+    env:
+      IS_RELEASE: ${{ needs.decide.outputs.release }}
+      VERSION: ${{ needs.decide.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Tag matches mac-app/VERSION
-        id: version
-        run: |
-          version="$(tr -d '[:space:]' < mac-app/VERSION)"
-          if [ "$IS_RELEASE" = "true" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} != v${version} from mac-app/VERSION. Bump VERSION or fix the tag."
-            exit 1
-          fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      # The build reads its version from this file; a computed patch release
+      # must report itself as that version, not as the base.
+      - name: Set the release version
+        run: printf '%s\n' "$VERSION" > mac-app/VERSION
 
       - name: swift test
         working-directory: mac-app
@@ -113,14 +190,23 @@ jobs:
             exit 1
           fi
 
+      # `hdiutil create` on GitHub's macOS runners fails now and then with
+      # "Resource busy" - it did on the first v1.3.0 run, after passing three
+      # dry runs. Retried with a growing pause; a real failure still fails.
       - name: Package .dmg
         working-directory: mac-app
-        run: swift run cloudmachine-agent make-dmg
+        run: |
+          for attempt in 1 2 3 4 5; do
+            swift run cloudmachine-agent make-dmg && exit 0
+            echo "::warning::make-dmg attempt ${attempt} failed; retrying"
+            sleep $((attempt * 10))
+          done
+          exit 1
 
       - name: Render cask
         id: cask
         run: |
-          version="${{ steps.version.outputs.version }}"
+          version="${{ env.VERSION }}"
           dmg="mac-app/build/CloudMachine-${version}.dmg"
           sha256="$(shasum -a 256 "$dmg" | cut -d' ' -f1)"
           sed -e "s/__VERSION__/${version}/" -e "s/__SHA256__/${sha256}/" \
@@ -148,7 +234,7 @@ jobs:
         if: env.IS_RELEASE != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: cloudmachine-${{ steps.version.outputs.version }}-dry-run
+          name: cloudmachine-${{ env.VERSION }}-dry-run
           path: |
             mac-app/build/*.dmg
             mac-app/build/*.sha256
@@ -158,6 +244,9 @@ jobs:
         if: env.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          # Creates the tag on this commit when the run did not start from one.
+          tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
           files: |
             mac-app/build/*.dmg
             mac-app/build/*.sha256
@@ -194,5 +283,5 @@ jobs:
           if git diff --cached --quiet; then
             echo "Cask unchanged."; exit 0
           fi
-          git commit -m "cloudmachine ${{ steps.version.outputs.version }}"
+          git commit -m "cloudmachine ${{ env.VERSION }}"
           git push
