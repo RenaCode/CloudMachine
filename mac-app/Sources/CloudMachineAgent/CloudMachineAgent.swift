@@ -7,7 +7,9 @@ struct CloudMachineAgent: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "cloudmachine-agent",
     abstract:
-      "CloudMachine - weryfikacja, konfiguracja Google Drive i instalacja. Wolane przez launchd na harmonogramie, albo recznie z Terminala.",
+      L10n.tr(
+        "CloudMachine - verification, Google Drive setup and installation. Called by launchd on a schedule, or by hand from Terminal."
+      ),
     subcommands: [
       InstallLaunchd.self,
       ConfigureRemote.self,
@@ -15,7 +17,7 @@ struct CloudMachineAgent: AsyncParsableCommand {
       BuildApp.self,
       MakeDmg.self,
       SetupSigningCert.self,
-      // Warstwa Google Drive - zastapila skrypty z gdrive/.
+      // The Google Drive layer - replaced the scripts in gdrive/.
       InstallRclone.self,
       InstallFuse.self,
       MountDrive.self,
@@ -32,31 +34,31 @@ struct CloudMachineAgent: AsyncParsableCommand {
   )
 }
 
-/// Wspolny kontekst (config + klucz tej maszyny) ladowany przez kazda
-/// subkomende, ktora tego potrzebuje - jedno miejsce do obslugi
-/// "config uszkodzony" zamiast powtarzania tego w kazdym pliku.
+/// Shared context (config + this machine's key) loaded by every subcommand
+/// that needs it - one place to handle "config corrupted" instead of
+/// repeating it in every file.
 enum CLIContext {
   static func load() async -> (config: MachinesConfig, machineKey: String) {
     let outcome = ConfigStore.loadOrInitialize()
-    // PRZERYWAMY, nie ostrzegamy. Wczesniej ten sam komunikat - "oryginal
-    // zachowany na dysku z kopia zapasowa obok" - szedl takze wtedy, gdy
-    // `backupCorruptFile()` zwrocilo `nil`, czyli gdy zadnej kopii nie bylo.
-    // Praca na pustej konfiguracji konczy sie nadpisaniem jedynego egzemplarza
-    // przy pierwszym zapisie, a tego juz nie da sie cofnac.
+    // We ABORT, we do not warn. Previously the same message - "original kept
+    // on disk with a backup copy next to it" - was also printed when
+    // `backupCorruptFile()` returned `nil`, i.e. when there was no copy at all.
+    // Working on an empty configuration ends with the only copy being
+    // overwritten on the first save, and that can no longer be undone.
     guard let config = outcome.config else {
       CMLogger.log(
         """
-        PRZERWANO: plik konfiguracyjny \(CMPaths.configPath.path) jest uszkodzony \
-        (\(outcome.corruption?.localizedDescription ?? "nieznany blad")) i NIE UDALO SIE \
-        odlozyc jego kopii. Z pusta konfiguracja w pamieci pierwszy zapis nadpisalby \
-        jedyny egzemplarz. Skopiuj ten plik gdzie indziej, napraw go albo usun - \
-        i uruchom polecenie ponownie.
+        ABORTED: the configuration file \(CMPaths.configPath.path) is corrupted \
+        (\(outcome.corruption?.localizedDescription ?? "unknown error")) and a copy of it \
+        COULD NOT be set aside. With an empty configuration in memory the first save \
+        would overwrite the only copy. Copy this file somewhere else, fix it or delete it - \
+        and run the command again.
         """)
       exit(1)
     }
     if case .corruptButBackedUp(_, let backup, let error) = outcome {
       CMLogger.log(
-        "BLAD: plik konfiguracyjny jest uszkodzony (\(error.localizedDescription)) - uzywam pustej konfiguracji w pamieci, oryginal skopiowany do \(backup.path)."
+        "ERROR: the configuration file is corrupted (\(error.localizedDescription)) - using an empty configuration in memory, original copied to \(backup.path)."
       )
     }
     let key = await MachineIdentity.currentKey()

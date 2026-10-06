@@ -1,12 +1,13 @@
 import ArgumentParser
+import CloudMachineCore
 import Foundation
 
-/// Port `scripts/make-dmg.sh` - pakuje zbudowane `CloudMachine.app` (patrz
-/// `build-app`) do instalatora `.dmg` z przeciagalnym skrotem do `/Applications`.
+/// Port of `scripts/make-dmg.sh` - packs the built `CloudMachine.app` (see
+/// `build-app`) into a `.dmg` installer with a draggable shortcut to `/Applications`.
 struct MakeDmg: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "make-dmg",
-    abstract: "Pakuje build/CloudMachine.app do pliku build/CloudMachine-<wersja>.dmg."
+    abstract: L10n.tr("Packs build/CloudMachine.app into build/CloudMachine-<version>.dmg.")
   )
 
   func run() async throws {
@@ -22,11 +23,13 @@ struct MakeDmg: AsyncParsableCommand {
     let fm = FileManager.default
 
     guard fm.fileExists(atPath: appBundle.path) else {
-      print("BLAD: brak \(appBundle.path) - uruchom najpierw 'cloudmachine-agent build-app'")
+      print(
+        L10n.tr(
+          "ERROR: %@ is missing - run 'cloudmachine-agent build-app' first", appBundle.path))
       throw ExitCode.failure
     }
 
-    print("==> Przygotowuje folder staging")
+    print(L10n.tr("==> Preparing the staging folder"))
     try? fm.removeItem(at: stagingDir)
     try? fm.removeItem(at: dmgPath)
     try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
@@ -35,7 +38,7 @@ struct MakeDmg: AsyncParsableCommand {
       at: stagingDir.appendingPathComponent("Applications"),
       withDestinationURL: URL(fileURLWithPath: "/Applications"))
 
-    print("==> Tworze \(dmgPath.path)")
+    print(L10n.tr("==> Creating %@", dmgPath.path))
     let status = try await InteractiveProcess.run(
       "/usr/bin/hdiutil",
       [
@@ -44,19 +47,18 @@ struct MakeDmg: AsyncParsableCommand {
       ])
     try? fm.removeItem(at: stagingDir)
     guard status == 0 else {
-      print("BLAD: hdiutil zakonczyl sie kodem \(status).")
+      print(L10n.tr("ERROR: hdiutil exited with code %@.", "\(status)"))
       throw ExitCode.failure
     }
 
-    print("==> Gotowe: \(dmgPath.path)")
+    print(L10n.tr("==> Done: %@", dmgPath.path))
+    print("")
+    print(L10n.tr("On first launch (the app is not signed with an Apple Developer account):"))
+    print(L10n.tr("1. Open %@ and drag CloudMachine.app to Applications.", dmgPath.path))
     print(
-      """
-
-      Przy pierwszym uruchomieniu (appka niepodpisana kontem Apple Developer):
-      1. Otworz \(dmgPath.path) i przeciagnij CloudMachine.app do Applications.
-      2. W Finderze kliknij CloudMachine.app PRAWYM przyciskiem -> Otworz -> Otworz
-         (samo dwuklikniecie pokaze blokade Gatekeepera "niezidentyfikowany deweloper").
-      3. Kolejne uruchomienia dzialaja juz normalnie, dwuklikiem.
-      """)
+      L10n.tr(
+        "2. In Finder, RIGHT-click CloudMachine.app -> Open -> Open\n   (a plain double-click shows the Gatekeeper block \"unidentified developer\")."
+      ))
+    print(L10n.tr("3. Later launches work normally, with a double-click."))
   }
 }

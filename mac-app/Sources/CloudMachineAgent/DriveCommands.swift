@@ -2,33 +2,35 @@ import ArgumentParser
 import CloudMachineCore
 import Foundation
 
-/// Podkomendy warstwy Google Drive. Zastepuja skrypty z `gdrive/` - launchd
-/// i GUI wolaja odtad wylacznie te binarke, nie powloke.
+/// Subcommands of the Google Drive layer. They replace the scripts in
+/// `gdrive/` - from now on launchd and the GUI call only this binary, not the
+/// shell.
 
-// MARK: - Bufor
+// MARK: - Buffer
 
 struct MountDrive: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "mount-drive",
-    abstract: "Montuje Google Drive z buforem zapisu. Zostaje na pierwszym planie (dla launchd).")
+    abstract: L10n.tr(
+      "Mounts Google Drive with a write buffer. Stays in the foreground (for launchd)."))
 
   func run() async throws {
     if DriveBufferService.isMounted {
-      print("Juz zamontowane: \(DriveBufferService.mountPoint.path)")
+      print(L10n.tr("Already mounted: %@", DriveBufferService.mountPoint.path))
       return
     }
 
-    // Deinstalator FUSE-T kasuje cala zawartosc /usr/local/lib pod swoja
-    // sciezka, w tym nasze dowiazanie - odtwarzamy je, zanim cokolwiek sprawdzimy.
+    // The FUSE-T uninstaller deletes the whole contents of /usr/local/lib under
+    // its path, including our link - we recreate it before checking anything.
     FuseInstaller.ensureSystemLink()
 
-    // Bez FUSE rclone konczy natychmiast bledem "cgofuse: cannot find FUSE".
-    // Agent ma KeepAlive, wiec probowalby w kolko co 30 s i zalewal log -
-    // lepiej stanac od razu i powiedziec, czego brakuje.
+    // Without FUSE, rclone exits immediately with "cgofuse: cannot find FUSE".
+    // The agent has KeepAlive, so it would retry over and over every 30 s and
+    // flood the log - better to stop right away and say what is missing.
     let readiness = CMTooling.checkReadiness()
     guard readiness.ready else {
       for (what, how) in zip(readiness.missing, readiness.remedies) {
-        FileHandle.standardError.write(Data("Brakuje: \(what)\n  \(how)\n".utf8))
+        FileHandle.standardError.write(Data(L10n.tr("Missing: %@\n  %@\n", what, how).utf8))
       }
       throw ExitCode(1)
     }
@@ -36,39 +38,39 @@ struct MountDrive: AsyncParsableCommand {
     await DriveBufferService.excludeBufferFromTimeMachine()
     let args = try DriveBufferService.prepare()
 
-    // Nasza kopia serwera NFS, jesli jest - wtedy osobna instalacja FUSE-T
-    // w systemie nie jest potrzebna.
+    // Our own copy of the NFS server, if present - then a separate FUSE-T
+    // installation in the system is not needed.
     if FileManager.default.isExecutableFile(atPath: CMTooling.bundledNfsServer.path) {
       setenv("FUSE_NFSSRV_PATH", CMTooling.bundledNfsServer.path, 1)
     }
 
-    // Podmieniamy sie na rclone zamiast go nadzorowac: launchd ma pilnowac
-    // procesu, ktory faktycznie trzyma montowanie, a nie posrednika.
+    // We replace ourselves with rclone instead of supervising it: launchd is
+    // meant to watch the process that actually holds the mount, not a middleman.
     let rclone = CMTooling.managedRclonePath.path
     var argv: [UnsafeMutablePointer<CChar>?] = ([rclone] + args).map { strdup($0) }
     argv.append(nil)
     execv(rclone, &argv)
 
-    FileHandle.standardError.write(Data("Nie udalo sie uruchomic \(rclone)\n".utf8))
+    FileHandle.standardError.write(Data(L10n.tr("Could not start %@\n", rclone).utf8))
     throw ExitCode(1)
   }
 }
 
-// MARK: - Obraz backupu
+// MARK: - Backup image
 
 struct CreateImage: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "create-image",
-    abstract: "Tworzy obraz backupu na Google Drive. Jednorazowo.")
+    abstract: L10n.tr("Creates the backup image on Google Drive. One-off."))
 
-  @Option(name: .long, help: "Rozmiar deklarowany w GB (obraz jest rzadki).")
+  @Option(name: .long, help: ArgumentHelp(L10n.tr("Declared size in GB (the image is sparse).")))
   var sizeGB: Int = 4000
 
   func run() async throws {
     let result = await BackupImageService.create(sizeGB: sizeGB)
     print(result.message)
     if result.succeeded {
-      print("Nastepny krok: cloudmachine-agent attach-image, potem")
+      print(L10n.tr("Next step: %@, then", "cloudmachine-agent attach-image"))
       print("  sudo tmutil setdestination \(BackupImageService.targetPath.path)")
     } else {
       throw ExitCode(1)
@@ -79,12 +81,12 @@ struct CreateImage: AsyncParsableCommand {
 struct AttachImage: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "attach-image",
-    abstract: "Podpina obraz backupu jako cel Time Machine.")
+    abstract: L10n.tr("Attaches the backup image as the Time Machine destination."))
 
   func run() async throws {
-    // Time Machine nie moze zobaczyc celu, zanim bufor bedzie gotowy - inaczej
-    // uzna, ze dysk backupu zniknal. Ile czekamy i na co dokladnie - patrz
-    // `BufferReadiness`.
+    // Time Machine must not see the destination before the buffer is ready -
+    // otherwise it decides that the backup disk has disappeared. How long we
+    // wait and for what exactly - see `BufferReadiness`.
     let ready = await BufferReadiness.wait(
       sleep: { seconds in
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -96,32 +98,35 @@ struct AttachImage: AsyncParsableCommand {
       })
     if !ready {
       print(
-        """
-        Bufor nie stanal w \(Int(BufferReadiness.defaultTimeout / 60)) min - nie podpinam obrazu.
-        Time Machine jest teraz BEZ CELU. Sprawdz: cloudmachine-agent drive-status
-        """)
+        L10n.tr(
+          "The buffer did not come up within %@ min - not attaching the image.",
+          "\(Int(BufferReadiness.defaultTimeout / 60))"))
+      print(
+        L10n.tr(
+          "Time Machine now has NO DESTINATION. Check: %@", "cloudmachine-agent drive-status"))
       throw ExitCode(1)
     }
     let result = await BackupImageService.attach()
     print(result.message)
 
-    // Trzy przypadki, nie dwa. To polecenie chodzi pod launchd co 900 s, wiec
-    // jego kod wyjscia jest zapisem w `launchd-gdrive-attach.err.log` - tam,
-    // gdzie czlowiek patrzy, pytajac "czy backup dziala". "Obraz zajety przez
-    // odpinanie, ktore wlasnie trwa" NIE JEST awaria: nastepny tik za 15 minut
-    // zastanie juz wolny obraz i podepnie. Zapisywanie tego jako bledu to ten
-    // sam wzorzec, ktory ten kod tepi w druga strone - stan normalny czytany
-    // jako awaria, zamiast braku odpowiedzi czytanego jako odpowiedz.
+    // Three cases, not two. This command runs under launchd every 900 s, so
+    // its exit code ends up as an entry in `launchd-gdrive-attach.err.log` -
+    // the place a person looks when asking "is the backup working". "Image
+    // busy with a detach that is in progress right now" is NOT a failure: the
+    // next tick in 15 minutes will find the image free and attach it. Recording
+    // that as an error is the same pattern this code fights in the other
+    // direction - a normal state read as a failure, instead of a missing answer
+    // read as an answer.
     //
-    // Rozstrzyga TYP wyniku (`CMActionResult.Disposition`), nie tresc
-    // komunikatu - dopasowanie do tekstu psuje sie przy pierwszej zmianie
-    // zdania i nikt tego nie zauwaza. `switch` jest wyczerpujacy, wiec nowy
-    // przypadek nie przejdzie tedy po cichu.
+    // The TYPE of the result (`CMActionResult.Disposition`) decides, not the
+    // message text - matching on text breaks with the first rewording of the
+    // sentence and nobody notices. The `switch` is exhaustive, so a new case
+    // will not slip through here silently.
     switch result.disposition {
     case .ok:
       break
     case .skipped:
-      print("Nie jest to blad - nastepny przebieg agenta sprobuje ponownie.")
+      print(L10n.tr("This is not an error - the agent's next run will try again."))
     case .failed:
       throw ExitCode(1)
     }
@@ -131,9 +136,12 @@ struct AttachImage: AsyncParsableCommand {
 struct DetachImage: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "detach-image",
-    abstract: "Odpina obraz i czeka, az wszystko doleci na Google Drive.")
+    abstract: L10n.tr("Detaches the image and waits until everything reaches Google Drive."))
 
-  @Flag(name: .long, help: "Nie czekaj na wysylke - RYZYKOWNE, patrz BackupImageService.detach.")
+  @Flag(
+    name: .long,
+    help: ArgumentHelp(
+      L10n.tr("Do not wait for the upload - RISKY, see BackupImageService.detach.")))
   var noWait = false
 
   func run() async throws {
@@ -147,7 +155,9 @@ struct VerifyImage: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "verify-image",
     abstract:
-      "Sprawdza spojnosc obrazu przez fsck_apfs (hdiutil verify na sparsebundle nie dziala).")
+      L10n.tr(
+        "Checks the image's consistency with fsck_apfs (hdiutil verify does not work on a sparsebundle)."
+      ))
 
   func run() async throws {
     let result = await BackupImageService.verify()
@@ -156,48 +166,56 @@ struct VerifyImage: AsyncParsableCommand {
   }
 }
 
-// MARK: - Dozorca bufora
+// MARK: - Buffer guard
 
 struct BufferGuard: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "buffer-guard",
     abstract:
-      "Wstrzymuje Time Machine, gdy zaleglosc niewyslana rosnie szybciej, niz idzie wysylka.")
+      L10n.tr(
+        "Pauses Time Machine when the unsent backlog grows faster than the upload goes."))
 
-  // Domyslne progi bierzemy Z `Thresholds`, ktore wylicza je z rozmiaru
-  // bufora - NIE wpisujemy ich tu po raz drugi z palca.
+  // The default thresholds come FROM `Thresholds`, which derives them from the
+  // buffer size - we do NOT type them in here a second time by hand.
   //
-  // Wpisane liczby (150/40/80) zgadzaly sie z wyliczonymi tylko przypadkiem,
-  // dla bufora 100 GB. launchd uruchamia `buffer-guard` BEZ argumentow, wiec
-  // to wlasnie te literaly trafialy na produkcje - wyliczanie progow
-  // z `cacheSizeGB` bylo w praktyce martwe, a trzy testy pilnujace tego
-  // wyliczenia sprawdzaly `Thresholds()` bezposrednio i przechodzily, nie
-  // dotykajac sciezki, ktora naprawde dziala. Po zmianie `cacheSizeGB` progi
-  // rozjechalyby sie po cichu: dozorca albo wstrzymywalby backup bez przerwy,
-  // albo nie wstrzymalby go nigdy.
-  // Progi odnosza sie do ZALEGLOSCI NIEWYSLANEJ, nie do rozmiaru cache'a -
-  // stara miara stala pod limitem stale, wiec prog wznowienia byl nieosiagalny
-  // (jedna PAUZA i zero WZNOWIEN w calym dzienniku). Patrz `Thresholds.init`.
-  @Option(name: .long, help: "Powyzej tylu GB zaleglosci niewyslanej wstrzymujemy Time Machine.")
+  // The typed-in numbers (150/40/80) matched the derived ones only by
+  // accident, for a 100 GB buffer. launchd runs `buffer-guard` WITHOUT
+  // arguments, so it was exactly these literals that reached production -
+  // deriving the thresholds from `cacheSizeGB` was dead in practice, and the
+  // three tests guarding that derivation checked `Thresholds()` directly and
+  // passed without touching the path that actually runs. After a change to
+  // `cacheSizeGB` the thresholds would have drifted apart silently: the guard
+  // would either pause the backup nonstop, or never pause it at all.
+  // The thresholds refer to the UNSENT BACKLOG, not to the cache size - the
+  // old measure sat at the limit constantly, so the resume threshold was
+  // unreachable (one PAUSE and zero RESUMES in the whole log). See
+  // `Thresholds.init`.
+  @Option(
+    name: .long,
+    help: ArgumentHelp(L10n.tr("Above this many GB of unsent backlog we pause Time Machine.")))
   var highGB: Int = BufferGuardService.Thresholds().highGB
 
-  @Option(name: .long, help: "Ponizej tylu GB zaleglosci niewyslanej wznawiamy.")
+  @Option(
+    name: .long, help: ArgumentHelp(L10n.tr("Below this many GB of unsent backlog we resume.")))
   var lowGB: Int = BufferGuardService.Thresholds().lowGB
 
-  @Option(name: .long, help: "Ponizej tylu GB wolnych na dysku wstrzymujemy niezaleznie od bufora.")
+  @Option(
+    name: .long,
+    help: ArgumentHelp(
+      L10n.tr("Below this many GB free on disk we pause regardless of the buffer.")))
   var minFreeGB: Int = BufferGuardService.Thresholds().minFreeGB
 
-  @Option(name: .long, help: "Co ile sekund sprawdzac.")
+  @Option(name: .long, help: ArgumentHelp(L10n.tr("How often to check, in seconds.")))
   var interval: Int = 30
 
   func run() async throws {
     let guardService = BufferGuardService(
       thresholds: .init(highGB: highGB, lowGB: lowGB, minFreeGB: minFreeGB))
     CMLogger.log(
-      "Dozorca bufora: pauza powyzej \(highGB) GB zaleglosci / wznowienie ponizej \(lowGB) GB / min. wolnego na dysku \(minFreeGB) GB"
+      "Buffer guard: pause above \(highGB) GB backlog / resume below \(lowGB) GB / min. free on disk \(minFreeGB) GB"
     )
 
-    // Bez konca: dozorca ma przezyc kazdy backup, nie tylko pierwszy.
+    // Forever: the guard has to outlive every backup, not just the first one.
     while true {
       await guardService.step()
       try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
@@ -205,164 +223,190 @@ struct BufferGuard: AsyncParsableCommand {
   }
 }
 
-// MARK: - Czujka cyklu backupu
+// MARK: - Backup cycle watchdog
 
 struct BackupHealthCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "backup-health",
     abstract:
-      "Sprawdza, czy cykl godzinowy NADAL dziala (data ostatniej UDANEJ kopii), i zglasza awarie.")
+      L10n.tr(
+        "Checks whether the hourly cycle STILL works (date of the last SUCCESSFUL backup) and reports failures."
+      ))
 
-  @Option(name: .long, help: "Po tylu godzinach bez udanej kopii uznajemy cykl za zerwany.")
+  @Option(
+    name: .long,
+    help: ArgumentHelp(
+      L10n.tr("After this many hours without a successful backup we consider the cycle broken.")))
   var maxAgeHours: Double = BackupHealth.maxAgeHours
 
-  @Flag(name: .long, help: "Tylko wypisz stan, bez powiadomienia systemowego.")
+  @Flag(
+    name: .long, help: ArgumentHelp(L10n.tr("Only print the state, without a system notification."))
+  )
   var quiet = false
 
   @Option(
     name: .long,
-    help: "Inny plik preferencji Time Machine - do sprawdzenia czujki na znanej probce.")
+    help: ArgumentHelp(
+      L10n.tr(
+        "A different Time Machine preferences file - to test the watchdog on a known sample.")))
   var preferences: String = BackupHealth.preferencesPath
 
   func run() async throws {
     let report = await BackupHealth.currentReport(
       maxAgeHours: maxAgeHours, preferencesFile: preferences)
 
-    // Znacznik "czujka przebiegla" - PRZED wypisaniem czegokolwiek i przed
-    // decyzja o kodzie wyjscia, bo przebieg, ktory znalazl awarie, jest tak
-    // samo przebiegiem jak ten, ktory nic nie znalazl. Bez tego jedynym
-    // objawem wyladowanej albo zawieszonej czujki bylaby cisza - a cisza jest
-    // tu stanem normalnym (patrz `WatchdogHeartbeat`).
+    // The "watchdog ran" marker - BEFORE printing anything and before deciding
+    // the exit code, because a run that found a failure is just as much a run
+    // as one that found nothing. Without it, the only symptom of a dead or hung
+    // watchdog would be silence - and silence is the normal state here (see
+    // `WatchdogHeartbeat`).
     WatchdogHeartbeat.record()
 
     if let lastSuccess = report.lastSuccess {
-      print("Ostatnia udana kopia: \(BackupHealth.stamp(lastSuccess))")
+      print(L10n.tr("Last successful backup: %@", BackupHealth.stamp(lastSuccess)))
     } else {
-      print("Ostatnia udana kopia: BRAK")
+      print(L10n.tr("Last successful backup: NONE"))
     }
     if let lastAttempt = report.lastAttempt {
-      print("Ostatnia proba:       \(BackupHealth.stamp(lastAttempt))")
+      print(L10n.tr("Last attempt:           %@", BackupHealth.stamp(lastAttempt)))
     }
 
-    // Odlozone na okres rozruchu - nie awaria, ale nie przemilczamy ich.
+    // Deferred for the startup period - not a failure, but we do not hide them.
     for problem in report.deferred {
-      print("CZEKAM (start systemu): \(problem.summary)")
+      print(L10n.tr("WAITING (system startup): %@", problem.summary))
     }
 
     guard !report.healthy else {
-      print("Cykl backupu: OK")
+      print(L10n.tr("Backup cycle: OK"))
       if !quiet { await HealthAlert.report(report) }
       return
     }
 
     for problem in report.problems {
-      print("AWARIA: \(problem.summary)")
-      print("        \(problem.detail)")
+      print(L10n.tr("FAILURE: %@", problem.summary))
+      print(L10n.tr("         %@", problem.detail))
     }
     if !quiet { await HealthAlert.report(report) }
 
-    // Niezerowy kod wyjscia, zeby launchd, `&&` w skrypcie i czlowiek
-    // patrzacy na `echo $?` dostali ten sam sygnal co tekst powyzej.
+    // A non-zero exit code, so that launchd, `&&` in a script and a person
+    // looking at `echo $?` get the same signal as the text above.
     throw ExitCode(1)
   }
 }
 
-// MARK: - Bezpieczne wygaszenie
+// MARK: - Safe shutdown
 
 struct PrepareShutdown: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "prepare-shutdown",
-    abstract: "Przygotowuje do restartu: wstrzymuje backup, odpina obraz i czeka na wysylke.")
+    abstract: L10n.tr(
+      "Prepares for a restart: pauses the backup, detaches the image and waits for the upload."))
 
   func run() async throws {
-    // Kolejnosc nie jest dowolna. Najpierw Time Machine przestaje dokladac
-    // nowych zapisow, dopiero potem odpinamy obraz - inaczej odpiecie
-    // walczyloby z trwajacym backupem.
+    // The order is not arbitrary. First Time Machine stops adding new writes,
+    // only then do we detach the image - otherwise the detach would fight with
+    // the running backup.
     if await TimeMachineStatus.isRunning() {
-      print("Wstrzymuje backup...")
+      print(L10n.tr("Pausing the backup..."))
       _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 120)
       try? await Task.sleep(nanoseconds: 3_000_000_000)
     }
 
-    print("Odpinam obraz i czekam na wysylke...")
+    print(L10n.tr("Detaching the image and waiting for the upload..."))
     let result = await BackupImageService.detach()
     print(result.message)
 
     guard result.succeeded else {
       print("")
-      print("NIE RESTARTUJ jeszcze - w buforze sa dane, ktore nie doleciely na Dysk.")
-      print("Sprawdz stan:  cloudmachine-agent drive-status")
+      print(L10n.tr("Do NOT restart yet - the buffer holds data that has not reached Drive."))
+      print(L10n.tr("Check the state:  %@", "cloudmachine-agent drive-status"))
       throw ExitCode(1)
     }
 
     print("")
-    print("Mozna restartowac. Po starcie agenty podniosa bufor i podepna obraz same.")
+    print(
+      L10n.tr(
+        "Safe to restart. After startup the agents will bring up the buffer and attach the image themselves."
+      ))
   }
 }
 
-// MARK: - Stan
+// MARK: - Status
 
 struct DriveStatus: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "drive-status",
-    abstract: "Stan bufora, kolejki wysylki i Time Machine.")
+    abstract: L10n.tr("State of the buffer, the upload queue and Time Machine."))
 
   func run() async throws {
     let readiness = CMTooling.checkReadiness()
     print(
-      "Narzedzia:        \(readiness.ready ? "OK" : "brakuje: " + readiness.missing.joined(separator: ", "))"
-    )
+      L10n.tr(
+        "Tools:            %@",
+        readiness.ready
+          ? "OK" : L10n.tr("missing: %@", readiness.missing.joined(separator: ", "))))
     let mounted = DriveBufferService.mountedState()
-    print("Montowanie Drive: \(StatusLines.mounted(mounted))")
-    // Sonda czytelnosci ma od 26.09.2026 limit czasu - dlatego to narzedzie
-    // nie wisi na martwym montowaniu (25.09.2026 wisialo ponad 25 s i trzeba
-    // bylo je zabic), tylko melduje, ze odpowiedzi nie ma.
+    print(L10n.tr("Drive mount:      %@", StatusLines.mounted(mounted)))
+    // Since 26.09.2026 the readability probe has a time limit - which is why
+    // this tool does not hang on a dead mount (on 25.09.2026 it hung for over
+    // 25 s and had to be killed), but reports that there is no answer.
     let image = await BackupImageService.attachmentReading()
     print(
-      "Obraz podpiety:   \(BackupImageService.describe(image.attachment, probeTimedOut: image.probeTimedOut))"
-    )
+      L10n.tr(
+        "Image attached:   %@",
+        BackupImageService.describe(image.attachment, probeTimedOut: image.probeTimedOut)))
 
-    // Kolejke czytamy PRZED wierszami o buforze, bo obydwa z niej korzystaja.
-    // Drugie pytanie do rclone kosztowaloby do 60 s przy zapchanym buforze
-    // (patrz `DriveBufferService.queueStats`).
+    // We read the queue BEFORE the buffer lines, because both of them use it.
+    // A second query to rclone would cost up to 60 s with a clogged buffer
+    // (see `DriveBufferService.queueStats`).
     let queueStats = await DriveBufferService.queueStats()
 
-    // Dwa wiersze, bo to DWIE ROZNE wielkosci. Jeden wiersz "Bufor: 103 GB
-    // z 100G" wygladal na odpowiedz na pytanie "czy wysylka nadaza", a nia nie
-    // byl: rozmiar cache'a stoi pod limitem stale. Dozorca bufora podejmowal
-    // na tej liczbie decyzje i dlatego nie wznowil backupu ani razu.
+    // Two lines, because these are TWO DIFFERENT quantities. A single line
+    // "Buffer: 103 GB of 100G" looked like an answer to "is the upload keeping
+    // up", and it was not: the cache size sits at the limit constantly. The
+    // buffer guard made decisions on that number and that is why it never
+    // resumed the backup even once.
     print(
-      "Cache na dysku:   \(StatusLines.cacheSize(BufferGuardService.cacheSizeGB(stats: queueStats), limitGB: DriveBufferService.cacheSizeGB))"
-    )
+      L10n.tr(
+        "Cache on disk:    %@",
+        StatusLines.cacheSize(
+          BufferGuardService.cacheSizeGB(stats: queueStats),
+          limitGB: DriveBufferService.cacheSizeGB)))
     print(
-      "Do wyslania:      \(StatusLines.backlog(BufferGuardService.backlogGB(stats: queueStats), items: queueStats?.unsentItems))"
-    )
-    // NIE `\(BufferGuardService.freeGB()) GB` - to zwraca `Int?`, odkad brak
-    // pomiaru przestal udawac zero, a interpolacja opcjonalnej wartosci
-    // wypisywala `Wolne na dysku: Optional(427) GB`. Kompilator mowil o tym
-    // tylko ostrzezeniem, wiec nie zatrzymalo to ani builda, ani testow.
-    print("Wolne na dysku:   \(StatusLines.freeDisk(BufferGuardService.freeGB()))")
+      L10n.tr(
+        "To upload:        %@",
+        StatusLines.backlog(
+          BufferGuardService.backlogGB(stats: queueStats), items: queueStats?.unsentItems)))
+    // NOT `\(BufferGuardService.freeGB()) GB` - that returns `Int?` since a
+    // missing measurement stopped pretending to be zero, and interpolating the
+    // optional value printed `Free on disk: Optional(427) GB`. The compiler
+    // only said so with a warning, so it stopped neither the build nor the
+    // tests.
+    print(L10n.tr("Free on disk:     %@", StatusLines.freeDisk(BufferGuardService.freeGB())))
 
     if let stats = queueStats {
       print(
-        "Kolejka wysylki:  \(stats.uploadsInProgress) w toku, \(stats.uploadsQueued) w kolejce, \(stats.erroredFiles) bledow"
-      )
+        L10n.tr(
+          "Upload queue:     %@ in progress, %@ queued, %@ errors", "\(stats.uploadsInProgress)",
+          "\(stats.uploadsQueued)", "\(stats.erroredFiles)"))
     } else {
-      print("Kolejka wysylki:  (interfejs rc nieosiagalny)")
+      print(L10n.tr("Upload queue:     (rc interface unreachable)"))
     }
 
     let safe = await BackupImageService.safeToRebootNow()
     print(
-      "Restart bez pytania: \(safe ? "TAK - kolejka pusta" : "NIE - najpierw prepare-shutdown")")
+      L10n.tr(
+        "Restart without asking: %@",
+        safe ? L10n.tr("YES - queue empty") : L10n.tr("NO - run prepare-shutdown first")))
 
-    // Ta sama odpowiedz, co na karcie w interfejsie - jedno zrodlo, zeby CLI
-    // i GUI nie mogly twierdzic czegos innego o tym samym stanie.
+    // The same answer as on the card in the UI - one source, so that the CLI
+    // and the GUI cannot claim different things about the same state.
     let upload = UploadState.from(
-      // `UploadState` nie ma stanu "nie wiadomo, czy zamontowane", a dolozenie
-      // go dotknelo by plikow poza moim zakresem. `?? false` daje wtedy
-      // `.mountDown` ("Wysylka nie dziala") - czyli ostrzega, zamiast
-      // uspokajac, a wiersz "Montowanie Drive" wyzej mowi juz wprost
-      // "NIE WIADOMO". Falszywy alarm jest tu wlasciwym kierunkiem pomylki.
+      // `UploadState` has no "unknown whether mounted" state, and adding it
+      // would touch files outside my scope. `?? false` then gives `.mountDown`
+      // ("Upload is not working") - so it warns instead of reassuring, and the
+      // "Drive mount" line above already says outright that it is UNKNOWN. A
+      // false alarm is the right direction of error here.
       mounted: mounted ?? false,
       queueKnown: queueStats != nil,
       queued: queueStats?.uploadsQueued ?? 0,
@@ -371,45 +415,49 @@ struct DriveStatus: AsyncParsableCommand {
       bufferOutOfSpace: queueStats?.outOfSpace ?? false,
       driveFull: DriveBufferService.hitStorageQuota(),
       dailyQuotaExhausted: DriveBufferService.uploadStalled())
-    print("Wysylka:          \(upload.headline)")
+    print(L10n.tr("Upload:           %@", upload.headline))
     if !upload.isNominal {
       print("                  \(upload.explanation.replacingOccurrences(of: "\n", with: " "))")
     }
 
     if let mountPoint = await TimeMachineStatus.currentDestinationMountPoint() {
-      print("Cel Time Machine: \(mountPoint)")
+      print(L10n.tr("TM destination:   %@", mountPoint))
     } else {
-      print("Cel Time Machine: brak")
+      print(L10n.tr("TM destination:   none"))
     }
     if await TimeMachineStatus.isRunning(), let progress = await TimeMachineStatus.currentProgress()
     {
       let percent = (progress.percent ?? 0) * 100
       print(
-        "Backup:           trwa, \(String(format: "%.1f", percent))% (\(progress.phase ?? "?"))")
+        L10n.tr(
+          "Backup:           running, %@%% (%@)", String(format: "%.1f", percent),
+          progress.phase ?? "?"))
     } else {
-      print("Backup:           nie trwa")
+      print(L10n.tr("Backup:           not running"))
     }
-    // Kto pilnuje czujki. Bez tego wiersza "brak alarmu" znaczylo jednoczesnie
-    // "backup dziala" i "nikt nie sprawdzal" - patrz `WatchdogHeartbeat`.
-    print("Czujka backupu:   \(StatusLines.watchdogRun(WatchdogHeartbeat.current()))")
+    // Who watches the watchdog. Without this line "no alarm" meant both
+    // "the backup works" and "nobody checked" at once - see `WatchdogHeartbeat`.
+    print(L10n.tr("Backup watchdog:  %@", StatusLines.watchdogRun(WatchdogHeartbeat.current())))
 
-    // Na samym koncu i bez wyrownania do kolumny - to nie jest kolejny wiersz
-    // stanu, tylko cos, co ma zaklocic czytanie. `HealthAlert` od niedawna nie
-    // zamyka sprawy znacznikiem, dopoki powiadomienie nie doszlo, wiec
-    // niedoreczony alarm nie ginie juz na 12 h - ale bez tego bloku nikt by sie
-    // o nim nie dowiedzial, bo powiadomienia systemowego z definicji nie widac.
+    // At the very end and not aligned to the column - this is not another
+    // status line but something meant to interrupt the reading. Since recently
+    // `HealthAlert` does not close the case with a marker until the
+    // notification has been delivered, so an undelivered alarm no longer gets
+    // lost for 12 h - but without this block nobody would find out about it,
+    // because a system notification that failed is by definition not seen.
     for line in StatusLines.undeliveredAlert(HealthAlert.lastDeliveryFailure()) {
       print(line)
     }
   }
 }
 
-// MARK: - Instalacja FUSE
+// MARK: - FUSE installation
 
 struct InstallFuse: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "install-fuse",
-    abstract: "Wciaga FUSE-T do CloudMachine, zeby nie bylo osobnej aplikacji w systemie.")
+    abstract: L10n.tr(
+      "Pulls FUSE-T into CloudMachine, so there is no separate app in the system."))
 
   func run() async throws {
     let result = await FuseInstaller.install()
@@ -418,12 +466,13 @@ struct InstallFuse: AsyncParsableCommand {
   }
 }
 
-// MARK: - Instalacja rclone
+// MARK: - rclone installation
 
 struct InstallRclone: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "install-rclone",
-    abstract: "Pobiera oficjalna binarke rclone (ta z Homebrew nie umie montowac).")
+    abstract: L10n.tr(
+      "Downloads the official rclone binary (the Homebrew one cannot mount)."))
 
   func run() async throws {
     let result = await RcloneInstaller.install()
@@ -432,38 +481,40 @@ struct InstallRclone: AsyncParsableCommand {
   }
 }
 
-// MARK: - Wersja
+// MARK: - Version
 
-/// Odpowiada na pytanie "czy dziala to, co w repozytorium".
+/// Answers the question "is what runs the same as what is in the repository".
 ///
-/// Samo `1.1.0` na to nie odpowiada - dlatego wypisujemy commit i stan drzewa
-/// z chwili budowania, a przy braku bundla mowimy wprost, ze to build z drzewa
-/// roboczego, zamiast zmyslac numer.
+/// `1.1.0` alone does not answer it - so we print the commit and the state of
+/// the tree at build time, and with no bundle we say outright that it is a
+/// build from the working tree, instead of making up a number.
 struct Version: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "version",
-    abstract: "Wypisuje wersje, numer budowy i commit, z ktorego zbudowano te binarke.")
+    abstract: L10n.tr(
+      "Prints the version, the build number and the commit this binary was built from."))
 
-  @Flag(name: .long, help: "Tylko jedna linia, bez opisu.")
+  @Flag(name: .long, help: ArgumentHelp(L10n.tr("Only one line, without a description.")))
   var short = false
 
   func run() async throws {
     guard let version = AppVersionReader.current() else {
-      print("Build z drzewa roboczego (poza bundlem) - brak danych o wersji.")
+      print(L10n.tr("Build from the working tree (outside a bundle) - no version data."))
       return
     }
     guard !short else {
       print(version.summary)
       return
     }
-    print("Wersja:  \(version.shortVersion)")
-    print("Budowa:  \(version.build)")
-    print("Commit:  \(version.commit)")
+    print(L10n.tr("Version: %@", version.shortVersion))
+    print(L10n.tr("Build:   %@", version.build))
+    print(L10n.tr("Commit:  %@", version.commit))
     if version.dirty {
       print("")
-      print("UWAGA: zbudowano z BRUDNEGO drzewa - w binarce jest kod, ktorego")
-      print("       nie ma w zadnym commicie. Numer commitu NIE opisuje tego,")
-      print("       co naprawde dziala.")
+      print(
+        L10n.tr(
+          "WARNING: built from a DIRTY tree - the binary contains code that\n         is in no commit. The commit number does NOT describe\n         what actually runs."
+        ))
     }
   }
 }

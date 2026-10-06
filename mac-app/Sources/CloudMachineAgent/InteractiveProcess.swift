@@ -1,10 +1,9 @@
 import Foundation
 
-/// Odpala proces, ktory dziedziczy stdout/stderr biezacego terminala zamiast
-/// buforowac je w pamieci (jak `ProcessRunner`) - dla dlugotrwalych,
-/// "gadatliwych" narzedzi budowania (`swift build`, `codesign`), gdzie
-/// uzytkownik powinien widziec postep na zywo, tak jak przy oryginalnych
-/// skryptach bash.
+/// Launches a process that inherits the current terminal's stdout/stderr
+/// instead of buffering them in memory (like `ProcessRunner`) - for
+/// long-running, "chatty" build tools (`swift build`, `codesign`), where the
+/// user should see progress live, just as with the original bash scripts.
 enum InteractiveProcess {
   @discardableResult
   static func run(_ executable: String, _ args: [String], currentDirectory: URL? = nil) async throws

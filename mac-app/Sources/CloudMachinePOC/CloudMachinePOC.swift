@@ -1,14 +1,15 @@
 import ArgumentParser
 
-/// Harnessy pomiarowe - OSOBNA binarka, celowo poza `CloudMachine.app`.
+/// Measurement harnesses - a SEPARATE binary, deliberately outside `CloudMachine.app`.
 ///
-/// Mierza zachowanie `hdiutil` i FUSE-T, a nie nasz kod, i nie sa czescia
-/// dzialajacego systemu: nic ich nie wola z launchd ani z aplikacji.
-/// `build-app` nie kopiuje tej binarki do bundla, wiec nie trafia na maszyny
-/// uzytkownikow - a mimo to jest budowana i sprawdzana przez CI razem z reszta.
+/// They measure the behaviour of `hdiutil` and FUSE-T, not our code, and they
+/// are not part of the running system: nothing calls them from launchd or from
+/// the app. `build-app` does not copy this binary into the bundle, so it never
+/// reaches users' machines - and yet it is built and checked by CI together
+/// with the rest.
 ///
-/// Uruchamia sie je recznie, gdy trzeba cos zmierzyc albo potwierdzic
-/// regresje:
+/// They are run by hand when something needs measuring or a regression needs
+/// confirming:
 ///
 ///     swift run cloudmachine-poc amplification --band-mb 32 --workload append
 ///     swift run cloudmachine-poc pullplug --band-mb 32 --rounds 3
@@ -16,6 +17,6 @@ import ArgumentParser
 struct CloudMachinePOC: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "cloudmachine-poc",
-    abstract: "Harnessy pomiarowe architektury backupu (nie czesc dzialajacego systemu).",
+    abstract: "Measurement harnesses for the backup architecture (not part of the running system).",
     subcommands: [AmplificationCommand.self, PullPlugCommand.self])
 }
