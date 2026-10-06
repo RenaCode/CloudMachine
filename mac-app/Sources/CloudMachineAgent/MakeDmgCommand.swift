@@ -16,9 +16,7 @@ struct MakeDmg: AsyncParsableCommand {
     let buildDir = macAppRoot.appendingPathComponent("build")
     let appBundle = buildDir.appendingPathComponent("\(appName).app")
     let stagingDir = buildDir.appendingPathComponent("dmg-staging")
-    let version =
-      (try? String(contentsOf: macAppRoot.appendingPathComponent("VERSION"), encoding: .utf8))?
-      .trimmingCharacters(in: .whitespacesAndNewlines) ?? "1.0.0"
+    let version = BuildPaths.version
     let dmgPath = buildDir.appendingPathComponent("\(appName)-\(version).dmg")
     let fm = FileManager.default
 

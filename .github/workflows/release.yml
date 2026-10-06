@@ -117,21 +117,19 @@ jobs:
     name: Build, release, update tap
     needs: decide
     if: needs.decide.outputs.skip != 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: write
     env:
       IS_RELEASE: ${{ needs.decide.outputs.release }}
       VERSION: ${{ needs.decide.outputs.version }}
+      # Read by build-app and make-dmg; the computed version must not be
+      # written into mac-app/VERSION, which would mark every release dirty.
+      CM_RELEASE_VERSION: ${{ needs.decide.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # The build reads its version from this file; a computed patch release
-      # must report itself as that version, not as the base.
-      - name: Set the release version
-        run: printf '%s\n' "$VERSION" > mac-app/VERSION
 
       - name: swift test
         working-directory: mac-app
@@ -166,6 +164,11 @@ jobs:
             -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
           rm -f "$RUNNER_TEMP/cert.p12"
 
+      # Shown before the build: v1.3.0 shipped marked DIRTY-TREE, and the log
+      # did not say which file a runner step had changed.
+      - name: Working tree state
+        run: git status --porcelain && git diff --stat
+
       - name: Build CloudMachine.app (universal)
         working-directory: mac-app
         run: swift run cloudmachine-agent build-app --universal
@@ -193,6 +196,20 @@ jobs:
       # `hdiutil create` on GitHub's macOS runners fails now and then with
       # "Resource busy" - it did on the first v1.3.0 run, after passing three
       # dry runs. Retried with a growing pause; a real failure still fails.
+      # A release must be exactly a commit. v1.3.0 was not: the macos-14
+      # runner (Swift 5.10) could not use swift-argument-parser 1.8.2, which
+      # needs Swift 6, quietly resolved 1.7.2 and rewrote Package.resolved.
+      # Any tracked file changed by the build stops the release here.
+      - name: Build did not change tracked files
+        if: env.IS_RELEASE == 'true'
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            git status --porcelain --untracked-files=no
+            git diff
+            echo "::error::The build changed tracked files; the release would not match its commit."
+            exit 1
+          fi
+
       - name: Package .dmg
         working-directory: mac-app
         run: |

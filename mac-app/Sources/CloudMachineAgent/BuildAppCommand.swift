@@ -40,9 +40,7 @@ struct BuildApp: AsyncParsableCommand {
     let appBundle = buildDir.appendingPathComponent("\(appName).app")
     let fm = FileManager.default
 
-    let version =
-      (try? String(contentsOf: macAppRoot.appendingPathComponent("VERSION"), encoding: .utf8))?
-      .trimmingCharacters(in: .whitespacesAndNewlines) ?? "1.0.0"
+    let version = BuildPaths.version
     let buildNumber = await resolveBuildNumber(projectRoot: projectRoot)
 
     print(
@@ -106,7 +104,8 @@ struct BuildApp: AsyncParsableCommand {
     infoPlistContent = infoPlistContent.replacingOccurrences(of: "__CM_VERSION__", with: version)
     infoPlistContent = infoPlistContent.replacingOccurrences(of: "__CM_BUILD__", with: buildNumber)
     let commit = await resolveCommit(projectRoot: projectRoot)
-    let dirty = await workingTreeIsDirty(projectRoot: projectRoot)
+    let changes = await uncommittedChanges(projectRoot: projectRoot)
+    let dirty = !changes.isEmpty
     infoPlistContent = infoPlistContent.replacingOccurrences(of: "__CM_COMMIT__", with: commit)
     infoPlistContent = infoPlistContent.replacingOccurrences(
       of: "__CM_DIRTY__", with: dirty ? "true" : "false")
@@ -118,6 +117,9 @@ struct BuildApp: AsyncParsableCommand {
         L10n.tr(
           "==> WARNING: you are building from a DIRTY tree - the version will not point to a commit."
         ))
+      // Named, not just counted: on a CI runner nobody can look at the tree
+      // afterwards, and v1.3.0 shipped marked dirty with no clue which file.
+      for line in changes { print("    \(line)") }
     }
     try infoPlistContent.write(
       to: appBundle.appendingPathComponent("Contents/Info.plist"), atomically: true, encoding: .utf8
@@ -193,13 +195,15 @@ struct BuildApp: AsyncParsableCommand {
   ///
   /// `status --porcelain` also covers untracked files - and rightly so: a new
   /// source file that nobody added goes into the binary just the same.
-  private func workingTreeIsDirty(projectRoot: URL) async -> Bool {
+  private func uncommittedChanges(projectRoot: URL) async -> [String] {
     guard
       let result = try? await ProcessRunner.run(
         "/usr/bin/git", ["-C", projectRoot.path, "status", "--porcelain"]),
       result.succeeded
-    else { return false }
-    return !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else { return [] }
+    return result.stdout.split(separator: "\n").map(String.init).filter {
+      !$0.trimmingCharacters(in: .whitespaces).isEmpty
+    }
   }
 
   private func resolveBuildNumber(projectRoot: URL) async -> String {
