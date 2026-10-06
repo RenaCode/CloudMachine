@@ -142,9 +142,8 @@ button — or, for the two steps an app cannot do, a command to copy:
 1. **Install rclone** and **Install FUSE-T.** CloudMachine downloads its own
    copies; nothing else is installed system-wide.
 2. **Connect Google Drive** — a command to run in Terminal. It opens Google's
-   sign-in in the browser and waits for your approval. Set up your own OAuth
-   credentials first (see [below](#your-own-google-oauth-credentials)); the
-   card for them is at the bottom of the window.
+   sign-in in the browser and waits for your approval. Enter your own OAuth
+   credentials first (see [below](#your-own-google-oauth-credentials)).
 3. **Grant Full Disk Access** — opens the right pane of System Settings.
    Without it CloudMachine cannot read when Time Machine last *finished* a
    backup, which is the one check that matters.
@@ -161,14 +160,17 @@ Settings → General → Time Machine, or run `sudo tmutil enable`.
 
 ### Several Macs, one Google account
 
-Each Mac backs up into its own folder, `gdrive:CloudMachine/<folder>`, holding
-`<folder>.sparsebundle`. The name is chosen once, when that Mac connects to
-Google Drive: by default it comes from the computer name, or pass your own —
-`cloudmachine-agent configure-remote --folder office-imac`. It cannot be changed
+Install CloudMachine on each Mac and go through the same steps; they can all
+use the same Google account and the same OAuth credentials. Each Mac backs up
+into its own folder, `gdrive:CloudMachine/<folder>`, holding
+`<folder>.sparsebundle`, so their backups never mix.
+
+The folder name is chosen once, at **Connect Google Drive**, from the computer
+name. To pick it yourself, add `--folder NAME` to the command the card gives
+you, e.g. `… configure-remote --folder office-imac`. It cannot be changed
 afterwards, because a new name is a new, empty backup; CloudMachine refuses
-rather than orphan the old one. `cloudmachine-agent drive-status` shows the
-folder in use. Installations set up before per-Mac folders keep
-`mac-studio`, which is where their backup already is.
+rather than orphan the old one. Installations set up before per-Mac folders
+keep `mac-studio`, which is where their backup already is.
 
 ### Upgrading and uninstalling
 
@@ -178,76 +180,28 @@ agents pick up the new version on their next run. Neither `brew uninstall` nor
 which may hold backups that have not reached Google Drive yet. Run
 `cloudmachine-agent prepare-shutdown` before uninstalling.
 
-Building from source, releases and the measurement harnesses are covered in
+Setting up without the app is described in [docs/setup-cli.md](docs/setup-cli.md);
+building from source, releases and the measurement harnesses in
 [docs/building.md](docs/building.md).
-
-### Setting up from Terminal
-
-The same steps without the app. `cloudmachine-agent` lives inside the app
-bundle; `install-launchd` links it into `/usr/local/bin`, so until then call it
-by its full path:
-
-```sh
-/Applications/CloudMachine.app/Contents/MacOS/cloudmachine-agent --help
-```
-
-```sh
-cloudmachine-agent install-rclone     # official binary — the Homebrew build cannot mount
-cloudmachine-agent install-fuse       # FUSE-T, inside CloudMachine, no separate app
-cloudmachine-agent configure-remote   # Google OAuth in the browser; --folder NAME to choose this Mac's folder
-cloudmachine-agent install-launchd    # agents that mount Drive and keep it running
-cloudmachine-agent create-image --size-gb 4000   # needs the mount from the step above
-cloudmachine-agent attach-image
-```
-
-Two steps need `sudo`, because they change system-wide settings:
-
-```sh
-sudo tmutil setdestination /Volumes/CloudMachine
-sudo tmutil enable                    # hourly backups; skip if you prefer manual
-```
 
 ### Your own Google OAuth credentials
 
-`configure-remote` reads `client_id` and `client_secret` from the macOS Keychain
-under the service `cloudmachine-gdrive`. Create them at
+Do this before **Connect Google Drive**. Create the credentials at
 [console.developers.google.com](https://console.developers.google.com/): new
 project, enable the Google Drive API, consent screen, credentials, OAuth 2.0 of
-type *Desktop*. Then:
+type *Desktop*. Paste the client ID and secret into the **Google Drive
+Credentials (OAuth 2.0)** card at the bottom of the app window; it stores them
+in the macOS Keychain.
 
-```sh
-security add-generic-password -a client_id     -s cloudmachine-gdrive -w -U
-security add-generic-password -a client_secret -s cloudmachine-gdrive -w -U
-```
+They are not optional polish: rclone's shared `client_id` is being retired
+during 2026, and Google rate-limits per `client_id`, so on the shared one you
+compete with every other rclone user.
 
-Without `-w <value>`, `security` prompts — the secret stays out of your shell
-history and out of `ps`.
-
-The app window can do the same thing: the *Google Drive Credentials
-(OAuth 2.0)* card, folded away at the bottom since it is a once-ever step. It writes through the
-`security` tool rather than the Keychain API on purpose — an entry created by
-`SecItemAdd` gets an ACL limited to the program that made it, and reading it
-from a different binary raises an authorisation dialog. The launchd agent has
-nobody to show that dialog to, so it would read nothing and quietly fall back to
-the shared `client_id`.
-
-Your own credentials are not optional polish: rclone's shared `client_id` is
-being retired during 2026, and Google rate-limits per `client_id`, so on the
-shared one you compete with every other rclone user. If the Keychain entries are
-missing, `configure-remote` still works — it falls back to the shared
-`client_id` and says so in the log rather than pretending otherwise.
-
-The remote is created with scope `drive.file`, which grants access only to files
-this application itself created. Full `drive` scope would hand out read, write
-and **delete** over the entire Google account, which is far more than a folder
-of disk-image bands needs — especially with `--drive-use-trash=false`, where a
+The connection uses scope `drive.file`, which grants access only to files this
+application itself created. Full `drive` scope would hand out read, write and
+**delete** over the entire Google account, which is far more than a folder of
+disk-image bands needs — especially with `--drive-use-trash=false`, where a
 delete has no bin to recover from.
-
-`configure-remote` refuses to touch a remote that already exists. Overwriting it
-replaces the token and the scope, and credentials scoped `drive.file` cannot see
-files created by the previous credentials — the backup stays intact but becomes
-unreachable, which amounts to the same thing. Back up `~/.config/rclone/rclone.conf`
-first and pass `--replace-existing` if you really mean it.
 
 ---
 
