@@ -276,7 +276,7 @@ public enum BackupImageService {
   /// all files and bands are in place and readable.
   public static func create(sizeGB: Int) async -> CMActionResult {
     await withCMLock(lockName) { await createLocked(sizeGB: sizeGB) }
-      ?? busyResult("Image creation", displayName: L10n.tr("Creating the image"))
+      ?? busyResult("Image creation", displayName: L10n.tr("Image creation"))
   }
 
   private static func createLocked(sizeGB: Int) async -> CMActionResult {
@@ -449,7 +449,7 @@ public enum BackupImageService {
 
   public static func attach() async -> CMActionResult {
     await withCMLock(lockName) { await attachLocked() }
-      ?? busyResult("Image attach", displayName: L10n.tr("Attaching the image"))
+      ?? busyResult("Image attach", displayName: L10n.tr("Image attach"))
   }
 
   private static func attachLocked() async -> CMActionResult {
@@ -600,7 +600,7 @@ public enum BackupImageService {
   public static func detach(force: Bool = false, waitForUpload: Bool = true) async -> CMActionResult
   {
     await withCMLock(lockName) { await detachLocked(force: force, waitForUpload: waitForUpload) }
-      ?? busyResult("Image detach", displayName: L10n.tr("Detaching the image"))
+      ?? busyResult("Image detach", displayName: L10n.tr("Image detach"))
   }
 
   private static func detachLocked(force: Bool = false, waitForUpload: Bool = true) async
@@ -760,7 +760,7 @@ public enum BackupImageService {
   /// device has to be attached without mounting and `fsck_apfs` run on it.
   public static func verify() async -> CMActionResult {
     await withCMLock(lockName) { await verifyLocked() }
-      ?? busyResult("Image verify", displayName: L10n.tr("Verifying the image"))
+      ?? busyResult("Image verify", displayName: L10n.tr("Image verification"))
   }
 
   private static func verifyLocked() async -> CMActionResult {

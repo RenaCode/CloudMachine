@@ -40,7 +40,7 @@ extension L10nPolish {
       "NIE WIADOMO - w tablicy montowań, ale sonda czytelności nie odpowiedziała w %@ s",
     "UNKNOWN - could not read the mount table":
       "NIE WIADOMO - nie udało się odczytać tablicy montowań",
-    "Creating the image": "Tworzenie obrazu",
+    "Image creation": "Utworzenie obrazu",
     "Drive is not mounted - start the buffer first.":
       "Drive nie jest zamontowany - najpierw uruchom bufor.",
     "Could not read the mount table - it is UNKNOWN whether the buffer is mounted. NOT creating the image.":
@@ -58,7 +58,7 @@ extension L10nPolish {
     "Created a %@ GB image, band size %@ MB.": "Utworzono obraz %@ GB, pasmo %@ MB.",
     "rclone did not answer": "rclone nie odpowiedział",
     "rclone lsf ended with an error": "rclone lsf zakończyło się błędem",
-    "Attaching the image": "Podpinanie obrazu",
+    "Image attach": "Podpięcie obrazu",
     "Drive is not mounted.": "Drive nie jest zamontowany.",
     "Could not read the mount table - it is UNKNOWN whether the buffer is mounted. NOT attaching the image.":
       "Nie udało się odczytać tablicy montowań - NIE WIADOMO, czy bufor jest zamontowany. NIE podpinam obrazu.",
@@ -74,7 +74,7 @@ extension L10nPolish {
       "Osierocony punkt montowania blokuje podpięcie: %@\nUsuń go i spróbuj ponownie:  sudo rmdir '%@'",
     "Could not attach the image: %@": "Nie udało się podpiąć obrazu: %@",
     "Attached: %@": "Podpięte: %@",
-    "Detaching the image": "Odpinanie obrazu",
+    "Image detach": "Odpięcie obrazu",
     "Could not detach - the image is held by browsed backup snapshots that could not be unmounted:\n%@\nClose the Time Machine / Finder window on the backup and try again.":
       "Nie udało się odpiąć - obraz trzymają przeglądane migawki backupu, których nie dało się odmontować:\n%@\nZamknij okno Time Machine / Findera na backupie i spróbuj ponownie.",
     "Could not detach.": "Nie udało się odpiąć.",
@@ -85,7 +85,7 @@ extension L10nPolish {
     "Detached, but rclone ABANDONED %@ backup fragments - they exist only on this Mac and are not on Google Drive. Do not delete the buffer.":
       "Odpięte, ale rclone PORZUCIŁ %@ fragmentów kopii - istnieją wyłącznie na tym Macu i na Google Drive ich nie ma. Nie kasuj bufora.",
     "Detached, everything uploaded to Google Drive.": "Odpięte, wszystko wysłane na Google Drive.",
-    "Verifying the image": "Sprawdzanie obrazu",
+    "Image verification": "Sprawdzenie obrazu",
     "No image.": "Brak obrazu.",
     "The image is attached - detach it before verifying.":
       "Obraz jest podpięty - odepnij go przed sprawdzeniem.",
