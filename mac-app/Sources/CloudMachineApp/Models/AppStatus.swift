@@ -1,40 +1,41 @@
 import CloudMachineCore
 import Foundation
 
-/// Gotowosc narzedzi, bez ktorych nic nie ruszy.
+/// Readiness of the tools without which nothing will run.
 enum DependencyState: Equatable {
   case unknown
   case checking
-  /// Czego brakuje i czym to naprawic - pary (brak, polecenie).
+  /// What is missing and how to fix it - pairs of (missing item, command).
   case missing([String], [String])
   case ready
 }
 
 enum TimeMachineState: Equatable {
   case unknown
-  /// Time Machine nie wskazuje na nasz obraz - backupu realnie nie ma.
+  /// Time Machine does not point at our image - there is effectively no backup.
   case notRegistered
-  /// `tmutil` NIE ODPOWIEDZIAL w limicie czasu, wiec o celu nie wiemy nic.
+  /// `tmutil` DID NOT ANSWER within the time limit, so we know nothing about the destination.
   ///
-  /// Osobny stan z tego samego powodu, co `TimeMachineStatus.DestinationReading.noAnswer`
-  /// i `BufferStatus.queueKnown`: brak odpowiedzi nie ma prawa udawac wyniku.
-  /// Panel wyswietlal tu do 25.09.2026 "Time Machine nie wskazuje na
-  /// CloudMachine" - zdanie prawdziwie brzmiace i falszywe, ktore wysyla
-  /// czlowieka rejestrowac cel na nowo, podczas gdy cel jest caly, a zawiesil
-  /// sie odczyt (`tmutil destinationinfo` siega na montowanie na Google Drive).
+  /// A separate state for the same reason as `TimeMachineStatus.DestinationReading.noAnswer`
+  /// and `BufferStatus.queueKnown`: a missing answer has no right to pretend to be a result.
+  /// Until 25.09.2026 the panel showed "Time Machine does not point to
+  /// CloudMachine" here - a sentence that sounds true and is false, sending
+  /// a person off to register the destination again while the destination is
+  /// intact and it was the read that hung (`tmutil destinationinfo` reaches
+  /// into the Google Drive mount).
   case noAnswer
   case registered(mountPoint: String)
 }
 
 extension TimeMachineState {
-  /// Przeklada odpowiedz `tmutil` na stan panelu.
+  /// Translates the `tmutil` answer into a panel state.
   ///
-  /// Wydzielone z `CloudMachineController.refreshTimeMachine()` i czyste,
-  /// zeby dalo sie testem pokazac, ze TRZY odpowiedzi daja TRZY stany.
-  /// Wczesniej kontroler pytal `currentDestinationMountPoint()`, ktora zwraca
-  /// `nil` i przy braku celu, i przy braku odpowiedzi - obie sciezki
-  /// konczyly sie wiec tym samym `.notRegistered`. Czujka `backup-health`
-  /// rozrozniala je od 23.09.2026 (`destinationReading()`), panel nie.
+  /// Extracted from `CloudMachineController.refreshTimeMachine()` and pure,
+  /// so a test can show that THREE answers give THREE states.
+  /// Previously the controller asked `currentDestinationMountPoint()`, which returns
+  /// `nil` both when there is no destination and when there is no answer - so both paths
+  /// ended in the same `.notRegistered`. The `backup-health` watchdog has
+  /// distinguished them since 23.09.2026 (`destinationReading()`); the panel did not.
   static func from(_ reading: TimeMachineStatus.DestinationReading, target: String)
     -> TimeMachineState
   {
@@ -47,42 +48,42 @@ extension TimeMachineState {
   }
 }
 
-/// Stan bufora miedzy Time Machine a Google Drive.
+/// State of the buffer between Time Machine and Google Drive.
 struct BufferStatus: Equatable {
   var mounted: Bool = false
   var imageAttached: Bool = false
   var sizeGB: Int = 0
-  /// `nil` = pomiaru NIE BYLO (statfs zawiodl), a nie "zero gigabajtow" -
-  /// patrz `BufferGuardService.freeGB()`. To samo rozroznienie, co
-  /// `queueKnown` nizej.
+  /// `nil` = there was NO measurement (statfs failed), not "zero gigabytes" -
+  /// see `BufferGuardService.freeGB()`. The same distinction as
+  /// `queueKnown` below.
   var freeDiskGB: Int?
-  /// Ile plikow czeka na wyslanie. Ta liczba jest wazniejsza od rozmiaru
-  /// bufora: jesli rosnie i nie wraca do zera miedzy backupami, wysylka nie
-  /// nadaza za zapisem.
+  /// How many files are waiting to be uploaded. This number matters more than the
+  /// buffer size: if it grows and does not return to zero between backups, uploading
+  /// is not keeping up with writing.
   var uploadsQueued: Int = 0
   var uploadsInProgress: Int = 0
-  /// Czy powyzsze liczniki w ogole pochodza z odczytu.
+  /// Whether the counters above come from a reading at all.
   ///
-  /// Domyslnie `false` i to jest wazniejsze niz wyglada: swiezo utworzony
-  /// `BufferStatus` ma same zera, ktore nie sa pomiarem. Domyslne `true`
-  /// znaczyloby "pusta kolejka" i pasek menu swiecilby na zielono, zanim
-  /// cokolwiek zostalo sprawdzone.
+  /// `false` by default, and that matters more than it looks: a freshly created
+  /// `BufferStatus` has nothing but zeros, which are not a measurement. A default of `true`
+  /// would mean "empty queue" and the menu bar would light up green before
+  /// anything had been checked.
   var queueKnown: Bool = false
   var erroredFiles: Int = 0
-  /// Na Google Drive nie ma miejsca. NIE minie samo.
+  /// There is no space left on Google Drive. It will NOT pass on its own.
   var driveFull: Bool = false
-  /// Dobowy limit ZAPISU Google (750 GB) wyczerpany. Mija sam.
+  /// The Google daily UPLOAD limit (750 GB) is exhausted. It passes on its own.
   ///
-  /// Trzymane osobno od `driveFull`, bo to sa dwie rozne sytuacje o tym samym
-  /// objawie: jedna znaczy "poczekaj", druga "zwolnij miejsce". Wczesniej byly
-  /// jednym polem i interfejs nie mogl ich rozroznic.
+  /// Kept separate from `driveFull`, because these are two different situations with
+  /// the same symptom: one means "wait", the other "free up space". Previously they were
+  /// a single field and the interface could not tell them apart.
   var dailyQuotaExhausted: Bool = false
-  /// rclone nie ma gdzie odlozyc danych - bufor pelny samymi niewyslanymi.
+  /// rclone has nowhere to put data - the buffer is full of nothing but unsent files.
   var outOfSpace: Bool = false
 
   var draining: Bool { uploadsInProgress > 0 || uploadsQueued > 0 }
 
-  /// Jedno zrodlo prawdy o tym, czy kopia dolatuje na Dysk - i dlaczego nie.
+  /// The single source of truth on whether the backup reaches the Drive - and why not.
   var uploadState: UploadState {
     UploadState.from(
       mounted: mounted,
@@ -96,49 +97,49 @@ struct BufferStatus: Equatable {
   }
 }
 
-/// Czy cykl backupu NADAL dziala - mierzone data ostatniej UDANEJ kopii.
+/// Whether the backup cycle is STILL working - measured by the date of the last SUCCESSFUL backup.
 ///
-/// Do 23.09.2026 interfejs nie zadawal tego pytania ani razu: `grep -rn
-/// "BackupHealth" Sources/CloudMachineApp/` nie dawal ani jednego trafienia.
-/// Panel liczyl zdrowie wylacznie ze stanu URZADZEN - montowanie, obraz, cel
-/// Time Machine, kolejka - czyli ze stanu CHWILOWEGO. Awaria opisana
-/// w naglowku `BackupHealth` jako najgrozniejsza wyglada dokladnie odwrotnie:
-/// wszystko zamontowane, obraz podpiety, kolejka pusta, a Time Machine od
-/// dwoch dni nie dokonczyl kopii. Panel swiecil wtedy "Sprawny / Gotowe".
+/// Until 23.09.2026 the interface did not ask this question even once: `grep -rn
+/// "BackupHealth" Sources/CloudMachineApp/` returned not a single hit.
+/// The panel computed health solely from the state of the DEVICES - the mount, the image, the
+/// Time Machine destination, the queue - that is, from the MOMENTARY state. The failure described
+/// in the `BackupHealth` header as the most dangerous one looks exactly the other way round:
+/// everything mounted, the image attached, the queue empty, and Time Machine has not
+/// finished a backup for two days. The panel then showed "Healthy / Ready".
 struct BackupCycleStatus: Equatable {
-  /// Czy udalo sie w ogole odczytac preferencje Time Machine.
+  /// Whether the Time Machine preferences could be read at all.
   ///
-  /// Domyslnie `false` i to jest wazniejsze, niz wyglada - tak samo jak przy
-  /// `queueKnown`: swiezo utworzony stan nie jest pomiarem, a brak Pelnego
-  /// dostepu do dysku (najczestsza przyczyna nieczytelnego pliku preferencji)
-  /// nie moze uchodzic za brak problemu.
+  /// `false` by default, and that matters more than it looks - just as with
+  /// `queueKnown`: a freshly created state is not a measurement, and missing Full
+  /// Disk Access (the most common reason the preferences file is unreadable)
+  /// must not pass for the absence of a problem.
   var known: Bool = false
-  /// Data ostatniej ZAKONCZONEJ kopii. `nil` = nie ma ani jednej.
+  /// Date of the last COMPLETED backup. `nil` = there is not a single one.
   var lastSuccess: Date?
-  /// Gotowe zdania z `BackupHealth.Report` - do pokazania bez tlumaczenia.
+  /// Ready-made sentences from `BackupHealth.Report` - to show without translating.
   var problems: [String] = []
-  /// Kiedy ostatnio pytalismy (czujka chodzi rzadziej niz odswiezanie panelu).
+  /// When we last asked (the watchdog runs less often than the panel refreshes).
   var checkedAt: Date?
 
   func age(now: Date = Date()) -> TimeInterval? {
     lastSuccess.map { now.timeIntervalSince($0) }
   }
 
-  /// Czy ostatnia UDANA kopia jest dostatecznie swieza.
+  /// Whether the last SUCCESSFUL backup is recent enough.
   ///
-  /// Brak odczytu i brak kopii daja `false` - jedno i drugie znaczy, ze nikt
-  /// nie potwierdzil, ze backup dziala, a zielony znaczek jest wlasnie takim
-  /// potwierdzeniem.
+  /// No reading and no backup both give `false` - either one means that nobody
+  /// has confirmed the backup works, and a green badge is exactly such a
+  /// confirmation.
   func isFresh(now: Date = Date(), maxAgeHours: Double = BackupHealth.maxAgeHours) -> Bool {
     guard known, let age = age(now: now) else { return false }
     return age <= maxAgeHours * 3600
   }
 
-  /// Wiek slowami, do wiersza w panelu.
+  /// The age in words, for a row in the panel.
   func ageText(now: Date = Date()) -> String {
-    guard known else { return "nie sprawdzono" }
-    guard let age = age(now: now) else { return "ani jednej" }
-    return "\(BackupHealth.formatAge(age)) temu"
+    guard known else { return L10n.tr("not checked") }
+    guard let age = age(now: now) else { return L10n.tr("none at all") }
+    return L10n.tr("%@ ago", BackupHealth.formatAge(age))
   }
 }
 
@@ -148,9 +149,9 @@ struct LastRunResult: Equatable {
   var date: Date
 }
 
-/// Zywy postep trwajacego backupu (`tmutil status`). `nil`, gdy nic sie nie
-/// kopiuje. `transferRateMBs` liczymy sami z roznicy bajtow miedzy
-/// odswiezeniami - `tmutil` tego nie podaje.
+/// Live progress of a running backup (`tmutil status`). `nil` when nothing is
+/// being copied. We compute `transferRateMBs` ourselves from the byte difference between
+/// refreshes - `tmutil` does not report it.
 struct BackupProgressInfo: Equatable {
   var phase: String?
   var percent: Double?
@@ -167,22 +168,22 @@ final class AppStatus: ObservableObject {
   @Published var dependencyState: DependencyState = .unknown
   @Published var remoteConfigured: Bool = false
   @Published var buffer = BufferStatus()
-  /// Odpowiedz na pytanie "kiedy ostatnio powstala KOPIA" - jedyna miara,
-  /// ktora rosnie wylacznie przy sukcesie.
+  /// The answer to "when was a BACKUP last made" - the only measure
+  /// that moves only on success.
   @Published var backupCycle = BackupCycleStatus()
   @Published var timeMachineState: TimeMachineState = .unknown
-  /// Kiedy czujka `backup-health` ostatnio PRZEBIEGLA. `nil` = panel jeszcze
-  /// nie pytal (nie: "nie przebiegla nigdy" - to osobny stan `.never`).
+  /// When the `backup-health` watchdog last RAN. `nil` = the panel has not
+  /// asked yet (not: "has never run" - that is a separate state, `.never`).
   ///
-  /// Panel pokazuje to z tego samego powodu, dla ktorego pokazuje wiek ostatniej
-  /// kopii: czujka chodzi z `StartInterval 1800` i bez `KeepAlive`, wiec
-  /// wyladowana albo zawieszona nie daje zadnego objawu poza cisza - a cisza
-  /// jest tu stanem normalnym.
+  /// The panel shows this for the same reason it shows the age of the last
+  /// backup: the watchdog runs with `StartInterval 1800` and without `KeepAlive`, so
+  /// when unloaded or hung it gives no symptom other than silence - and silence
+  /// is the normal state here.
   ///
-  /// CELOWO nie wchodzi do `healthy`: swiezosc kopii panel liczy SAM, z tego
-  /// samego pliku preferencji, z ktorego liczy ja czujka. Martwa czujka nie
-  /// znaczy wiec, ze backup nie dziala - znaczy, ze nikt o awarii nie donosi,
-  /// a to inna awaria i ma swoj wlasny, czerwony wiersz.
+  /// DELIBERATELY not part of `healthy`: the panel computes backup freshness ITSELF, from the
+  /// same preferences file the watchdog computes it from. A dead watchdog therefore does not
+  /// mean the backup is not working - it means nobody reports a failure,
+  /// and that is a different failure with its own red row.
   @Published var watchdog: WatchdogHeartbeat.Freshness?
   @Published var backupProgress: BackupProgressInfo?
   @Published var lastAction: LastRunResult?
@@ -190,66 +191,71 @@ final class AppStatus: ObservableObject {
   @Published var isBusy: Bool = false
   @Published var busyLabel: String = ""
   @Published var errorMessage: String?
-  /// Kiedy ostatnio udalo sie odczytac stan. Pokazywane w interfejsie, bo
-  /// zamrozony widok wyglada dokladnie jak awaria - a to dwie rozne rzeczy
-  /// i uzytkownik musi je odroznic bez zagladania do logow.
+  /// When the state was last read successfully. Shown in the interface, because
+  /// a frozen view looks exactly like a failure - and those are two different things
+  /// that the user has to tell apart without looking into the logs.
   @Published var lastRefresh: Date?
 
-  /// Czy czujka backupu CHODZI. `false` takze wtedy, gdy panel jeszcze nie
-  /// pytal - niesprawdzone nie ma prawa swiecic na zielono, tak samo jak
-  /// `queueKnown` i `BackupCycleStatus.known`.
+  /// Whether the backup watchdog is RUNNING. `false` also when the panel has not
+  /// asked yet - unchecked has no right to show green, just like
+  /// `queueKnown` and `BackupCycleStatus.known`.
   var watchdogRunning: Bool {
     if case .fresh = watchdog { return true }
     return false
   }
 
-  /// Jednozdaniowa odpowiedz na pytanie "czy moje dane sa bezpieczne".
+  /// A one-sentence answer to the question "is my data safe".
   var headline: String {
     if case .missing(let what, _) = dependencyState {
-      return "Brakuje: \(what.joined(separator: ", "))"
+      return L10n.tr("Missing: %@", what.joined(separator: ", "))
     }
-    if !remoteConfigured { return "Google Drive niepolaczony" }
-    if !buffer.mounted { return "Bufor nie dziala" }
-    if !buffer.imageAttached { return "Obraz backupu niepodpiety" }
-    if case .notRegistered = timeMachineState { return "Time Machine nie wskazuje na CloudMachine" }
-    // Brak odpowiedzi tmutil MUSI brzmiec inaczej niz przestawiony cel: to
-    // pierwsze zdanie, ktore czlowiek czyta, i ono decyduje, co zrobi.
-    // "Nie wskazuje" kaze rejestrowac cel na nowo - czynnosc zbedna i myszlaca,
-    // gdy cel jest caly, a zawiesil sie odczyt.
+    if !remoteConfigured { return L10n.tr("Google Drive not connected") }
+    if !buffer.mounted { return L10n.tr("Buffer is not working") }
+    if !buffer.imageAttached { return L10n.tr("Backup image not attached") }
+    if case .notRegistered = timeMachineState {
+      return L10n.tr("Time Machine does not point to CloudMachine")
+    }
+    // No answer from tmutil MUST sound different from a changed destination: it is
+    // the first sentence a person reads, and it decides what they will do.
+    // "Does not point" tells them to register the destination again - a needless and misleading
+    // step when the destination is intact and it was the read that hung.
     if case .noAnswer = timeMachineState {
-      return "NIE WIADOMO, czy Time Machine wskazuje na CloudMachine - tmutil nie odpowiedzial"
+      return L10n.tr(
+        "UNKNOWN whether Time Machine points to CloudMachine - tmutil did not answer")
     }
-    // O wysylce mowi JEDNO zrodlo - inaczej pasek menu i karta stanu potrafily
-    // twierdzic co innego. Pliki, ktorych rclone nie wyslal, istnieja WYLACZNIE
-    // na tym Macu, czyli dokladnie tam, gdzie backup nie ma prawa byc jedyna
-    // kopia; `UploadState` stawia je przed limitem dobowym wlasnie dlatego.
+    // ONE source speaks about uploading - otherwise the menu bar and the status card could
+    // claim different things. Files that rclone did not upload exist ONLY
+    // on this Mac, which is exactly where the backup has no right to be the only
+    // copy; that is precisely why `UploadState` puts them ahead of the daily limit.
     let upload = buffer.uploadState
     if !upload.isNominal { return upload.headline }
-    if backupProgress != nil { return "Backup w toku" }
-    // Stan urzadzen moze byc nienaganny, a kopii moze nie byc od dwoch dni.
-    // To zdanie musi paść PRZED "Gotowe", bo inaczej naglowek zaprzecza
-    // znaczkowi obok (healthy = false, a napis "Gotowe").
+    if backupProgress != nil { return L10n.tr("Backup in progress") }
+    // The state of the devices can be flawless while there has been no backup for two days.
+    // This sentence must come BEFORE "Ready", otherwise the headline contradicts the
+    // badge next to it (healthy = false, and the text says "Ready").
     if !backupCycle.isFresh() {
-      guard backupCycle.known else { return "Nie wiadomo, kiedy powstała ostatnia kopia" }
-      guard let age = backupCycle.age() else { return "Nie ma ani jednej ukończonej kopii" }
-      return "Brak ukończonej kopii od \(BackupHealth.formatAge(age))"
+      guard backupCycle.known else { return L10n.tr("Unknown when the last backup was made") }
+      guard let age = backupCycle.age() else {
+        return L10n.tr("There is no completed backup at all")
+      }
+      return L10n.tr("No completed backup for %@", BackupHealth.formatAge(age))
     }
     if upload.isMovingData { return upload.headline }
-    return "Gotowe"
+    return L10n.tr("Ready")
   }
 
-  /// Czy stan jest naprawde dobry.
+  /// Whether the state is really good.
   ///
-  /// UWAGA: `erroredFiles` i `outOfSpace` MUSZA tu byc. Bez nich pasek menu
-  /// pokazywal zielony znaczek i "Gotowe", podczas gdy czesc pasm obrazu nigdy
-  /// nie doleciala na Dysk - a taka kopia moze sie nie otworzyc. Zepsute
-  /// wygladalo dokladnie tak samo jak sprawne.
+  /// WARNING: `erroredFiles` and `outOfSpace` MUST be here. Without them the menu bar
+  /// showed a green badge and "Ready" while some of the image's bands never
+  /// reached the Drive - and such a backup may not open. Broken
+  /// looked exactly the same as working.
   ///
-  /// UWAGA DRUGA, z 23.09.2026: `backupCycle` MUSI tu byc z tego samego
-  /// powodu. Wszystkie pozostale warunki opisuja stan URZADZEN w tej chwili
-  /// i kazdy z nich moze byc spelniony, gdy od dwoch dni nie powstala zadna
-  /// kopia. Zielony znaczek ma znaczyc "dane sa bezpieczne", a to wynika
-  /// wylacznie z tego, ze kopia POWSTALA - nie z tego, ze dysk jest podpiety.
+  /// SECOND WARNING, from 23.09.2026: `backupCycle` MUST be here for the same
+  /// reason. All the other conditions describe the state of the DEVICES at this moment,
+  /// and each of them can be met when no backup has been made for two days.
+  /// The green badge is meant to say "the data is safe", and that follows
+  /// solely from a backup having BEEN MADE - not from the disk being attached.
   var healthy: Bool {
     guard case .ready = dependencyState, remoteConfigured, buffer.mounted, buffer.imageAttached,
       case .registered = timeMachineState, buffer.uploadState.isNominal,
