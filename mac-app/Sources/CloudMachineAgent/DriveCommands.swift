@@ -438,6 +438,23 @@ struct DriveStatus: AsyncParsableCommand {
     } else {
       print(L10n.tr("TM destination:   none"))
     }
+    let limit = MachineBudget.limitGB()
+    print(
+      L10n.tr(
+        "Space limit:      %@",
+        MachineBudget.summary(limitGB: limit, usage: MachineBudget.storedUsage())))
+    if let limit {
+      let target = BackupImageService.targetPath.path
+      let quota = await TimeMachineStatus.destinationQuotaGB(forMountPointContaining: target)
+      if !MachineBudget.quotaMatches(currentQuotaGB: quota, limitGB: limit),
+        let id = await TimeMachineStatus.destinationID(forMountPointContaining: target)
+      {
+        print(
+          L10n.tr(
+            "                  Time Machine quota not set to match - run: %@",
+            MachineBudget.setQuotaCommand(destinationID: id, limitGB: limit)))
+      }
+    }
     if await TimeMachineStatus.isRunning(), let progress = await TimeMachineStatus.currentProgress()
     {
       let percent = (progress.percent ?? 0) * 100

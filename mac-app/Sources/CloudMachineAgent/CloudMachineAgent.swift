@@ -13,6 +13,7 @@ struct CloudMachineAgent: AsyncParsableCommand {
     subcommands: [
       InstallLaunchd.self,
       ConfigureRemote.self,
+      SetLimit.self,
       InstallDependencies.self,
       BuildApp.self,
       MakeDmg.self,

@@ -29,6 +29,13 @@ cloudmachine-agent create-image --size-gb 4000   # needs the mount from the step
 cloudmachine-agent attach-image
 ```
 
+Optionally, limit how much of the Google account this Mac may use; it prints
+the Time Machine quota command to run next:
+
+```sh
+cloudmachine-agent set-limit --gb 1500
+```
+
 Two steps need `sudo`, because they change system-wide settings:
 
 ```sh

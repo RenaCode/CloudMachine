@@ -1,6 +1,30 @@
 // Polish translations, keyed by the English text passed to `L10n.tr`.
 extension L10nPolish {
   static let app: [String: String] = [
+    "Saving the space limit":
+      "Zapisuję limit miejsca",
+    "Measuring usage on Google Drive":
+      "Mierzę zajętość na Google Drive",
+    "Google Drive did not answer - try again later.":
+      "Google Drive nie odpowiedział - spróbuj później.",
+    "Measured.":
+      "Zmierzono.",
+    "Space limit for this Mac":
+      "Limit miejsca dla tego Maca",
+    "Used on Google Drive":
+      "Zajęte na Google Drive",
+    "Measured %@. The watchdog measures again every few hours.":
+      "Zmierzono %@. Czujka mierzy ponownie co kilka godzin.",
+    "Limit (GB)":
+      "Limit (GB)",
+    "Save":
+      "Zapisz",
+    "Measure now":
+      "Zmierz teraz",
+    "Time Machine quota: %@ GB (70%% of the limit - the copy on Drive is about a third larger than the backup inside it). Time Machine deletes the oldest backups to stay within it.":
+      "Limit Time Machine: %@ GB (70%% limitu - kopia na Drive jest o mniej więcej jedną trzecią większa niż backup w środku). Time Machine kasuje najstarsze kopie, żeby się w nim zmieścić.",
+    "Set the Time Machine quota: run this in Terminal (needs sudo)":
+      "Ustaw limit Time Machine: uruchom to w Terminalu (wymaga sudo)",
     // SetupPlan / setup card
     "Install rclone (the official build, which can mount)":
       "Zainstaluj rclone (oficjalną wersję, która umie montować)",

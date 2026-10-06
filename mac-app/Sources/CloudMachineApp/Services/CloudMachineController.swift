@@ -197,6 +197,51 @@ final class CloudMachineController: ObservableObject {
     status.timeMachineState = TimeMachineState.from(
       await TimeMachineStatus.destinationReading(),
       target: BackupImageService.targetPath.path)
+    // Cheap reads only: the limit from machines.json, the last stored usage
+    // measurement and `tmutil destinationinfo`. Measuring the Drive folder
+    // is the watchdog's job (or the Measure button).
+    status.budgetLimitGB = MachineBudget.limitGB()
+    status.budgetUsage = MachineBudget.storedUsage()
+    let target = BackupImageService.targetPath.path
+    status.timeMachineQuotaGB = await TimeMachineStatus.destinationQuotaGB(
+      forMountPointContaining: target)
+    status.timeMachineDestinationID = await TimeMachineStatus.destinationID(
+      forMountPointContaining: target)
+  }
+
+  /// Stores this Mac's limit, then measures the Drive folder so the card
+  /// shows usage against it straight away.
+  func saveLimit(gb: Int) async {
+    await run(L10n.tr("Saving the space limit"), log: "Saving the space limit") {
+      do {
+        try MachineBudget.setLimitGB(gb)
+      } catch let error as MachineBudget.BudgetError {
+        return CMActionResult(succeeded: false, message: error.message)
+      } catch {
+        return CMActionResult(succeeded: false, message: error.localizedDescription)
+      }
+      await MachineBudget.measureUsage()
+      return CMActionResult(
+        succeeded: true, message: L10n.tr("Limit for this Mac: %@ GB.", "\(gb)"))
+    }
+  }
+
+  func measureDriveUsage() async {
+    await run(L10n.tr("Measuring usage on Google Drive"), log: "Measuring usage on Google Drive") {
+      let usage = await MachineBudget.measureUsage()
+      return CMActionResult(
+        succeeded: usage != nil,
+        message: usage != nil
+          ? L10n.tr("Measured.") : L10n.tr("Google Drive did not answer - try again later."))
+    }
+  }
+
+  /// The quota command to copy, when the quota does not match the limit yet.
+  var quotaCommand: String? {
+    guard let limit = status.budgetLimitGB, let id = status.timeMachineDestinationID,
+      !MachineBudget.quotaMatches(currentQuotaGB: status.timeMachineQuotaGB, limitGB: limit)
+    else { return nil }
+    return MachineBudget.setQuotaCommand(destinationID: id, limitGB: limit)
   }
 
   private func refreshProgress() async {

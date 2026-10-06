@@ -552,6 +552,7 @@ public enum BackupHealth {
       backupRunning: await TimeMachineStatus.runningState())
 
     report.problems.append(contentsOf: unmeasuredLocalDiskProblems(localFreeGB: localFree))
+    report.problems.append(contentsOf: await MachineBudget.currentProblems())
     return report
   }
 

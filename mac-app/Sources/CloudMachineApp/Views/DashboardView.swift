@@ -14,6 +14,8 @@ struct DashboardView: View {
   /// This Mac's folder on Google Drive, chosen before connecting. Empty means
   /// "not edited yet" and shows the suggestion from the computer name.
   @State private var driveFolder = ""
+  /// The limit being typed; empty = show the stored one.
+  @State private var limitText = ""
 
   var body: some View {
     ZStack {
@@ -145,6 +147,11 @@ struct DashboardView: View {
 
         // Buffer and upload details
         bufferCard
+
+        // This Mac's space limit on Google Drive
+        if controller.status.remoteConfigured {
+          budgetCard
+        }
 
         // Google OAuth credentials
         credentialsCard
@@ -499,6 +506,109 @@ struct DashboardView: View {
   }
 
   // MARK: - Buffer and Upload Details
+
+  /// Several Macs on one Google account share its space; each gets a limit.
+  /// Time Machine enforces it through its quota (deleting the oldest
+  /// backups), the watchdog warns from 90% of the real usage on Drive.
+  private var budgetCard: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 8) {
+        Image(systemName: "chart.pie.fill")
+          .font(.system(size: 15))
+          .foregroundStyle(RenaCodeTheme.colorCyan)
+        Text(L10n.tr("Space limit for this Mac"))
+          .font(.system(size: 15, weight: .bold, design: .rounded))
+          .foregroundStyle(RenaCodeTheme.textMain)
+      }
+
+      row(
+        L10n.tr("Used on Google Drive"),
+        MachineBudget.summary(
+          limitGB: controller.status.budgetLimitGB, usage: controller.status.budgetUsage),
+        ok: budgetOK)
+
+      if let usage = controller.status.budgetUsage {
+        Text(
+          L10n.tr(
+            "Measured %@. The watchdog measures again every few hours.",
+            usage.measuredAt.formatted(date: .abbreviated, time: .shortened))
+        )
+        .font(.system(size: 11))
+        .foregroundStyle(RenaCodeTheme.textMain.opacity(0.6))
+      }
+
+      HStack(spacing: 8) {
+        Text(L10n.tr("Limit (GB)"))
+          .font(.system(size: 12))
+          .foregroundStyle(RenaCodeTheme.textMain)
+        TextField(
+          controller.status.budgetLimitGB.map { "\($0)" } ?? "1500", text: $limitText
+        )
+        .textFieldStyle(.roundedBorder)
+        .frame(width: 90)
+        Button(action: {
+          if let gb = Int(limitText.trimmingCharacters(in: .whitespaces)), gb > 0 {
+            Task {
+              await controller.saveLimit(gb: gb)
+              limitText = ""
+            }
+          }
+        }) {
+          Text(L10n.tr("Save")).font(.system(size: 12, weight: .semibold))
+        }
+        .buttonStyle(SecondaryGlassButtonStyle())
+        .disabled(
+          controller.status.isBusy
+            || (Int(limitText.trimmingCharacters(in: .whitespaces)) ?? 0) <= 0)
+        Button(action: { Task { await controller.measureDriveUsage() } }) {
+          Text(L10n.tr("Measure now")).font(.system(size: 12, weight: .semibold))
+        }
+        .buttonStyle(SecondaryGlassButtonStyle())
+        .disabled(controller.status.isBusy)
+      }
+
+      if let limit = controller.status.budgetLimitGB {
+        Text(
+          L10n.tr(
+            "Time Machine quota: %@ GB (70%% of the limit - the copy on Drive is about a third larger than the backup inside it). Time Machine deletes the oldest backups to stay within it.",
+            "\(MachineBudget.timeMachineQuotaGB(forLimitGB: limit))")
+        )
+        .font(.system(size: 11))
+        .foregroundStyle(RenaCodeTheme.textMain.opacity(0.7))
+        .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if let command = controller.quotaCommand {
+        Text(L10n.tr("Set the Time Machine quota: run this in Terminal (needs sudo)"))
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(RenaCodeTheme.colorWarning)
+        HStack {
+          Text(command)
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(RenaCodeTheme.textMain)
+            .textSelection(.enabled)
+          Spacer()
+          Button(action: {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+          }) {
+            Text(L10n.tr("Copy")).font(.system(size: 11, weight: .medium))
+          }
+          .buttonStyle(SecondaryGlassButtonStyle())
+        }
+        .padding(10)
+        .background(RenaCodeTheme.bgInset)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+      }
+    }
+    .glassCard(borderColor: RenaCodeTheme.colorCyan.opacity(0.35))
+  }
+
+  private var budgetOK: Bool {
+    guard let limit = controller.status.budgetLimitGB, let usage = controller.status.budgetUsage
+    else { return controller.status.budgetLimitGB != nil }
+    return MachineBudget.level(usageBytes: usage.bytes, limitGB: limit) == .ok
+  }
 
   private var bufferCard: some View {
     VStack(alignment: .leading, spacing: 14) {
