@@ -24,7 +24,10 @@ public enum DriveBufferService {
   public static var logFile: URL { root.appendingPathComponent("rclone.log") }
 
   public static let remoteName = "gdrive"
-  public static let remotePath = "CloudMachine/mac-studio"
+  /// Top-level folder on Drive; each Mac has its own subfolder in it.
+  public static let remoteRoot = "CloudMachine"
+  /// This Mac's folder - see `DriveFolder` for why the name is fixed once set.
+  public static var remotePath: String { "\(remoteRoot)/\(DriveFolder.name)" }
   /// Buffer size. Kept as a number, because the watchdog's thresholds are
   /// derived from it - otherwise changing one without the other gives
   /// thresholds that never fire or fire immediately.

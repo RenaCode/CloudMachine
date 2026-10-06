@@ -1,6 +1,27 @@
 // Polish translations, keyed by the English text passed to `L10n.tr`.
 extension L10nPolish {
   static let app: [String: String] = [
+    // SetupPlan / setup card
+    "Install rclone (the official build, which can mount)":
+      "Zainstaluj rclone (oficjalną wersję, która umie montować)",
+    "Install FUSE-T": "Zainstaluj FUSE-T",
+    "Connect Google Drive: run this in Terminal and approve in the browser":
+      "Połącz Google Drive: uruchom to w Terminalu i zatwierdź w przeglądarce",
+    "Grant Full Disk Access to CloudMachine, so it can tell whether backups complete":
+      "Nadaj CloudMachine Pełny dostęp do dysku, żeby mógł sprawdzać, czy kopie się kończą",
+    "Install the background agents (mount, image attach, watchdogs)":
+      "Zainstaluj agentów w tle (montowanie, podpinanie obrazu, czujki)",
+    "Create the backup image on Google Drive": "Utwórz obraz kopii na Google Drive",
+    "Attach the backup image": "Podepnij obraz kopii",
+    "Point Time Machine at CloudMachine: run this in Terminal (needs sudo)":
+      "Ustaw CloudMachine jako dysk Time Machine: uruchom to w Terminalu (wymaga sudo)",
+    "Size (GB)": "Rozmiar (GB)",
+    "Install rclone": "Zainstaluj rclone",
+    "Open System Settings": "Otwórz Ustawienia systemowe",
+    "Install agents": "Zainstaluj agentów",
+    "Create image": "Utwórz obraz",
+    "Attach image": "Podepnij obraz",
+    "Installing FUSE-T": "Instaluję FUSE-T",
     // AppStatus
     "not checked": "nie sprawdzono",
     "none at all": "ani jednej",

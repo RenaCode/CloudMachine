@@ -11,7 +11,9 @@ public enum BackupImageService {
 
   // MARK: - Paths
 
-  public static let imageName = "mac-studio"
+  /// Named after this Mac's Drive folder (`mac-studio` on installations that
+  /// predate per-Mac folders, where that is the image that already exists).
+  public static var imageName: String { DriveFolder.name }
   public static let volumeName = "CloudMachine"
 
   public static var imagePath: URL {
