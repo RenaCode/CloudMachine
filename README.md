@@ -91,11 +91,12 @@ use the same Google account and the same OAuth credentials. Each Mac backs up
 into its own folder, `gdrive:CloudMachine/<folder>`, holding
 `<folder>.sparsebundle`, so their backups never mix.
 
-The folder name is chosen once, at **Connect Google Drive**, from the computer
-name. To pick it yourself, add `--folder NAME` to the command the card gives
-you, e.g. `… configure-remote --folder office-imac`. It cannot be changed
-afterwards, because a new name is a new, empty backup; CloudMachine refuses
-rather than orphan the old one. Installations set up before per-Mac folders
+The folder name is chosen once, in the **Connect Google Drive** step: the card
+has a **Folder on Google Drive** field, filled in from the computer name, and
+the command to copy includes whatever you type there. Give each Mac its own
+name. It cannot be changed afterwards, because a new name is a new, empty
+backup; CloudMachine refuses rather than orphan the old one. The window shows
+the folder in use. Installations set up before per-Mac folders
 keep `mac-studio`, which is where their backup already is.
 
 ### Upgrading and uninstalling

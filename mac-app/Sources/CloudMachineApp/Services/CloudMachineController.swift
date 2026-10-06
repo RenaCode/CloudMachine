@@ -109,6 +109,11 @@ final class CloudMachineController: ObservableObject {
     // `~/Library/Application Support/com.apple.TCC`: the wrong path and a check
     // that proves nothing under TCC.
     status.hasFullDiskAccess = BackupHealth.preferencesReadable()
+    status.driveFolderPath = "\(DriveBufferService.remoteName):\(DriveBufferService.remotePath)"
+    if !status.remoteConfigured, status.suggestedDriveFolder.isEmpty {
+      let key = await MachineIdentity.currentKey()
+      status.suggestedDriveFolder = DriveFolder.isValid(key) ? key : "this-mac"
+    }
     status.agentsInstalled = await LaunchdInstaller.isInstalled(
       label: "com.renacode.cloudmachine.gdrive-buffer")
   }
@@ -258,8 +263,14 @@ final class CloudMachineController: ObservableObject {
 
   /// Connecting to Google Drive is done from the terminal, not from the GUI: OAuth opens
   /// the browser and waits for approval, and we read the keys from the Keychain.
-  var connectDriveCommand: String {
-    "\(CMPaths.agentBinaryPath?.path ?? "cloudmachine-agent") configure-remote"
+  var connectDriveCommand: String { connectDriveCommand(folder: nil) }
+
+  /// With `folder`, the command fixes this Mac's Drive folder name. The name
+  /// is validated by `DriveFolder.isValid` (letters, digits, dashes), so it
+  /// needs no shell quoting.
+  func connectDriveCommand(folder: String?) -> String {
+    SetupPlan.connectCommand(
+      agent: CMPaths.agentBinaryPath?.path ?? "cloudmachine-agent", folder: folder)
   }
 
   func createImage(sizeGB: Int) async {

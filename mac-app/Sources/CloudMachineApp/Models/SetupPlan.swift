@@ -28,6 +28,9 @@ struct SetupStep: Equatable {
   /// Shown with a Copy button; for steps the app cannot do itself.
   let command: String?
   let action: Action?
+  /// The step where this Mac's Drive folder is chosen: the card shows a name
+  /// field and puts `--folder NAME` into the command.
+  var choosesFolder = false
 }
 
 enum SetupPlan {
@@ -43,6 +46,14 @@ enum SetupPlan {
     var timeMachineNotPointingHere: Bool
     var connectCommand: String
     var setDestinationCommand: String
+  }
+
+  /// `configure-remote`, with `--folder` only for a valid name - an invalid
+  /// one is left out rather than passed on to be refused.
+  static func connectCommand(agent: String, folder: String?) -> String {
+    let base = "\(agent) configure-remote"
+    guard let folder, DriveFolder.isValid(folder) else { return base }
+    return "\(base) --folder \(folder)"
   }
 
   static func steps(_ input: Inputs) -> [SetupStep] {
@@ -63,7 +74,7 @@ enum SetupPlan {
       steps.append(
         SetupStep(
           title: L10n.tr("Connect Google Drive: run this in Terminal and approve in the browser"),
-          command: input.connectCommand, action: nil))
+          command: input.connectCommand, action: nil, choosesFolder: true))
       return steps
     }
     if !input.hasFullDiskAccess {

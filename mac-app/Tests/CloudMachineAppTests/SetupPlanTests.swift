@@ -85,4 +85,23 @@ final class SetupPlanTests: XCTestCase {
     XCTAssertEqual(steps.map(\.action), [nil])
     XCTAssertEqual(steps.first?.command, "sudo set")
   }
+
+  func testConnectStepIsWhereTheFolderIsChosen() {
+    var input = inputs()
+    input.remoteConfigured = false
+    let steps = SetupPlan.steps(input)
+    XCTAssertEqual(steps.last?.choosesFolder, true)
+    XCTAssertEqual(steps.filter(\.choosesFolder).count, 1)
+  }
+
+  func testConnectCommandCarriesAValidFolderOnly() {
+    XCTAssertEqual(
+      SetupPlan.connectCommand(agent: "agent", folder: "office-imac"),
+      "agent configure-remote --folder office-imac")
+    XCTAssertEqual(SetupPlan.connectCommand(agent: "agent", folder: nil), "agent configure-remote")
+    // Rejected names never reach the shell: no quoting is needed for what passes.
+    XCTAssertEqual(
+      SetupPlan.connectCommand(agent: "agent", folder: "My Mac; rm -rf ~"),
+      "agent configure-remote")
+  }
 }
