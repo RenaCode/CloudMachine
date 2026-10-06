@@ -123,15 +123,13 @@ jobs:
     env:
       IS_RELEASE: ${{ needs.decide.outputs.release }}
       VERSION: ${{ needs.decide.outputs.version }}
+      # Read by build-app and make-dmg; the computed version must not be
+      # written into mac-app/VERSION, which would mark every release dirty.
+      CM_RELEASE_VERSION: ${{ needs.decide.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # The build reads its version from this file; a computed patch release
-      # must report itself as that version, not as the base.
-      - name: Set the release version
-        run: printf '%s\n' "$VERSION" > mac-app/VERSION
 
       - name: swift test
         working-directory: mac-app
@@ -165,6 +163,11 @@ jobs:
           sudo security add-trusted-cert -d -r trustRoot -p codeSign \
             -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
           rm -f "$RUNNER_TEMP/cert.p12"
+
+      # Shown before the build: v1.3.0 shipped marked DIRTY-TREE, and the log
+      # did not say which file a runner step had changed.
+      - name: Working tree state
+        run: git status --porcelain && git diff --stat
 
       - name: Build CloudMachine.app (universal)
         working-directory: mac-app
