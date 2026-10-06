@@ -78,7 +78,7 @@ public enum AppVersionReader {
   /// Przy `swift run` zadnego bundla nie ma i to nie jest blad - zwracamy
   /// `nil`, a wolajacy mowi wprost, ze to build z drzewa roboczego.
   public static func current(
-    executable: URL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+    executable: URL = CMPaths.runningExecutable
   ) -> AppVersion? {
     let infoPlist =
       executable

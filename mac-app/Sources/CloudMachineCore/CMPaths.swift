@@ -9,6 +9,20 @@ import Foundation
 /// Jedno miejsce prawdy dla GUI i CLI - wczesniej ta sama logika byla
 /// zduplikowana (raz jako common.sh, raz czesciowo w CloudMachineController).
 public enum CMPaths {
+  /// Prawdziwa sciezka do dzialajacej binarki, po rozwinieciu dowiazan.
+  ///
+  /// NIE `CommandLine.arguments[0]`: przy wywolaniu z PATH (dowiazanie
+  /// `/usr/local/bin/cloudmachine-agent`, binarka z Homebrew) powloka podaje
+  /// tam sama nazwe, a `URL(fileURLWithPath:)` dokleja ja do biezacego
+  /// katalogu. `cd /tmp && cloudmachine-agent version` meldowal wtedy "Build
+  /// z drzewa roboczego", a `install-launchd` wskazalby launchd binarke
+  /// `/tmp/cloudmachine-agent`, ktorej nie ma. `Bundle.main.executableURL`
+  /// bierze sciezke od jadra, niezaleznie od tego, jak polecenie wpisano.
+  public static var runningExecutable: URL {
+    (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]))
+      .resolvingSymlinksInPath()
+  }
+
   /// Katalog z zasobami projektu (`launchd/`, `config/`) - w .app to
   /// `Contents/Resources`, w checkoutcie deweloperskim to korzen repo
   /// (rodzic `mac-app/`). `nil`, jesli zaden z tych katalogow nie istnieje
@@ -23,7 +37,16 @@ public enum CMPaths {
     // ta binarka siedzi pod mac-app/.build/<triple>/<config>/, wiec korzen
     // repo to 5 poziomow wyzej. Sprawdzamy tez plytsza sciezke na wypadek
     // uruchomienia bezposrednio z katalogu mac-app.
-    let exeDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+    let exeDir = runningExecutable.deletingLastPathComponent()
+    // Agent wolany przez dowiazanie: `Bundle.main` bywa wtedy liczony od
+    // katalogu dowiazania, nie od .app - wiec Resources szukamy tez obok
+    // prawdziwej binarki (Contents/MacOS -> Contents/Resources).
+    let bundleResources = exeDir.deletingLastPathComponent().appendingPathComponent("Resources")
+    if FileManager.default.fileExists(
+      atPath: bundleResources.appendingPathComponent("launchd").path)
+    {
+      return bundleResources
+    }
     var candidate = exeDir
     for _ in 0..<6 {
       if FileManager.default.fileExists(atPath: candidate.appendingPathComponent("launchd").path) {
@@ -70,9 +93,9 @@ public enum CMPaths {
   /// 3. Fallback dla GUI uruchomionego przez `swift run` w drzewie repo -
   ///    szukamy `cloudmachine-agent` w `.build/*/{release,debug}/` obok binarki GUI.
   public static var agentBinaryPath: URL? {
-    let selfURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    let selfURL = runningExecutable
     if selfURL.lastPathComponent == "cloudmachine-agent" {
-      return selfURL.standardizedFileURL
+      return selfURL
     }
     if let bundled = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent(
       "cloudmachine-agent"),
