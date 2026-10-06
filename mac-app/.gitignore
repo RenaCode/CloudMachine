@@ -1,5 +1,5 @@
 .build/
 build/
 *.dmg
-# Pliki posrednie generatora ikony - odtwarzalne z generate_icon.swift, tylko finalny .icns jest sledzony.
+# Icon generator intermediate files - reproducible from generate_icon.swift; only the final .icns is tracked.
 Resources/AppIcon.iconset/

@@ -1,154 +1,161 @@
-# Warstwa Google Drive - pomiary i wnioski
+# Google Drive layer - measurements and conclusions
 
-Dzialajacy system siedzi w aplikacji, nie tutaj. Ten katalog trzyma harnessy
-pomiarowe i uzasadnienia decyzji, ktore z tych pomiarow wyszly.
+The working system lives in the app, not here. This directory holds the
+measurement harnesses and the reasoning behind the decisions that came out of
+those measurements.
 
 ```
 Time Machine
-  -> /Volumes/CloudMachine          obraz podpiety przez hdiutil; TM widzi zwykly APFS
-     -> ~/.cloudmachine/drive       rclone mount na FUSE-T
-        -> ~/.cloudmachine/cache    bufor zapisu 100 GB
+  -> /Volumes/CloudMachine          image attached by hdiutil; TM sees plain APFS
+     -> ~/.cloudmachine/drive       rclone mount on FUSE-T
+        -> ~/.cloudmachine/cache    100 GB write buffer
         -> gdrive:CloudMachine/...  Google Drive
 ```
 
-Sens ukladu: **w sciezce zapisu nie ma sieciowego systemu plikow.** Time Machine
-pisze do lokalnie podpietego obrazu i nie wie, ze pasma leza w chmurze. Odpada
-SMB, a z nim najczestsza przyczyna psucia sie backupow sieciowych.
+The point of this layout: **there is no network file system in the write path.**
+Time Machine writes to a locally attached image and does not know that the bands
+live in the cloud. SMB drops out, and with it the most common cause of corrupted
+network backups.
 
-## Gdzie co jest
+## Where things are
 
-| Co | Gdzie |
+| What | Where |
 |---|---|
-| Bufor (montowanie, cache, kolejka) | `CloudMachineCore/DriveBufferService` |
-| Obraz (tworzenie, podpinanie, spojnosc) | `CloudMachineCore/BackupImageService` |
-| Dozorca bufora | `CloudMachineCore/BufferGuardService` |
-| Instalacja rclone z obsluga montowania | `CloudMachineCore/RcloneInstaller` |
-| Rozwiazywanie narzedzi, kontrola FUSE | `CloudMachineCore/CMTooling` |
-| Podkomendy | `CloudMachineAgent/DriveCommands` |
-| Agenty launchd | `launchd/*.plist.template` |
+| Buffer (mounting, cache, queue) | `CloudMachineCore/DriveBufferService` |
+| Image (creating, attaching, consistency) | `CloudMachineCore/BackupImageService` |
+| Buffer guard | `CloudMachineCore/BufferGuardService` |
+| Installing rclone with mount support | `CloudMachineCore/RcloneInstaller` |
+| Tool resolution, FUSE check | `CloudMachineCore/CMTooling` |
+| Subcommands | `CloudMachineAgent/DriveCommands` |
+| launchd agents | `launchd/*.plist.template` |
 
 ```sh
-cloudmachine-agent install-rclone     # oficjalna binarka (ta z Homebrew nie umie montowac)
-cloudmachine-agent configure-remote   # OAuth, klucze z Keychaina
+cloudmachine-agent install-rclone     # official binary (the Homebrew one cannot mount)
+cloudmachine-agent configure-remote   # OAuth, keys from the Keychain
 cloudmachine-agent create-image --size-gb 4000
 cloudmachine-agent attach-image
 cloudmachine-agent drive-status
 sudo tmutil setdestination /Volumes/CloudMachine
 ```
 
-## Rozmiar pasma
+## Band size
 
-Ustawiany wylacznie przy tworzeniu obrazu; pozniej nie da sie go zmienic bez
-zaczynania backupu od zera. Dwie sily ciagna w przeciwne strony: Google Drive
-przepuszcza okolo **dwoch operacji na plik na sekunde** i ma limit **400 000
-plikow**, co premiuje duze pasma - ale kazda zmiana brudzi **cale** pasmo, co
-przy dobowym limicie **750 GB** premiuje male.
+Set only when the image is created; it cannot be changed later without starting
+the backup from scratch. Two forces pull in opposite directions: Google Drive
+allows roughly **two operations per file per second** and has a limit of
+**400,000 files**, which favours large bands - but every change dirties the
+**whole** band, which, with the daily limit of **750 GB**, favours small ones.
 
-Zmierzone (`cloudmachine-poc amplification`, obraz 3 GB, zmiana 300 MB):
+Measured (`cloudmachine-poc amplification`, 3 GB image, 300 MB change):
 
-| Pasmo | Pasm na 3 GB | Rozrzucona zmiana | Dopisanie (jak TM) | Plikow na 200 GB |
-|-------|--------------|-------------------|--------------------|------------------|
-| 8 MB  | 381          | 2712 MB           | 384 MB             | 25 600           |
-| 16 MB | 193          | 3040 MB           | 480 MB             | 12 800           |
-| 32 MB | 99           | 3072 MB           | **672 MB**         | **6 400**        |
-| 64 MB | 52           | 3136 MB           | 768 MB             | 3 200            |
+| Band  | Bands per 3 GB | Scattered change | Append (like TM)   | Files per 200 GB |
+|-------|----------------|------------------|--------------------|------------------|
+| 8 MB  | 381            | 2712 MB          | 384 MB             | 25,600           |
+| 16 MB | 193            | 3040 MB          | 480 MB             | 12,800           |
+| 32 MB | 99             | 3072 MB          | **672 MB**         | **6,400**        |
+| 64 MB | 52             | 3136 MB          | 768 MB             | 3,200            |
 
-Przy zmianie **rozrzuconej** po calym wolumenie rozmiar pasma nie ma znaczenia -
-brudzi sie prawie kazde pasmo i wysyla sie w praktyce caly obraz. To jednak
-najgorszy przypadek, nie ten, ktory nas dotyczy.
+With a change **scattered** across the whole volume, band size does not matter -
+almost every band gets dirtied and in practice the whole image is uploaded. That
+is the worst case, though, not the one that applies to us.
 
-Przy **dopisywaniu**, czyli tym, co faktycznie robi Time Machine, transfer
-rosnie monotonicznie z rozmiarem pasma: 64 MB kosztuje dokladnie dwa razy tyle
-co 8 MB. Duze pasma nie sa darmowe.
+With **appending**, which is what Time Machine actually does, transfer grows
+monotonically with band size: 64 MB costs exactly twice as much as 8 MB. Large
+bands are not free.
 
-Stad **32 MB**: najmniejsze pasmo, przy ktorym pierwsza wysylka przestaje byc
-ograniczona tempem operacji Drive'a (6 400 plikow, ~0,9 h) i zaczyna byc
-ograniczona pasmem lacza (~1,3 h przy 332 Mb/s).
+Hence **32 MB**: the smallest band at which the initial upload stops being
+limited by Drive's operation rate (6,400 files, ~0.9 h) and starts being limited
+by link bandwidth (~1.3 h at 332 Mb/s).
 
-## Kaprysy montowania FUSE-T
+## FUSE-T mount quirks
 
-FUSE-T montuje przez NFS, a `hdiutil` na takim wolumenie bywa odrzucany bledem
-**`RPC version wrong`**. Zmierzone: blad nie zalezy od rozmiaru obrazu ani od
-danych (jeden przebieg padl dla 100 GB i 400 GB, a przeszedl dla 600, 1000
-i 1500 GB), tylko od **chwili** - przy pustej kolejce wysylki 5 prob na 5
-udanych, przy rclone zajetym losowo. Stad czekanie na cisze i ponawianie
-w `BackupImageService`; przy tworzeniu produkcyjnego obrazu pierwsza proba padla,
-druga przeszla.
+FUSE-T mounts via NFS, and `hdiutil` on such a volume is sometimes rejected with
+the error **`RPC version wrong`**. Measured: the error does not depend on image
+size or on the data (one run failed for 100 GB and 400 GB and passed for 600,
+1000 and 1500 GB), only on the **moment** - with an empty upload queue 5 out of
+5 attempts succeeded, with rclone busy it was random. Hence waiting for quiet and
+retrying in `BackupImageService`; when the production image was created, the
+first attempt failed and the second one succeeded.
 
-**Obraz trzeba tworzyc na miejscu, na zamontowanym Drive.** Utworzenie go
-lokalnie i przeniesienie daje obraz, ktorego `hdiutil` pozniej nie otwiera
-(`CBSDBackingStore::newProbe stat() failed`), mimo ze wszystkie pliki i pasma sa
-na swoim miejscu i daja sie czytac.
+**The image has to be created in place, on the mounted Drive.** Creating it
+locally and moving it produces an image that `hdiutil` later will not open
+(`CBSDBackingStore::newProbe stat() failed`), even though all the files and bands
+are in place and readable.
 
-Pozostale backendy FUSE-T nie pomagaja: `backend=fskit` w ogole sie nie montuje,
-`backend=smb` montuje sie, ale `hdiutil create` konczy sie `Is a directory`.
+The other FUSE-T backends do not help: `backend=fskit` does not mount at all,
+`backend=smb` mounts, but `hdiutil create` ends with `Is a directory`.
 
-## Co przetrwa smierc warstwy chmurowej
+## What survives the death of the cloud layer
 
-`cloudmachine-poc pullplug` odpina zastepnik montowania w trakcie zapisu, czyli symuluje
-padniecie procesu rclone albo wysypanie sie FUSE-T. Trzy rundy, **zero
-nieodwracalnych strat** - obraz za kazdym razem przeszedl `fsck_apfs`.
+`cloudmachine-poc pullplug` detaches a stand-in for the mount in the middle of a
+write, i.e. it simulates the rclone process dying or FUSE-T crashing. Three
+rounds, **zero irreversible losses** - the image passed `fsck_apfs` every time.
 
-Zerwanie samego lacza jest lagodniejsze: przy `--vfs-cache-mode full` zapis idzie
-do bufora, montowanie stoi i Time Machine niczego nie zauwaza.
+Losing just the network link is milder: with `--vfs-cache-mode full` writes go
+to the buffer, the mount stays up and Time Machine notices nothing.
 
-Dwie pulapki, ktore ten test ujawnil, obie zalatane w `BackupImageService`:
+Two traps this test uncovered, both patched in `BackupImageService`:
 
-**Zombie urzadzenia.** Po wymuszonym odpieciu urzadzenie obrazu potrafi zostac
-w systemie. Podpiecie zwraca wtedy martwy uchwyt, na ktorym `fsck_apfs` melduje
-`failed to read container superblock` z UUID z samych zer. Wyglada to jak
-skasowany backup, a jest tylko nieczytelnym urzadzeniem - pierwsza wersja tego
-testu na tej podstawie trzy razy z rzedu orzekla utrate danych, ktore byly cale.
+**Zombie devices.** After a forced detach the image's device can remain in the
+system. Attaching then returns a dead handle, on which `fsck_apfs` reports
+`failed to read container superblock` with an all-zero UUID. It looks like a
+deleted backup, but it is only an unreadable device - on that basis the first
+version of this test declared, three times in a row, the loss of data that was
+intact.
 
-**Osierocony punkt montowania.** Po nieczystym odpieciu katalog
-`/Volumes/CloudMachine` zostaje i blokuje ponowne podpiecie komunikatem
-`no mountable file systems`. Nalezy do uzytkownika, ale lezy w `/Volumes`
-nalezacym do roota, wiec `rmdir` odmawia - **agent dzialajacy jako uzytkownik
-nie posprzata po sobie sam**. Aplikacja wykrywa to i podaje dokladne polecenie.
+**Orphaned mount point.** After an unclean detach the `/Volumes/CloudMachine`
+directory remains and blocks re-attaching with the message
+`no mountable file systems`. It belongs to the user, but it sits in `/Volumes`,
+which belongs to root, so `rmdir` refuses - **an agent running as the user
+cannot clean up after itself**. The app detects this and gives the exact
+command.
 
-## Bufor jest limitem miekkim
+## The buffer is a soft limit
 
-`--vfs-cache-max-size` nie jest granica twarda: rclone usuwa z bufora tylko dane
-juz wyslane, wiec gdy wszystko czeka w kolejce, bufor rosnie dalej i moze
-zapelnic dysk. Time Machine pisze do obrazu z predkoscia SSD (zmierzone
-267 MB/s), rclone wysyla z predkoscia lacza (~41 MB/s) - na starcie pierwszego
-backupu bufor rosl netto o 32 MB/s.
+`--vfs-cache-max-size` is not a hard limit: rclone evicts from the buffer only
+data that has already been uploaded, so when everything is waiting in the queue,
+the buffer keeps growing and can fill the disk. Time Machine writes to the image
+at SSD speed (measured 267 MB/s), rclone uploads at link speed (~41 MB/s) - at
+the start of the first backup the buffer grew by a net 32 MB/s.
 
-Dlatego `BufferGuardService` wstrzymuje Time Machine powyzej progu i wznawia,
-gdy wysylka nadgoni. Pilnuje tez dobowego limitu Drive'a: po jego przekroczeniu
-rclone konczy prace z zalozenia i podnoszenie go nic nie da, dopoki limit sie
-nie odnowi.
+That is why `BufferGuardService` pauses Time Machine above a threshold and
+resumes it once uploading catches up. It also watches Drive's daily limit: once
+it is exceeded, rclone stops working by design and bringing it back up achieves
+nothing until the limit resets.
 
-## Harnessy pomiarowe
+## Measurement harnesses
 
-Nie sa czescia dzialajacego systemu - uruchamia sie je recznie, gdy trzeba cos
-zmierzyc albo potwierdzic regresje. Mierza zachowanie `hdiutil` i FUSE-T, czyli
-rzeczy, ktorych testem jednostkowym sie nie zmierzy.
+They are not part of the running system - they are run by hand when something
+needs to be measured or a regression confirmed. They measure the behaviour of
+`hdiutil` and FUSE-T, i.e. things a unit test cannot measure.
 
-Siedza w osobnej binarce `cloudmachine-poc`, ktorej `build-app` NIE wklada do
-`CloudMachine.app` - nie trafiaja wiec na maszyny uzytkownikow, a mimo to sa
-budowane i sprawdzane przez CI razem z reszta kodu. Kazdy z nich tworzy i
-kasuje obrazy dyskow, dlatego celowo nie sa podkomendami `cloudmachine-agent`:
-nie ma jak odpalic ich przez pomylke na produkcji.
+They live in a separate binary, `cloudmachine-poc`, which `build-app` does NOT
+put into `CloudMachine.app` - so they never reach users' machines, yet they are
+still built and checked by CI along with the rest of the code. Each of them
+creates and deletes disk images, which is why they are deliberately not
+subcommands of `cloudmachine-agent`: there is no way to launch them by mistake
+on production.
 
 ```sh
 cd mac-app
 swift run cloudmachine-poc amplification --band-mb 32 --workload append
 swift run cloudmachine-poc pullplug --band-mb 32 --rounds 3
 
-# po przerwanym przebiegu zostaja podpiete obrazy - sprzatanie:
+# after an interrupted run, attached images are left behind - cleanup:
 swift run cloudmachine-poc amplification --clean
 swift run cloudmachine-poc pullplug --clean
 ```
 
-## Czego nadal nie wiadomo
+## What is still unknown
 
-- Jak montowanie zachowa sie pod obciazeniem pelnego, wielogodzinnego backupu.
-  Pojedyncze operacje dzialaja (zapis 50 MB przy 267 MB/s), ale to inna skala.
-- Czy rclone nigdy nie usuwa z bufora danych jeszcze niewyslanych.
-  `cloudmachine-poc pullplug` pokrywa mocniejszy przypadek - smierc calej warstwy - ale
-  nie ten konkretny, bo wymaga dzialajacego rclone.
-- Czy `tmutil setdestination` przyjmie cel spoza `/Volumes`. Od tego zalezy, czy
-  da sie usunac koniecznosc recznej interwencji po nieczystym odpieciu.
-- Czy `--rc-no-auth` na petli zwrotnej jest akceptowalne. Kazdy lokalny proces
-  moze przez ten interfejs sterowac montowaniem.
+- How the mount will behave under the load of a full, multi-hour backup.
+  Individual operations work (a 50 MB write at 267 MB/s), but that is a
+  different scale.
+- Whether rclone never evicts data that has not been uploaded yet from the
+  buffer. `cloudmachine-poc pullplug` covers a stronger case - the death of the
+  whole layer - but not this specific one, because it requires a running rclone.
+- Whether `tmutil setdestination` accepts a destination outside `/Volumes`. That
+  determines whether the need for manual intervention after an unclean detach
+  can be removed.
+- Whether `--rc-no-auth` on the loopback interface is acceptable. Any local
+  process can control the mount through that interface.

@@ -1,7 +1,7 @@
-# Szablon caska. Workflow `release.yml` wstawia wersje i sha256 w miejsce
-# znacznikow i wypycha wynik do RenaCode/homebrew-tap jako
-# Casks/cloudmachine.rb. Edytuj TEN plik - kopie w tapie nadpisze nastepne
-# wydanie.
+# Cask template. The `release.yml` workflow substitutes the version and sha256
+# for the placeholders and pushes the result to RenaCode/homebrew-tap as
+# Casks/cloudmachine.rb. Edit THIS file - the next release overwrites the copy
+# in the tap.
 cask "cloudmachine" do
   version "__VERSION__"
   sha256 "__SHA256__"
@@ -20,28 +20,31 @@ cask "cloudmachine" do
 
   app "CloudMachine.app"
 
-  # Wydanie nie jest notaryzowane (brak konta Apple Developer), wiec Gatekeeper
-  # zablokowalby pobrana kopie. Cask pochodzi z tapu autora, a plik zgadza sie
-  # z sha256 powyzej.
+  # The release is not notarized (no Apple Developer account), so Gatekeeper
+  # would block the downloaded copy. The cask comes from the author's tap, and
+  # the file matches the sha256 above.
   #
-  # Agentow launchd cask NIE przeladowuje: kroki dzialaja w sandboxie
-  # Homebrew bez dostepu do ~/Library/LaunchAgents. Nie jest to potrzebne -
-  # upgrade podmienia bundle na nowe pliki (nowe inode'y), a to wlasnie ta
-  # procedura, po ktorej agenci startuja poprawnie. Gdyby czujka jednak
-  # stanela, `drive-status` i okno appki pokaza "CZUJKA MOZE NIE CHODZIC".
+  # The cask does NOT reload the launchd agents: the steps run in the Homebrew
+  # sandbox without access to ~/Library/LaunchAgents. It is not needed -
+  # the upgrade replaces the bundle with new files (new inodes), and that is
+  # exactly the procedure after which the agents start correctly. Should the
+  # watchdog stop anyway, `drive-status` and the app window will show a
+  # "watchdog may not be running" warning.
   postflight_steps do
     run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/CloudMachine.app"]
   end
 
-  # Celowo BEZ `uninstall launchctl:` - Homebrew wykonuje dyrektywy
-  # `uninstall` takze przy `brew upgrade`, a zatrzymanie
-  # com.renacode.cloudmachine.gdrive-buffer zabija rclone, ktory trzyma
-  # montowanie: obraz wraca dopiero po ~20 min, a przerwana wysylka potrafi
-  # kosztowac katalog glowny wolumenu. Agentow zdejmuje sie recznie (caveats).
+  # Deliberately WITHOUT `uninstall launchctl:` - Homebrew runs `uninstall`
+  # directives on `brew upgrade` too, and stopping
+  # com.renacode.cloudmachine.gdrive-buffer kills the rclone that holds the
+  # mount: the image only comes back after ~20 min, and an interrupted upload
+  # can cost the volume's root directory. The agents are removed manually
+  # (caveats).
   uninstall quit: "com.renacode.cloudmachine"
 
-  # Celowo bez ~/.cloudmachine: tam lezy bufor wysylki, czyli kopie jeszcze
-  # niewyslane na Google Drive. Skasowanie go niszczy backup.
+  # Deliberately without ~/.cloudmachine: that is where the upload buffer
+  # lives, i.e. backups not yet sent to Google Drive. Deleting it destroys the
+  # backup.
   zap trash: [
     "~/Library/Logs/CloudMachine",
     "~/Library/Preferences/com.renacode.cloudmachine.plist",
