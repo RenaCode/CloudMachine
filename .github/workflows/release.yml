@@ -117,7 +117,7 @@ jobs:
     name: Build, release, update tap
     needs: decide
     if: needs.decide.outputs.skip != 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: write
     env:
@@ -196,6 +196,20 @@ jobs:
       # `hdiutil create` on GitHub's macOS runners fails now and then with
       # "Resource busy" - it did on the first v1.3.0 run, after passing three
       # dry runs. Retried with a growing pause; a real failure still fails.
+      # A release must be exactly a commit. v1.3.0 was not: the macos-14
+      # runner (Swift 5.10) could not use swift-argument-parser 1.8.2, which
+      # needs Swift 6, quietly resolved 1.7.2 and rewrote Package.resolved.
+      # Any tracked file changed by the build stops the release here.
+      - name: Build did not change tracked files
+        if: env.IS_RELEASE == 'true'
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            git status --porcelain --untracked-files=no
+            git diff
+            echo "::error::The build changed tracked files; the release would not match its commit."
+            exit 1
+          fi
+
       - name: Package .dmg
         working-directory: mac-app
         run: |
