@@ -1,17 +1,18 @@
 import Foundation
 
-/// Port `install.sh` - instaluje `rclone` przez Homebrew. Zaklada, ze Homebrew
-/// jest juz obecny (dla bootstrapowania samego Homebrew z zera - GUI ma
-/// wlasny, bardziej rozbudowany krok wymagajacy dialogu autoryzacji, patrz
+/// Port of `install.sh` - installs `rclone` via Homebrew. Assumes Homebrew is
+/// already present (for bootstrapping Homebrew itself from scratch the GUI has
+/// its own, more elaborate step that needs an authorization dialog, see
 /// `CloudMachineController.installDependencies`).
 ///
-/// `jq` NIE jest juz wymagane - bylo potrzebne wylacznie do parsowania JSON
-/// w bashu; caly config parsuje teraz natywny `JSONDecoder` (patrz
-/// `MachinesConfig`), wiec ta zaleznosc odpadla calkowicie przy migracji do Swift.
+/// `jq` is NO longer required - it was needed only to parse JSON in bash; the
+/// whole config is now parsed by the native `JSONDecoder` (see
+/// `MachinesConfig`), so that dependency went away entirely with the migration
+/// to Swift.
 public enum DependencyInstaller {
   public static let requiredTools = ["rclone"]
 
-  /// Sciezka do binarki brew, jesli Homebrew jest juz zainstalowany (Apple
+  /// Path to the brew binary, if Homebrew is already installed (Apple
   /// Silicon: /opt/homebrew, Intel: /usr/local).
   public static func resolvedBrewPath() -> String? {
     ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].first {
@@ -35,14 +36,15 @@ public enum DependencyInstaller {
     guard let brewPath = resolvedBrewPath() else {
       return CMActionResult(
         succeeded: false,
-        message: "Homebrew nie jest zainstalowany. Zainstaluj go recznie: https://brew.sh")
+        message: L10n.tr("Homebrew is not installed. Install it manually: https://brew.sh"))
     }
     let result = try? await ProcessRunner.run(brewPath, ["install", "rclone"], timeout: 600)
     guard result?.succeeded == true else {
       return CMActionResult(
         succeeded: false,
-        message: "Instalacja rclone nie powiodla sie: \(result?.stderr ?? "nieznany blad")")
+        message: L10n.tr(
+          "Installing rclone failed: %@", result?.stderr ?? L10n.tr("unknown error")))
     }
-    return CMActionResult(succeeded: true, message: "Zainstalowano rclone.")
+    return CMActionResult(succeeded: true, message: L10n.tr("Installed rclone."))
   }
 }

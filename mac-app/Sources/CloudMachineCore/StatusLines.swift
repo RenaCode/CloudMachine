@@ -1,125 +1,133 @@
 import Foundation
 
-/// Skladanie wierszy `drive-status`. Czyste funkcje, bo wiersz statusu jest
-/// tym, co czlowiek CZYTA, pytajac "czy backup dziala" - a dotad nie dalo sie
-/// go sprawdzic testem, bo powstawal w `print` wewnatrz polecenia CLI.
+/// Building the `drive-status` lines. Pure functions, because the status line
+/// is what a person READS when asking "is the backup working" - and until now
+/// it could not be tested, because it was produced in a `print` inside a CLI
+/// command.
 ///
-/// Te wiersze lamaly sie juz dwa razy w ten sam sposob: przez zamiane "nie
-/// wiem" na jakas wartosc. Raz przez podstawienie zer za brak odpowiedzi
-/// rclone (stad `UploadState.queueUnknown`), raz przez `Optional(427)` po tym,
-/// jak `BufferGuardService.freeGB()` slusznie przestal udawac, ze brak pomiaru
-/// to zero. Dlatego kazda z ponizszych funkcji ma jawna galaz dla braku danych.
+/// These lines have already broken twice in the same way: by turning "I do
+/// not know" into some value. Once by substituting zeros for rclone not
+/// answering (hence `UploadState.queueUnknown`), once via `Optional(427)`
+/// after `BufferGuardService.freeGB()` rightly stopped pretending that a
+/// missing measurement is zero. That is why each of the functions below has an
+/// explicit branch for missing data.
 public enum StatusLines {
 
-  /// Wiersz "Montowanie Drive".
+  /// The "Drive mount" line.
   ///
-  /// Trzeci stan jest osobny z tego samego powodu, co przy kolejce: `BRAK`
-  /// znaczy "sprawdzilem i nie ma", a to jest wniosek, ktorego przy nieudanym
-  /// odczycie tablicy montowan nikt nie ma prawa wyciagnac.
+  /// The third state is separate for the same reason as with the queue:
+  /// `MISSING` means "I checked and it is not there", and that is a conclusion
+  /// nobody has the right to draw when reading the mount table failed.
   public static func mounted(_ state: Bool?) -> String {
     switch state {
     case .some(true): return "OK"
-    case .some(false): return "BRAK"
-    case .none: return "NIE WIADOMO - nie udalo sie odczytac tablicy montowan"
+    case .some(false): return L10n.tr("MISSING")
+    case .none: return L10n.tr("UNKNOWN - could not read the mount table")
     }
   }
 
-  /// Wiersz "Wolne na dysku".
+  /// The "Free on disk" line.
   ///
-  /// `nil` MUSI byc nazwany. Nie `Optional(427)` (bo to wyglada na usterke
-  /// programu, a nie na informacje) i nie podstawione zero (bo zero jest
-  /// KONKRETNA liczba, na ktorej dozorca bufora wstrzymuje Time Machine -
-  /// dokladnie ten blad naprawial drugi agent, zmieniajac typ na `Int?`).
-  /// Brak pomiaru znaczy, ze dozorca nie chroni juz dysku przed zapelnieniem,
-  /// wiec wiersz ma to powiedziec wprost.
+  /// `nil` MUST be named. Not `Optional(427)` (because that looks like a
+  /// program defect, not like information) and not a substituted zero
+  /// (because zero is a CONCRETE number at which the buffer guard pauses Time
+  /// Machine - exactly the bug the other agent fixed by changing the type to
+  /// `Int?`). A missing measurement means the guard no longer protects the
+  /// disk from filling up, so the line has to say that plainly.
   public static func freeDisk(_ gb: Int?) -> String {
     guard let gb else {
-      return "NIE ZMIERZONO - dozorca bufora nie wstrzyma Time Machine przed zapelnieniem dysku"
+      return L10n.tr(
+        "NOT MEASURED - the buffer guard will not pause Time Machine before the disk fills up")
     }
     return "\(gb) GB"
   }
 
-  /// Wiersz "Cache na dysku".
+  /// The "Cache on disk" line.
   ///
-  /// Osobny od wiersza o zaleglosci i to jest tu rzecz najwazniejsza: przez
-  /// caly wrzesien 2026 jeden wiersz "Bufor: 103 GB z 100G" mial odpowiadac
-  /// na dwa pytania - ile miejsca zajmuje cache i ile zostalo do wyslania.
-  /// Na drugie nie odpowiadal, bo cache przy `--vfs-cache-max-age 9999h` stoi
-  /// pod limitem stale (281 pomiarow, minimum 99 GB). Dozorca bufora podejmowal
-  /// na tej liczbie decyzje o wstrzymaniu Time Machine - stad ta zmiana.
+  /// Separate from the backlog line, and that is the most important thing
+  /// here: throughout September 2026 a single line "Buffer: 103 GB of 100G" was
+  /// supposed to answer two questions - how much space the cache takes and
+  /// how much is left to upload. It did not answer the second one, because
+  /// with `--vfs-cache-max-age 9999h` the cache sits at the limit constantly
+  /// (281 measurements, minimum 99 GB). The buffer guard made its decision to
+  /// pause Time Machine on this number - hence this change.
   public static func cacheSize(_ gb: Int?, limitGB: Int) -> String {
     guard let gb else {
-      return
-        "NIE ZMIERZONO - rclone nie odpowiedzial, a obchod katalogu bufora sie nie udal"
+      return L10n.tr(
+        "NOT MEASURED - rclone did not respond, and walking the buffer directory failed")
     }
-    return "\(gb) GB z \(limitGB)G"
+    return L10n.tr("%@ GB of %@G", "\(gb)", "\(limitGB)")
   }
 
-  /// Wiersz "Do wyslania" - ZALEGLOSC NIEWYSLANA, czyli ta wielkosc, na ktorej
-  /// dozorca bufora decyduje o pauzie i wznowieniu.
+  /// The "To upload" line - the UNSENT BACKLOG, i.e. the quantity on which the
+  /// buffer guard decides to pause and resume.
   ///
-  /// Liczba pozycji jest POMIAREM, gigabajty sa SZACUNKIEM z tej liczby (patrz
-  /// `BufferGuardService.backlogGB`) - dlatego stoi przy nich "~" i dlatego
-  /// pokazujemy oba. Wiersz, ktory podaje sam szacunek jako liczbe, ukrywa, jak
-  /// mocna jest podstawa decyzji o wstrzymaniu backupu.
+  /// The item count is a MEASUREMENT, the gigabytes are an ESTIMATE from that
+  /// count (see `BufferGuardService.backlogGB`) - that is why they carry a "~"
+  /// and why we show both. A line that gives only the estimate as a number
+  /// hides how solid the basis for the decision to pause the backup is.
   public static func backlog(_ gb: Int?, items: Int?) -> String {
     guard let gb, let items else {
-      return
-        "NIE WIADOMO - interfejs sterujacy rclone nie odpowiedzial (dozorca bufora nie wstrzyma ani nie wznowi Time Machine na tej podstawie)"
+      return L10n.tr(
+        "UNKNOWN - the rclone control interface did not respond (the buffer guard will neither pause nor resume Time Machine on this basis)"
+      )
     }
-    return "~\(gb) GB (\(items) pozycji)"
+    return L10n.tr("~%@ GB (%@ items)", "\(gb)", "\(items)")
   }
 
-  /// Wiersze o powiadomieniu, ktorego NIE udalo sie doreczyc.
+  /// Lines about a notification that could NOT be delivered.
   ///
-  /// `HealthAlert.notify` zwraca od niedawna `Bool`, a `HealthAlert.report`
-  /// nie zamyka sprawy znacznikiem, dopoki powiadomienie nie doszlo - dzieki
-  /// temu alarm nie ginie juz po cichu na 12 godzin. Ale samo to nie wystarczy:
-  /// dopoki nikt tego nie WYPISUJE, czlowiek dowiaduje sie o niedoreczonym
-  /// alarmie tylko wtedy, gdy sam zajrzy do pliku stanu. Odmowa uprawnien do
-  /// powiadomien jest typowa dla procesu launchd, wiec to nie jest przypadek
-  /// teoretyczny.
+  /// `HealthAlert.notify` has recently started returning `Bool`, and
+  /// `HealthAlert.report` does not close the matter with a marker until the
+  /// notification has been delivered - thanks to that the alarm no longer
+  /// vanishes silently for 12 hours. But that alone is not enough: as long as
+  /// nobody PRINTS it, a person learns about an undelivered alarm only if they
+  /// look into the state file themselves. A refused notification permission
+  /// is typical for a launchd process, so this is not a theoretical case.
   ///
-  /// Pusta tablica = nie ma czego zglaszac.
+  /// Empty array = nothing to report.
   public static func undeliveredAlert(_ failure: (at: Date, summary: String, reason: String)?)
     -> [String]
   {
     guard let failure else { return [] }
     return [
-      "NIEDORECZONY ALARM: \(failure.summary)",
-      "        z \(BackupHealth.stamp(failure.at)), powod: \(failure.reason)",
-      "        Powiadomienie systemowe nie doszlo - ten alarm zobaczysz TYLKO tutaj.",
+      L10n.tr("UNDELIVERED ALARM: %@", failure.summary),
+      "        "
+        + L10n.tr("from %@, reason: %@", BackupHealth.stamp(failure.at), failure.reason),
+      "        "
+        + L10n.tr("The system notification was not delivered - you will see this alarm ONLY here."),
     ]
   }
 
-  /// Wiersz "Czujka backupu", czyli kiedy `backup-health` ostatnio przebiegla.
+  /// The "Backup watchdog" line, i.e. when `backup-health` last ran.
   ///
-  /// Trzeci wiersz z tej samej rodziny, co dwa powyzej: pokazuje fakt, ktorego
-  /// inaczej nie widac. Czujka chodzi z `StartInterval 1800` i bez `KeepAlive`,
-  /// wiec wyladowana albo zawieszona nie daje ZADNEGO objawu poza cisza - a
-  /// cisza jest tu stanem normalnym (README: "Empty logs after a fresh install
-  /// are normal"). Bez tego wiersza "brak alarmu" znaczylo jednoczesnie
-  /// "backup dziala" i "nikt nie sprawdzal", czyli nie znaczylo nic.
+  /// A third line from the same family as the two above: it shows a fact that
+  /// is otherwise invisible. The watchdog runs with `StartInterval 1800` and
+  /// without `KeepAlive`, so when unloaded or hung it gives NO symptom other
+  /// than silence - and silence is the normal state here (README: "Empty logs
+  /// after a fresh install are normal"). Without this line "no alarm" meant
+  /// both "the backup works" and "nobody checked", i.e. it meant nothing.
   ///
-  /// Nazwany osobno i dodany na koncu `StatusLines`, zamiast wpleciony w
-  /// istniejace funkcje - `drive-status` przebudowuje rownolegle galaz
-  /// `naprawy/dozorca-bufora`.
+  /// Named separately and added at the end of `StatusLines` instead of being
+  /// woven into the existing functions - `drive-status` is being rebuilt in
+  /// parallel on the `naprawy/dozorca-bufora` branch (l10n-polish-ok: a git branch name).
   public static func watchdogRun(_ freshness: WatchdogHeartbeat.Freshness) -> String {
     switch freshness {
     case .fresh(let lastRun, let age):
-      return "\(BackupHealth.stamp(lastRun)) (\(BackupHealth.formatAge(age)) temu)"
+      return L10n.tr(
+        "%@ (%@ ago)", BackupHealth.stamp(lastRun), BackupHealth.formatAge(age))
     case .stale(let lastRun, let age):
-      // Znacznik z przyszlosci (przestawiony zegar, plik przeniesiony z innej
-      // maszyny) tez jest brakiem wiedzy, a nie wiekiem - "-60 min temu" nie
-      // jest zdaniem, ktore cokolwiek mowi.
+      // A marker from the future (a clock that was changed, a file moved from
+      // another machine) is also a lack of knowledge, not an age - "-60 min
+      // ago" is not a sentence that says anything.
       guard age >= 0 else {
-        return "\(BackupHealth.stamp(lastRun)) - znacznik z PRZYSZLOSCI"
+        return L10n.tr("%@ - marker from the FUTURE", BackupHealth.stamp(lastRun))
       }
-      return
-        "\(BackupHealth.stamp(lastRun)) (\(BackupHealth.formatAge(age)) temu) - "
-        + "CZUJKA MOZE NIE CHODZIC"
+      return L10n.tr(
+        "%@ (%@ ago) - THE WATCHDOG MAY NOT BE RUNNING", BackupHealth.stamp(lastRun),
+        BackupHealth.formatAge(age))
     case .never:
-      return "NIGDY - czujka nie zapisala zadnego przebiegu"
+      return L10n.tr("NEVER - the watchdog has not recorded a single run")
     }
   }
 }

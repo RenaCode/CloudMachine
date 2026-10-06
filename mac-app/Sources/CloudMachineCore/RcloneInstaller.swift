@@ -1,15 +1,15 @@
 import Foundation
 
-/// Pobiera oficjalna binarke rclone - port `gdrive/install-rclone.sh`.
+/// Downloads the official rclone binary - port of `gdrive/install-rclone.sh`.
 ///
-/// Istnieje, bo rclone z Homebrew jest zbudowane bez obslugi FUSE i przy
-/// probie montowania odmawia wprost:
+/// It exists because rclone from Homebrew is built without FUSE support and,
+/// when asked to mount, refuses outright:
 ///
 ///     rclone mount is not supported on MacOS when rclone is installed via Homebrew
 ///
-/// Instalujemy obok, we wlasnym katalogu (`CMTooling.managedRclonePath`), nie
-/// ruszajac instalacji Homebrew - pozostale, niemontujace sciezki kodu moga
-/// z niej dalej korzystac.
+/// We install it alongside, in our own directory
+/// (`CMTooling.managedRclonePath`), without touching the Homebrew installation
+/// - the remaining, non-mounting code paths can keep using it.
 public enum RcloneInstaller {
 
   private static let versionURL = "https://downloads.rclone.org/version.txt"
@@ -24,12 +24,12 @@ public enum RcloneInstaller {
     } catch {
       return CMActionResult(
         succeeded: false,
-        message: "Nie moge utworzyc katalogu roboczego: \(error.localizedDescription)")
+        message: L10n.tr("Cannot create the working directory: %@", error.localizedDescription))
     }
 
     guard let version = await latestVersion() else {
       return CMActionResult(
-        succeeded: false, message: "Nie udalo sie odczytac numeru wersji rclone.")
+        succeeded: false, message: L10n.tr("Could not read the rclone version number."))
     }
 
     let arch = currentArch()
@@ -40,23 +40,24 @@ public enum RcloneInstaller {
     let sumsPath = workDir.appendingPathComponent("SHA256SUMS")
 
     guard await download(zipURL, to: zipPath), await download(sumsURL, to: sumsPath) else {
-      return CMActionResult(succeeded: false, message: "Nie udalo sie pobrac \(zipName).")
+      return CMActionResult(succeeded: false, message: L10n.tr("Could not download %@.", zipName))
     }
 
-    // Weryfikacja sumy nie jest ozdoba: sciagamy wykonywalna binarke, ktora
-    // bedzie miala dostep do calego Dysku Google.
+    // Verifying the checksum is not decoration: we are downloading an
+    // executable binary that will have access to the whole Google Drive.
     guard let expected = expectedChecksum(sumsFile: sumsPath, zipName: zipName) else {
-      return CMActionResult(succeeded: false, message: "Brak wpisu dla \(zipName) w SHA256SUMS.")
+      return CMActionResult(
+        succeeded: false, message: L10n.tr("No entry for %@ in SHA256SUMS.", zipName))
     }
     guard let actual = await checksum(of: zipPath) else {
-      return CMActionResult(succeeded: false, message: "Nie udalo sie policzyc sumy kontrolnej.")
+      return CMActionResult(succeeded: false, message: L10n.tr("Could not compute the checksum."))
     }
     guard expected == actual else {
       return CMActionResult(
         succeeded: false,
-        message:
-          "Suma SHA256 sie nie zgadza - NIE instaluje.\n  oczekiwana: \(expected)\n  policzona : \(actual)"
-      )
+        message: L10n.tr(
+          "SHA256 checksum does not match - NOT installing.\n  expected: %@\n  computed: %@",
+          expected, actual))
     }
 
     guard
@@ -64,7 +65,7 @@ public enum RcloneInstaller {
         "/usr/bin/unzip", ["-oq", zipPath.path, "-d", workDir.path], timeout: 300),
       unzip.succeeded
     else {
-      return CMActionResult(succeeded: false, message: "Nie udalo sie rozpakowac archiwum.")
+      return CMActionResult(succeeded: false, message: L10n.tr("Could not unpack the archive."))
     }
 
     let extracted =
@@ -80,15 +81,16 @@ public enum RcloneInstaller {
     } catch {
       return CMActionResult(
         succeeded: false,
-        message: "Nie udalo sie zainstalowac binarki: \(error.localizedDescription)")
+        message: L10n.tr("Could not install the binary: %@", error.localizedDescription))
     }
 
     return CMActionResult(
       succeeded: true,
-      message: "Zainstalowano rclone \(version) w \(destination.path) (suma SHA256 zgodna).")
+      message: L10n.tr(
+        "Installed rclone %@ in %@ (SHA256 checksum matches).", version, destination.path))
   }
 
-  // MARK: - Szczegoly
+  // MARK: - Details
 
   static func currentArch() -> String {
     #if arch(arm64)
@@ -98,8 +100,8 @@ public enum RcloneInstaller {
     #endif
   }
 
-  /// Wyciaga oczekiwana sume dla danego archiwum z pliku SHA256SUMS.
-  /// Czysta funkcja - testowalna bez sieci.
+  /// Extracts the expected checksum for the given archive from the SHA256SUMS
+  /// file. Pure function - testable without the network.
   public static func expectedChecksum(sumsContent: String, zipName: String) -> String? {
     for line in sumsContent.components(separatedBy: .newlines) {
       let parts = line.split(separator: " ", omittingEmptySubsequences: true)

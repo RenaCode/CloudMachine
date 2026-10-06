@@ -1,15 +1,15 @@
 import Foundation
 
-/// Z czego dokladnie zbudowano to, co wlasnie dziala.
+/// Exactly what the thing that is running right now was built from.
 ///
-/// Numer wersji sam w sobie nie odpowiada na pytanie "czy zainstalowane jest
-/// to, co w repozytorium" - `1.1.0` stoi w pliku VERSION miesiacami, a numer
-/// budowy (liczba commitow) powtarza sie miedzy galeziami. Dlatego nosimy tez
-/// SHA commitu i informacje, czy drzewo bylo brudne.
+/// The version number alone does not answer "is what is installed the same as
+/// what is in the repository" - `1.1.0` sits in the VERSION file for months,
+/// and the build number (commit count) repeats across branches. That is why we
+/// also carry the commit SHA and whether the tree was dirty.
 ///
-/// Powod jest konkretny: 13 wrz 2026 nie dalo sie odpowiedziec na pytanie
-/// "czy zainstalowana jest najnowsza wersja" inaczej niz porownujac daty
-/// plikow i diffujac drzewo git wzgledem zgadnietego commitu.
+/// The reason is concrete: on 13 Sep 2026 the question "is the latest version
+/// installed" could not be answered other than by comparing file dates and
+/// diffing the git tree against a guessed commit.
 public struct AppVersion: Equatable {
   public let shortVersion: String
   public let build: String
@@ -23,26 +23,29 @@ public struct AppVersion: Equatable {
     self.dirty = dirty
   }
 
-  /// Wartosc wstawiana przy budowaniu poza repozytorium git.
-  public static let unknownCommit = "nieznany"
+  /// Value inserted when building outside a git repository.
+  ///
+  /// Written into Info.plist by `build-app` and read back only by the binary
+  /// from that same bundle, so both sides always agree on it.
+  public static let unknownCommit = "unknown"
 
-  /// Jedna linia do logu i do `--version`.
+  /// One line for the log and for `--version`.
   public var summary: String {
     var text = "\(shortVersion) (\(build))"
     if commit != Self.unknownCommit {
       text += " \(commit)"
     }
     if dirty {
-      text += " BRUDNE-DRZEWO"
+      text += " " + L10n.tr("DIRTY-TREE")
     }
     return text
   }
 
-  /// Czy da sie z tego jednoznacznie wskazac commit w repozytorium.
+  /// Whether a commit in the repository can be pointed at unambiguously.
   ///
-  /// Brudne drzewo znaczy, ze w binarce siedzi kod, ktorego nie ma w zadnym
-  /// commicie - numer wersji wtedy KLAMIE i nie wolno go traktowac jako
-  /// dowodu, ze zainstalowane jest to samo, co na galezi.
+  /// A dirty tree means the binary contains code that is in no commit - the
+  /// version number then LIES and must not be taken as proof that what is
+  /// installed is the same as what is on the branch.
   public var isTraceable: Bool {
     commit != Self.unknownCommit && !dirty
   }
@@ -53,8 +56,8 @@ public enum AppVersionReader {
   static let commitKey = "CMGitCommit"
   static let dirtyKey = "CMGitDirty"
 
-  /// Czysta wersja - odczyt ze slownika, zeby dalo sie sprawdzic testem bez
-  /// budowania bundla.
+  /// Pure version - reads from a dictionary, so it can be tested without
+  /// building a bundle.
   public static func parse(infoPlist: [String: Any]) -> AppVersion {
     let dirtyRaw = infoPlist[dirtyKey]
     let dirty: Bool
@@ -70,13 +73,14 @@ public enum AppVersionReader {
       dirty: dirty)
   }
 
-  /// Wersja binarki, ktora WLASNIE dziala.
+  /// Version of the binary that is running RIGHT NOW.
   ///
-  /// Szukamy `Contents/Info.plist` obok wykonywalnego pliku, a nie przez
-  /// `Bundle.main`: agent to zwykly plik wykonywalny w `Contents/MacOS`, a nie
-  /// aplikacja, wiec `Bundle.main` potrafi wskazac katalog zamiast bundla.
-  /// Przy `swift run` zadnego bundla nie ma i to nie jest blad - zwracamy
-  /// `nil`, a wolajacy mowi wprost, ze to build z drzewa roboczego.
+  /// We look for `Contents/Info.plist` next to the executable rather than going
+  /// through `Bundle.main`: the agent is a plain executable in
+  /// `Contents/MacOS`, not an application, so `Bundle.main` can point at a
+  /// directory instead of the bundle. Under `swift run` there is no bundle at
+  /// all and that is not an error - we return `nil`, and the caller says
+  /// plainly that this is a build from the working tree.
   public static func current(
     executable: URL = CMPaths.runningExecutable
   ) -> AppVersion? {
