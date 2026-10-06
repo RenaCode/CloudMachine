@@ -3,8 +3,8 @@ import XCTest
 @testable import CloudMachineCore
 
 final class MachineIdentityTests: XCTestCase {
-  // Musi zostac zsynchronizowane z tym, co kiedys bylo `cm_machine_key` w
-  // scripts/common.sh - oba wywodza klucz maszyny z tego samego
+  // Must stay in sync with what used to be `cm_machine_key` in
+  // scripts/common.sh - both derive the machine key from the same
   // `scutil --get ComputerName`.
 
   func testNormalizedKey_lowercasesAndReplacesSpaces() {
@@ -22,12 +22,11 @@ final class MachineIdentityTests: XCTestCase {
   }
 
   func testNormalizedKey_stripsAccentedCharacters() {
-    // scutil moze zwrocic nazwe z polskimi znakami - te nie sa w dozwolonym
-    // zbiorze [a-z0-9-], wiec musza zniknac, a nie np. wywalic caly proces.
-    XCTAssertEqual(
-      MachineIdentity.normalizedKey(fromComputerName: "Łukasza-iMac"),
-      "ukasza-imac"
-    )
+    // scutil may return a name with Polish characters - those are not in the
+    // allowed set [a-z0-9-], so they must disappear rather than, say, crash
+    // the whole process.
+    let name = "Łukasza-iMac"  // l10n-polish-ok: test input with a Polish letter
+    XCTAssertEqual(MachineIdentity.normalizedKey(fromComputerName: name), "ukasza-imac")
   }
 
   func testNormalizedKey_emptyInput() {

@@ -3,79 +3,82 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Sonda czytelnosci obrazu. Kazdy werdykt ma probke, ktora go wymusza -
-/// inaczej sonda mowiaca zawsze "readable" przeszlaby wszystkie testy.
+/// The image readability probe. Every verdict has a sample that forces it -
+/// otherwise a probe always saying "readable" would pass all the tests.
 final class ImageProbeTests: XCTestCase {
 
   private let manifest = URL(fileURLWithPath: "/Volumes/X/backup_manifest.plist")
   private let other = URL(fileURLWithPath: "/Volumes/X/other.plist")
 
-  func testOdczytBajtuZnaczyZywy() {
+  func testReadingAByteMeansAlive() {
     let verdict = ImageProbe.probe(regularFiles: { [manifest] }, readFirstByte: { _ in nil })
     XCTAssertEqual(verdict, .readable)
   }
 
-  /// Dokladnie ten przypadek z 22 wrz 2026: listowanie dziala, odczyt daje ENXIO.
-  func testENXIOZnaczyMartwy() {
+  /// Exactly the case of 22 Sep 2026: listing works, reading gives ENXIO.
+  func testENXIOMeansDead() {
     let verdict = ImageProbe.probe(regularFiles: { [manifest] }, readFirstByte: { _ in ENXIO })
     XCTAssertEqual(verdict, .dead(errno: ENXIO))
   }
 
-  func testEIOTezZnaczyMartwy() {
+  func testEIOAlsoMeansDead() {
     let verdict = ImageProbe.probe(regularFiles: { [manifest] }, readFirstByte: { _ in EIO })
     XCTAssertEqual(verdict, .dead(errno: EIO))
   }
 
-  /// Blad wlasciwy dla pliku (brak uprawnien) nie jest awaria wolumenu -
-  /// sonda ma sprobowac nastepnego pliku, a nie oglosic smierci.
-  func testEACCESNaJednymPlikuNieZnaczyMartwy() {
+  /// An error specific to a file (no permission) is not a volume failure -
+  /// the probe should try the next file, not declare death.
+  func testEACCESOnOneFileDoesNotMeanDead() {
     let verdict = ImageProbe.probe(
       regularFiles: { [manifest, other] },
       readFirstByte: { $0 == self.manifest ? EACCES : nil })
     XCTAssertEqual(verdict, .readable)
   }
 
-  func testSamePlikiZBledamiPlikuToBrakProbki() {
+  func testOnlyFilesWithFileErrorsMeansNothingToProbe() {
     let verdict = ImageProbe.probe(regularFiles: { [manifest] }, readFirstByte: { _ in EACCES })
     XCTAssertEqual(verdict, .nothingToProbe)
   }
 
-  /// Swiezy wolumen przed pierwsza kopia - nie ma czego czytac, wiec NIE
-  /// alarmujemy. Alarm bez dowodu jest gorszy niz brak alarmu.
-  func testPustyKatalogToBrakProbki() {
+  /// A fresh volume before the first backup - there is nothing to read, so we
+  /// do NOT alarm. An alarm without proof is worse than no alarm.
+  func testEmptyDirectoryMeansNothingToProbe() {
     let verdict = ImageProbe.probe(regularFiles: { [] }, readFirstByte: { _ in ENXIO })
     XCTAssertEqual(verdict, .nothingToProbe)
   }
 
-  // MARK: - Listowanie tez umie pasc
+  // MARK: - Listing can fail too
 
-  /// ZMIANA wzgledem poprzedniej wersji tego testu, ktora nazywala sie
-  /// `testNieczytelneListowanieToBrakProbki` i sprawdzala, ze KAZDY blad
-  /// listowania daje `.nothingToProbe`. Kodowala stan, ktory okazal sie
-  /// dziura: `BackupImageService.attachment` mapuje `.nothingToProbe` na
-  /// `.attached`, wiec martwy obraz uchodzil za zywy, a agent `gdrive-attach`
-  /// nie podpinal go przez godziny. Rozstrzyga teraz ZRODLO bledu, nie sam
-  /// fakt bledu: blad bez rozpoznanego errno urzadzenia nadal nie dowodzi
-  /// niczego o wolumenie i zostaje `.nothingToProbe`.
-  func testListowanieZBledemBezErrnoUrzadzeniaToBrakProbki() {
+  /// A CHANGE compared with the previous version of this test, which was
+  /// called `testNieczytelneListowanieToBrakProbki` and checked that EVERY
+  /// listing error gives `.nothingToProbe`. It encoded a state that turned out
+  /// to be a hole: `BackupImageService.attachment` maps `.nothingToProbe` to
+  /// `.attached`, so a dead image passed for a live one, and the
+  /// `gdrive-attach` agent did not reattach it for hours. What decides now is
+  /// the SOURCE of the error, not the mere fact of an error: an error without
+  /// a recognized device errno still proves nothing about the volume and stays
+  /// `.nothingToProbe`.
+  func testListingErrorWithoutDeviceErrnoMeansNothingToProbe() {
     struct Boom: Error {}
     let verdict = ImageProbe.probe(regularFiles: { throw Boom() }, readFirstByte: { _ in nil })
     XCTAssertEqual(verdict, .nothingToProbe)
   }
 
-  /// Po wygasnieciu `--dir-cache-time 5m` listowanie przestaje chodzic z cache
-  /// jadra i pada tym samym ENXIO, co odczyt. Wtedy jest juz dowodem smierci.
-  func testENXIONaListowaniuZnaczyMartwy() {
+  /// After `--dir-cache-time 5m` expires, listing stops running from the
+  /// kernel cache and fails with the same ENXIO as reading. Then it is proof
+  /// of death.
+  func testENXIOOnListingMeansDead() {
     let verdict = ImageProbe.probe(
       regularFiles: { throw POSIXError(.ENXIO) }, readFirstByte: { _ in nil })
     XCTAssertEqual(verdict, .dead(errno: ENXIO))
   }
 
-  /// Tak wyglada ten sam blad, gdy rzuca go Foundation: `contentsOfDirectory`
-  /// opakowuje errno w `NSCocoaErrorDomain` i chowa oryginal pod
-  /// `NSUnderlyingErrorKey`. Sonda musi rozpoznac obie postacie, bo zywa
-  /// sciezka (`regularFiles(in:)`) chodzi wlasnie przez Foundation.
-  func testENXIOOpakowaneDoNSErrorTezZnaczyMartwy() {
+  /// This is what the same error looks like when Foundation throws it:
+  /// `contentsOfDirectory` wraps the errno in `NSCocoaErrorDomain` and hides
+  /// the original under `NSUnderlyingErrorKey`. The probe must recognize both
+  /// forms, because the live path (`regularFiles(in:)`) goes exactly through
+  /// Foundation.
+  func testENXIOWrappedInNSErrorAlsoMeansDead() {
     let underlying = NSError(domain: NSPOSIXErrorDomain, code: Int(ENXIO))
     let cocoa = NSError(
       domain: NSCocoaErrorDomain, code: 256,
@@ -85,176 +88,183 @@ final class ImageProbeTests: XCTestCase {
     XCTAssertEqual(verdict, .dead(errno: ENXIO))
   }
 
-  /// Brak uprawnien do katalogu to wlasciwosc katalogu, nie awaria wolumenu.
-  func testEACCESNaListowaniuToBrakProbki() {
+  /// No permission on the directory is a property of the directory, not a
+  /// volume failure.
+  func testEACCESOnListingMeansNothingToProbe() {
     let verdict = ImageProbe.probe(
       regularFiles: { throw POSIXError(.EACCES) }, readFirstByte: { _ in nil })
     XCTAssertEqual(verdict, .nothingToProbe)
   }
 
-  // MARK: - Zywa sciezka na prawdziwym katalogu
+  // MARK: - Live path on a real directory
 
-  func testPrawdziwyOdczytNaKataloguTymczasowym() async throws {
+  func testRealReadOnATemporaryDirectory() async throws {
     let dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("ImageProbeTests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    var werdykt = await ImageProbe.probe(volume: dir)
-    XCTAssertEqual(werdykt, .nothingToProbe, "pusty katalog")
+    var verdict = await ImageProbe.probe(volume: dir)
+    XCTAssertEqual(verdict, .nothingToProbe, "empty directory")
 
     try FileManager.default.createDirectory(
-      at: dir.appendingPathComponent("podkatalog"), withIntermediateDirectories: true)
-    werdykt = await ImageProbe.probe(volume: dir)
-    XCTAssertEqual(werdykt, .nothingToProbe, "sam podkatalog to nie plik")
+      at: dir.appendingPathComponent("subdirectory"), withIntermediateDirectories: true)
+    verdict = await ImageProbe.probe(volume: dir)
+    XCTAssertEqual(verdict, .nothingToProbe, "a subdirectory alone is not a file")
 
-    try Data("x".utf8).write(to: dir.appendingPathComponent("plik"))
-    werdykt = await ImageProbe.probe(volume: dir)
-    XCTAssertEqual(werdykt, .readable)
+    try Data("x".utf8).write(to: dir.appendingPathComponent("file"))
+    verdict = await ImageProbe.probe(volume: dir)
+    XCTAssertEqual(verdict, .readable)
   }
 
-  func testPustyPlikTezJestCzytelny() async throws {
+  func testEmptyFileIsAlsoReadable() async throws {
     let dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("ImageProbeTests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
-    try Data().write(to: dir.appendingPathComponent("pusty"))
-    let werdykt = await ImageProbe.probe(volume: dir)
-    XCTAssertEqual(werdykt, .readable)
+    try Data().write(to: dir.appendingPathComponent("empty"))
+    let verdict = await ImageProbe.probe(volume: dir)
+    XCTAssertEqual(verdict, .readable)
   }
 
-  // MARK: - Limit czasu
+  // MARK: - Time limit
 
-  /// Sonda na wolumenie FUSE-T potrafi NIGDY nie wrocic - `read()` zaklinowany
-  /// w jadrze (stan "U" w `ps`) nie da sie ani anulowac, ani ubic. Te testy
-  /// podstawiaja dokladnie taka sonde: zamiast czytac, czeka na semafor, ktory
-  /// puszczamy dopiero na koniec testu.
+  /// A probe on a FUSE-T volume can NEVER return - a `read()` stuck in the
+  /// kernel (state "U" in `ps`) can be neither cancelled nor killed. These
+  /// tests substitute exactly such a probe: instead of reading, it waits on a
+  /// semaphore that we release only at the end of the test.
   ///
-  /// KAZDY z nich ma WLASNY termin, niezalezny od limitu w sondzie. Gdyby
-  /// limit zniknal z kodu, `await` na sondzie nigdy by nie wrocil i test
-  /// wisialby do konca calego `swift test` - porazka po dziesiatkach minut
-  /// i bez jednego zdania o przyczynie. Z terminem porazka jest szybka
-  /// i czytelna: werdykt `nil` znaczy "sonda nie odpowiedziala nawet tyle".
-  private func werdykt(
+  /// EACH of them has its OWN deadline, independent of the limit in the
+  /// probe. If the limit disappeared from the code, the `await` on the probe
+  /// would never return and the test would hang until the end of the whole
+  /// `swift test` - a failure after tens of minutes and without a single
+  /// sentence about the cause. With a deadline the failure is fast and
+  /// readable: a `nil` verdict means "the probe did not answer even within
+  /// this much".
+  private func verdict(
     slot: String,
     timeout: TimeInterval,
     deadline: TimeInterval = 5,
     regularFiles: @escaping @Sendable () throws -> [URL],
     readFirstByte: @escaping @Sendable (URL) -> Int32? = { _ in nil }
   ) async -> ImageProbe.Verdict? {
-    let oddany = expectation(description: "sonda \(slot) oddala werdykt")
-    let pudelko = VerdictBox()
+    let delivered = expectation(description: "probe \(slot) delivered a verdict")
+    let box = VerdictBox()
     Task {
-      pudelko.set(
+      box.set(
         await ImageProbe.probe(
           slot: slot, timeout: timeout,
           regularFiles: regularFiles, readFirstByte: readFirstByte))
-      oddany.fulfill()
+      delivered.fulfill()
     }
-    // `XCTWaiter`, a nie `await fulfillment(of:)`: ten drugi sam oblewa test
-    // przy przekroczeniu terminu, a my chcemy oblac go WLASNYM zdaniem
-    // mowiacym, ze sonda nie ma limitu czasu.
-    _ = XCTWaiter().wait(for: [oddany], timeout: deadline)
-    return pudelko.value
+    // `XCTWaiter`, not `await fulfillment(of:)`: the latter fails the test by
+    // itself when the deadline passes, and we want to fail it with our OWN
+    // sentence saying the probe has no time limit.
+    _ = XCTWaiter().wait(for: [delivered], timeout: deadline)
+    return box.value
   }
 
-  /// TO JEST TA POPRAWKA: sonda, ktora nie odpowiada, oddaje werdykt
-  /// w skonczonym czasie, a wolajacy przezywa i dziala dalej.
-  func testSondaBezOdpowiedziDajeTimedOutAWolajacyIdzieDalej() async throws {
-    let zablokowana = DispatchSemaphore(value: 0)
-    // Watek sondy siedzi w "read()" do konca testu - tak jak na prawdziwym
-    // martwym wolumenie. Puszczamy go na wyjsciu, zeby nie zostal na stale.
-    defer { zablokowana.signal() }
+  /// THIS IS THE FIX: a probe that does not answer delivers a verdict in
+  /// finite time, and the caller survives and keeps working.
+  func testUnansweredProbeGivesTimedOutAndTheCallerMovesOn() async throws {
+    let blocked = DispatchSemaphore(value: 0)
+    // The probe thread sits in "read()" until the end of the test - just like
+    // on a real dead volume. We release it on exit so it does not stay forever.
+    defer { blocked.signal() }
 
     let start = Date()
-    let wynik = await werdykt(
-      slot: "test-brak-odpowiedzi", timeout: 0.5,
+    let result = await verdict(
+      slot: "test-no-answer", timeout: 0.5,
       regularFiles: {
-        zablokowana.wait()
+        blocked.wait()
         return []
       })
-    let czekanie = Date().timeIntervalSince(start)
+    let waited = Date().timeIntervalSince(start)
 
     XCTAssertEqual(
-      wynik, .timedOut,
-      "sonda bez odpowiedzi musi oddac .timedOut - inaczej wolajacy wisi razem z nia")
+      result, .timedOut,
+      "a probe without an answer must deliver .timedOut - otherwise the caller hangs along with it"
+    )
     XCTAssertLessThan(
-      czekanie, 3, "limit 0,5 s ma byc GORNYM ograniczeniem czekania, nie sugestia")
+      waited, 3, "the 0.5 s limit must be an UPPER bound on waiting, not a suggestion")
 
-    // Wolajacy nie tylko wrocil - NADAL DZIALA, mimo ze tamten watek wciaz
-    // siedzi w jadrze. To jest ta czesc, ktorej brak uciszal czujke na stale.
-    let katalog = FileManager.default.temporaryDirectory
+    // The caller not only returned - it STILL WORKS, even though that other
+    // thread is still sitting in the kernel. This is the part whose absence
+    // silenced the watchdog permanently.
+    let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("ImageProbeTests-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: katalog, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: katalog) }
-    try Data("x".utf8).write(to: katalog.appendingPathComponent("plik"))
-    let potem = await ImageProbe.probe(volume: katalog)
-    XCTAssertEqual(potem, .readable, "po poddaniu sie na jednym wolumenie sonda musi dalej dzialac")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try Data("x".utf8).write(to: directory.appendingPathComponent("file"))
+    let afterwards = await ImageProbe.probe(volume: directory)
+    XCTAssertEqual(
+      afterwards, .readable, "after giving up on one volume the probe must keep working")
   }
 
-  /// "Nie wiem" to NIE "obraz nieczytelny". Ta druga rzecz wyzwala w
-  /// `attach-image` odpiecie NA SILE, wiec zlanie ich w jeden werdykt
-  /// zamienialoby brak wiedzy w operacje nieodwracalna.
-  func testTimedOutToNieToSamoCoMartwy() {
+  /// "I do not know" is NOT "the image is unreadable". The latter triggers a
+  /// FORCED detach in `attach-image`, so merging them into one verdict would
+  /// turn a lack of knowledge into an irreversible operation.
+  func testTimedOutIsNotTheSameAsDead() {
     XCTAssertNotEqual(ImageProbe.Verdict.timedOut, .dead(errno: ENXIO))
     XCTAssertNotEqual(ImageProbe.Verdict.timedOut, .dead(errno: EIO))
     XCTAssertNotEqual(ImageProbe.Verdict.timedOut, .readable)
     XCTAssertNotEqual(ImageProbe.Verdict.timedOut, .nothingToProbe)
   }
 
-  /// Limit czasu nie moze polykac werdyktu sondy, ktora odpowiada WOLNO, ale
-  /// odpowiada - inaczej martwy obraz przestalby byc naprawiany.
-  func testWolnaAleOdpowiadajacaSondaDajeSwojWerdykt() async {
-    let wynik = await werdykt(
-      slot: "test-wolna", timeout: 3,
+  /// The time limit must not swallow the verdict of a probe that answers
+  /// SLOWLY, but does answer - otherwise a dead image would stop being fixed.
+  func testSlowButAnsweringProbeGivesItsVerdict() async {
+    let result = await verdict(
+      slot: "test-slow", timeout: 3,
       regularFiles: {
         Thread.sleep(forTimeInterval: 0.3)
         return [self.manifest]
       },
       readFirstByte: { _ in ENXIO })
-    XCTAssertEqual(wynik, .dead(errno: ENXIO))
+    XCTAssertEqual(result, .dead(errno: ENXIO))
   }
 
-  /// Jedna sonda na wolumen. Bez tego panel odswiezany co 10 s zostawialby na
-  /// zaklinowanym wolumenie po jednym wiszacym watku na przebieg.
-  func testDrugaSondaTegoSamegoWolumenuNieZakladaDrugiegoWatku() async {
-    let zablokowana = DispatchSemaphore(value: 0)
-    // Dwa razy, bo gdyby jedno-w-locie przestalo dzialac, zablokowane byly by
-    // DWA watki i kazdy potrzebuje wlasnego przebudzenia.
+  /// One probe per volume. Without it, a panel refreshed every 10 s would
+  /// leave one hanging thread per run on a stuck volume.
+  func testSecondProbeOfTheSameVolumeDoesNotStartASecondThread() async {
+    let blocked = DispatchSemaphore(value: 0)
+    // Twice, because if one-in-flight stopped working, TWO threads would be
+    // blocked and each needs its own wake-up.
     defer {
-      zablokowana.signal()
-      zablokowana.signal()
+      blocked.signal()
+      blocked.signal()
     }
-    let slot = "test-jedna-w-locie"
-    let pierwszy = await werdykt(
+    let slot = "test-one-in-flight"
+    let first = await verdict(
       slot: slot, timeout: 0.5,
       regularFiles: {
-        zablokowana.wait()
+        blocked.wait()
         return []
       })
-    XCTAssertEqual(pierwszy, .timedOut)
+    XCTAssertEqual(first, .timedOut)
 
-    // Pierwszy watek wciaz siedzi w jadrze. Drugi wolajacy ma dostac
-    // "nie wiem" OD RAZU - dlatego limit sondy jest tu absurdalnie dlugi
-    // (30 s), a termin testu krotki (2 s): jesli czekanie w ogole sie zacznie,
-    // test oblewa sie szybko, a nie po pol minuty.
+    // The first thread is still sitting in the kernel. The second caller must
+    // get "I do not know" RIGHT AWAY - that is why the probe limit here is
+    // absurdly long (30 s) and the test deadline short (2 s): if waiting
+    // starts at all, the test fails quickly, not after half a minute.
     let start = Date()
-    let drugi = await werdykt(
+    let second = await verdict(
       slot: slot, timeout: 30, deadline: 2,
       regularFiles: {
-        zablokowana.wait()
+        blocked.wait()
         return []
       })
     XCTAssertEqual(
-      drugi, .timedOut,
-      "druga sonda tego samego wolumenu ma oddac 'nie wiem' od razu, a nie czekac ani zakladac watku"
+      second, .timedOut,
+      "a second probe of the same volume must return 'I do not know' right away, not wait or start a thread"
     )
     XCTAssertLessThan(Date().timeIntervalSince(start), 1)
   }
 }
 
-/// Werdykt przenoszony z `Task`-a do ciala testu. Klasa z zamkiem, a nie
-/// zmienna domknieta w zasiegu: zapis i odczyt dzieja sie na roznych watkach.
+/// The verdict carried from the `Task` to the test body. A class with a lock
+/// rather than a captured variable: the write and the read happen on
+/// different threads.
 private final class VerdictBox: @unchecked Sendable {
   private let lock = NSLock()
   private var stored: ImageProbe.Verdict?

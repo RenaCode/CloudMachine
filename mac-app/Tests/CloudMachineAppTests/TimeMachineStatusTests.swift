@@ -65,12 +65,13 @@ final class TimeMachineStatusTests: XCTestCase {
     XCTAssertEqual(progress?.totalFiles, 3_022_847)
   }
 
-  // Regresja dla bledu z 2026-07-29: kod wczesniej zgadywal mount point z
-  // twardo zakodowanej nazwy woluminu zamiast pytac o rzeczywisty
-  // zarejestrowany cel - po recznej zmianie nazwy woluminu (np. na
-  // "TimeMachine") GUI/watchdogi mylnie pokazywaly "brak woluminu". Jeden
-  // wpis w destinationinfo, bo funkcja zaklada dokladnie jeden aktywny cel
-  // (gwarancja architektury, patrz jej doc-comment) - nie "pierwszy z wielu".
+  // Regression for the bug of 2026-07-29: the code used to guess the mount
+  // point from a hard-coded volume name instead of asking for the actual
+  // registered destination - after a manual volume rename (e.g. to
+  // "TimeMachine") the GUI/watchdogs wrongly showed "no volume". One entry in
+  // destinationinfo, because the function assumes exactly one active
+  // destination (an architectural guarantee, see its doc comment) - not "the
+  // first of many".
   func testCurrentDestinationMountPoint_returnsRealMountPoint() {
     let singleDestinationInfo = """
       ====================================================

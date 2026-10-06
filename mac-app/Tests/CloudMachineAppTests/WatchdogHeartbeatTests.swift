@@ -3,129 +3,129 @@ import XCTest
 
 @testable import CloudMachineApp
 
-/// Nadzor nad samym nadzorem: czy da sie odroznic "czujka przebiegla i nie
-/// miala o czym donosic" od "czujki nie ma".
+/// Supervision of the supervisor itself: whether "the watchdog ran and had
+/// nothing to report" can be told apart from "there is no watchdog".
 ///
-/// `backup-health` chodzi ze `StartInterval 1800` i BEZ `KeepAlive`, a jedynym
-/// objawem wyladowanego albo zawieszonego agenta jest cisza - przy czym cisza
-/// jest tu stanem NORMALNYM (README: "Empty logs after a fresh install are
-/// normal - the agents only write when something happens"). Do 25.09.2026
-/// czujka nie zostawiala po sobie zadnego sladu, wiec te dwa stany wygladaly
-/// identycznie.
+/// `backup-health` runs with `StartInterval 1800` and WITHOUT `KeepAlive`, and
+/// the only symptom of an unloaded or hung agent is silence - while silence is
+/// the NORMAL state here (README: "Empty logs after a fresh install are
+/// normal - the agents only write when something happens"). Until 25.09.2026
+/// the watchdog left no trace behind, so these two states looked identical.
 @MainActor
 final class WatchdogHeartbeatTests: XCTestCase {
 
-  private var katalog: URL!
-  private var znacznik: URL!
+  private var directory: URL!
+  private var marker: URL!
 
   override func setUpWithError() throws {
-    katalog = FileManager.default.temporaryDirectory
+    directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("cm-heartbeat-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: katalog, withIntermediateDirectories: true)
-    // KAZDY test podstawia plik - zaden nie ma prawa dotknac prawdziwego
-    // znacznika w `~/Library/Application Support/CloudMachine/`, bo wtedy
-    // przebieg `swift test` meldowalby czujke, ktora nie chodzila.
-    znacznik = katalog.appendingPathComponent("backup-health-last-run")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    // EVERY test substitutes the file - none has the right to touch the real
+    // marker in `~/Library/Application Support/CloudMachine/`, because then a
+    // `swift test` run would report a watchdog that did not run.
+    marker = directory.appendingPathComponent("backup-health-last-run")
   }
 
   override func tearDownWithError() throws {
-    try? FileManager.default.removeItem(at: katalog)
+    try? FileManager.default.removeItem(at: directory)
   }
 
-  // MARK: - Sam znacznik
+  // MARK: - The marker itself
 
-  /// TA usterka: przed poprawka nie bylo CZEGO odczytac.
-  func testPrzebiegZostawiaSladDoOdczytania() throws {
-    let teraz = Date(timeIntervalSince1970: 1_790_000_000)
-    XCTAssertTrue(WatchdogHeartbeat.record(now: teraz, file: znacznik))
-    let odczytane = try XCTUnwrap(
-      WatchdogHeartbeat.lastRun(file: znacznik),
-      "znacznik ma sie dac odczytac z powrotem - inaczej nie mowi nic")
+  /// THAT defect: before the fix there was NOTHING to read.
+  func testRunLeavesATraceThatCanBeRead() throws {
+    let now = Date(timeIntervalSince1970: 1_790_000_000)
+    XCTAssertTrue(WatchdogHeartbeat.record(now: now, file: marker))
+    let read = try XCTUnwrap(
+      WatchdogHeartbeat.lastRun(file: marker),
+      "the marker must be readable back - otherwise it says nothing")
     XCTAssertEqual(
-      odczytane.timeIntervalSince1970, teraz.timeIntervalSince1970, accuracy: 1)
+      read.timeIntervalSince1970, now.timeIntervalSince1970, accuracy: 1)
   }
 
-  /// Plik ma byc czytelny dla czlowieka w trakcie diagnozy, nie tylko dla nas.
-  func testZnacznikJestCzytelnymTekstem() throws {
-    WatchdogHeartbeat.record(now: Date(timeIntervalSince1970: 1_790_000_000), file: znacznik)
-    let tresc = try String(contentsOf: znacznik, encoding: .utf8)
-    XCTAssertTrue(tresc.hasPrefix("2026-"), "dostalem: \(tresc)")
+  /// The file must be readable by a person during diagnosis, not just by us.
+  func testMarkerIsReadableText() throws {
+    WatchdogHeartbeat.record(now: Date(timeIntervalSince1970: 1_790_000_000), file: marker)
+    let content = try String(contentsOf: marker, encoding: .utf8)
+    XCTAssertTrue(content.hasPrefix("2026-"), "got: \(content)")
   }
 
-  /// Brak znacznika to NIE "czujka nie chodzi od zera sekund" i nie awaria
-  /// odczytu - to trzeci, osobny stan. Zdarza sie na swiezej instalacji.
-  func testBrakZnacznikaToOsobnyStan() {
-    XCTAssertNil(WatchdogHeartbeat.lastRun(file: znacznik))
-    XCTAssertEqual(WatchdogHeartbeat.current(file: znacznik), .never)
+  /// A missing marker is NOT "the watchdog has not run for zero seconds" and
+  /// not a read failure - it is a third, separate state. It happens on a fresh
+  /// installation.
+  func testMissingMarkerIsASeparateState() {
+    XCTAssertNil(WatchdogHeartbeat.lastRun(file: marker))
+    XCTAssertEqual(WatchdogHeartbeat.current(file: marker), .never)
   }
 
-  // MARK: - Ocena wieku
+  // MARK: - Age assessment
 
-  func testSwiezyPrzebiegJestSwiezy() {
-    let teraz = Date()
-    let ocena = WatchdogHeartbeat.freshness(
-      lastRun: teraz.addingTimeInterval(-600), now: teraz)
-    guard case .fresh = ocena else { return XCTFail("dostalem: \(ocena)") }
+  func testFreshRunIsFresh() {
+    let now = Date()
+    let assessment = WatchdogHeartbeat.freshness(
+      lastRun: now.addingTimeInterval(-600), now: now)
+    guard case .fresh = assessment else { return XCTFail("got: \(assessment)") }
   }
 
-  /// Dwa pominiete przebiegi z rzedu (StartInterval 1800) to juz nie przypadek.
-  func testCiszaDluzszaNizLimitToNieSwiezosc() {
-    let teraz = Date()
-    let ocena = WatchdogHeartbeat.freshness(
-      lastRun: teraz.addingTimeInterval(-3 * 3600), now: teraz)
-    guard case .stale(_, let wiek) = ocena else { return XCTFail("dostalem: \(ocena)") }
-    XCTAssertEqual(wiek, 3 * 3600, accuracy: 1)
+  /// Two missed runs in a row (StartInterval 1800) are no longer chance.
+  func testSilenceLongerThanTheLimitIsNotFreshness() {
+    let now = Date()
+    let assessment = WatchdogHeartbeat.freshness(
+      lastRun: now.addingTimeInterval(-3 * 3600), now: now)
+    guard case .stale(_, let age) = assessment else { return XCTFail("got: \(assessment)") }
+    XCTAssertEqual(age, 3 * 3600, accuracy: 1)
   }
 
-  /// Znacznik z przyszlosci (przestawiony zegar, plik przeniesiony z innej
-  /// maszyny) NIE jest swiezoscia: nie wiemy, kiedy czujka chodzila. Mylimy sie
-  /// w strone ostrzezenia, nie w strone spokoju.
-  func testZnacznikZPrzyszlosciNieUchodziZaSwiezy() {
-    let teraz = Date()
-    let ocena = WatchdogHeartbeat.freshness(
-      lastRun: teraz.addingTimeInterval(3600), now: teraz)
-    guard case .stale = ocena else { return XCTFail("dostalem: \(ocena)") }
+  /// A marker from the future (a clock that was changed, a file moved from
+  /// another machine) is NOT freshness: we do not know when the watchdog ran.
+  /// We err on the side of a warning, not on the side of calm.
+  func testMarkerFromTheFutureDoesNotPassAsFresh() {
+    let now = Date()
+    let assessment = WatchdogHeartbeat.freshness(
+      lastRun: now.addingTimeInterval(3600), now: now)
+    guard case .stale = assessment else { return XCTFail("got: \(assessment)") }
   }
 
-  // MARK: - Wiersz, ktory czlowiek CZYTA (drive-status i panel)
+  // MARK: - The line a person READS (drive-status and the panel)
 
-  func testWierszDlaSwiezegoPrzebieguPodajeDateIWiek() {
-    let teraz = Date()
-    let linia = StatusLines.watchdogRun(
-      WatchdogHeartbeat.freshness(lastRun: teraz.addingTimeInterval(-720), now: teraz))
-    XCTAssertTrue(linia.contains("12 min temu"), "dostalem: \(linia)")
-    XCTAssertFalse(linia.contains("MOZE NIE CHODZIC"), "dostalem: \(linia)")
+  func testLineForAFreshRunGivesDateAndAge() {
+    let now = Date()
+    let line = StatusLines.watchdogRun(
+      WatchdogHeartbeat.freshness(lastRun: now.addingTimeInterval(-720), now: now))
+    XCTAssertTrue(line.contains("12 min ago"), "got: \(line)")
+    XCTAssertFalse(line.contains("MAY NOT BE RUNNING"), "got: \(line)")
   }
 
-  /// Sedno punktu 13: wiersz musi POWIEDZIEC, ze czujka mogla przestac chodzic.
-  /// Sama data bez tego zdania niczego nie zaklóca - czlowiek przesuwa po niej
-  /// wzrokiem tak samo jak po dacie sprzed dwoch minut.
-  func testWierszDlaMilczacejCzujkiOstrzega() {
-    let teraz = Date()
-    let linia = StatusLines.watchdogRun(
-      WatchdogHeartbeat.freshness(lastRun: teraz.addingTimeInterval(-3 * 24 * 3600), now: teraz))
-    XCTAssertTrue(linia.contains("CZUJKA MOZE NIE CHODZIC"), "dostalem: \(linia)")
-    XCTAssertTrue(linia.contains("3 dni temu"), "dostalem: \(linia)")
+  /// The core of item 13: the line must SAY that the watchdog may have stopped
+  /// running. A date alone without that sentence disturbs nothing - a person's
+  /// eyes slide over it just as over a date from two minutes ago.
+  func testLineForASilentWatchdogWarns() {
+    let now = Date()
+    let line = StatusLines.watchdogRun(
+      WatchdogHeartbeat.freshness(lastRun: now.addingTimeInterval(-3 * 24 * 3600), now: now))
+    XCTAssertTrue(line.contains("THE WATCHDOG MAY NOT BE RUNNING"), "got: \(line)")
+    XCTAssertTrue(line.contains("3 days ago"), "got: \(line)")
   }
 
-  func testWierszBezZnacznikaMowiWprost() {
-    let linia = StatusLines.watchdogRun(.never)
-    XCTAssertTrue(linia.contains("NIGDY"), "dostalem: \(linia)")
-    XCTAssertFalse(linia.contains("Optional"), "dostalem: \(linia)")
+  func testLineWithoutMarkerSaysSoPlainly() {
+    let line = StatusLines.watchdogRun(.never)
+    XCTAssertTrue(line.contains("NEVER"), "got: \(line)")
+    XCTAssertFalse(line.contains("Optional"), "got: \(line)")
   }
 
   // MARK: - Panel
 
-  /// Niesprawdzone nie ma prawa swiecic na zielono - tak samo jak `queueKnown`
-  /// i `BackupCycleStatus.known`.
-  func testPanelNieUznajeNiesprawdzonejCzujkiZaDzialajaca() {
+  /// Something unchecked has no right to shine green - just like `queueKnown`
+  /// and `BackupCycleStatus.known`.
+  func testPanelDoesNotTreatAnUncheckedWatchdogAsRunning() {
     let status = AppStatus()
     XCTAssertNil(status.watchdog)
     XCTAssertFalse(status.watchdogRunning)
 
     status.watchdog = WatchdogHeartbeat.freshness(
       lastRun: Date().addingTimeInterval(-3 * 3600))
-    XCTAssertFalse(status.watchdogRunning, "czujka milczaca 3 h to nie czujka dzialajaca")
+    XCTAssertFalse(status.watchdogRunning, "a watchdog silent for 3 h is not a running watchdog")
 
     status.watchdog = WatchdogHeartbeat.freshness(lastRun: Date().addingTimeInterval(-300))
     XCTAssertTrue(status.watchdogRunning)

@@ -2,88 +2,90 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Ustalenie 15b: wynik `backupCorruptFile()` byl ignorowany.
+/// Finding 15b: the result of `backupCorruptFile()` was ignored.
 ///
-/// Ta funkcja przy porazce kopiowania oddaje `nil`, a jej wlasny komentarz
-/// nazywa ta kopie JEDYNA siecia bezpieczenstwa miedzy "plik sie nie sparsowal"
-/// a "auto-zapis cicho nadpisal go pusta konfiguracja". `loadOrInitialize()`
-/// wolalo ja przez `backupCorruptFile()` bez sprawdzenia wyniku i oddawalo
-/// `(.empty, error)`, a CLI logowalo "oryginal zachowany na dysku z kopia
-/// zapasowa obok" - zdanie nieprawdziwe dokladnie w tym przypadku, w ktorym
-/// jedyny egzemplarz danych mial zginac przy nastepnym zapisie.
+/// That function returns `nil` when copying fails, and its own comment calls
+/// this copy the ONLY safety net between "the file did not parse" and "an
+/// auto-save silently overwrote it with an empty configuration".
+/// `loadOrInitialize()` called it via `backupCorruptFile()` without checking
+/// the result and returned `(.empty, error)`, and the CLI logged "original
+/// kept on disk with a backup copy next to it" - a sentence that was false
+/// exactly in the case where the only copy of the data was about to be lost on
+/// the next write.
 final class ConfigStoreTests: XCTestCase {
 
-  private var katalog: URL!
-  private var plik: URL!
+  private var directory: URL!
+  private var file: URL!
 
   override func setUpWithError() throws {
-    katalog = FileManager.default.temporaryDirectory
+    directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("cm-config-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: katalog, withIntermediateDirectories: true)
-    plik = katalog.appendingPathComponent("machines.json")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    file = directory.appendingPathComponent("machines.json")
   }
 
   override func tearDownWithError() throws {
-    try? FileManager.default.removeItem(at: katalog)
+    try? FileManager.default.removeItem(at: directory)
   }
 
-  private struct Uszkodzony: Error {
-    var localizedDescription: String { "nieoczekiwany znak na pozycji 12" }
+  private struct Corrupt: Error {
+    var localizedDescription: String { "unexpected character at position 12" }
   }
 
-  // MARK: - Brak kopii przerywa
+  // MARK: - A missing copy aborts
 
-  /// SEDNO poprawki. Bez kopii nie ma konfiguracji do pracy - `config` jest
-  /// `nil`, a nie "pusta". Wolajacy nie ma wiec czego zapisac i nie moze
-  /// nadpisac uszkodzonego-ale-mozliwego-do-odzyskania pliku.
-  func testBrakKopiiNieDajeKonfiguracjiDoPracy() {
-    let wynik = ConfigStore.decideAfterCorruption(backup: nil, error: Uszkodzony())
+  /// The CORE of the fix. Without a copy there is no configuration to work
+  /// with - `config` is `nil`, not "empty". So the caller has nothing to save
+  /// and cannot overwrite a corrupt-but-recoverable file.
+  func testMissingCopyGivesNoConfigurationToWorkWith() {
+    let result = ConfigStore.decideAfterCorruption(backup: nil, error: Corrupt())
     XCTAssertNil(
-      wynik.config,
-      "brak kopii musi PRZERWAC, a nie oddac pusta konfiguracje do nadpisania oryginalu")
-    XCTAssertNotNil(wynik.corruption, "powod uszkodzenia musi dojsc do czlowieka")
+      result.config,
+      "a missing copy must ABORT, not hand over an empty configuration that overwrites the original"
+    )
+    XCTAssertNotNil(result.corruption, "the reason for the corruption must reach a person")
   }
 
-  /// Gdy kopia POWSTALA, praca na pustej konfiguracji jest bezpieczna - oryginal
-  /// da sie odzyskac z pliku obok. Bez tego testu "naprawa" przerywajaca
-  /// zawsze przeszlaby niezauwazona, a config uszkodzony reczna edycja
-  /// blokowalby cale narzedzie.
-  func testUdanaKopiaPozwalaPracowacDalej() {
-    let kopia = katalog.appendingPathComponent("machines.json.corrupt-1")
-    let wynik = ConfigStore.decideAfterCorruption(backup: kopia, error: Uszkodzony())
-    XCTAssertNotNil(wynik.config)
-    XCTAssertNotNil(wynik.corruption, "uszkodzenie nadal musi byc widoczne")
-    guard case .corruptButBackedUp(_, let gdzie, _) = wynik else {
-      return XCTFail("oczekiwalem .corruptButBackedUp, dostalem \(wynik)")
+  /// When the copy WAS MADE, working on an empty configuration is safe - the
+  /// original can be recovered from the file next to it. Without this test a
+  /// "fix" that always aborts would go unnoticed, and a config corrupted by a
+  /// manual edit would block the whole tool.
+  func testSuccessfulCopyAllowsWorkToContinue() {
+    let copy = directory.appendingPathComponent("machines.json.corrupt-1")
+    let result = ConfigStore.decideAfterCorruption(backup: copy, error: Corrupt())
+    XCTAssertNotNil(result.config)
+    XCTAssertNotNil(result.corruption, "the corruption must still be visible")
+    guard case .corruptButBackedUp(_, let location, _) = result else {
+      return XCTFail("expected .corruptButBackedUp, got \(result)")
     }
-    XCTAssertEqual(gdzie, kopia, "komunikat ma powiedziec, GDZIE lezy kopia")
+    XCTAssertEqual(location, copy, "the message must say WHERE the copy is")
   }
 
-  /// Zdrowy plik nie jest uszkodzeniem.
-  func testZdrowaKonfiguracjaNieZglaszaUszkodzenia() {
+  /// A healthy file is not a corruption.
+  func testHealthyConfigurationReportsNoCorruption() {
     XCTAssertNil(ConfigInitialization.ready(.empty).corruption)
     XCTAssertNotNil(ConfigInitialization.ready(.empty).config)
   }
 
-  // MARK: - Sama kopia
+  // MARK: - The copy itself
 
-  func testKopiaUszkodzonegoPlikuPowstajeObok() throws {
-    try "{ to nie jest json".write(to: plik, atomically: true, encoding: .utf8)
+  func testCopyOfCorruptFileIsMadeNextToIt() throws {
+    try "{ this is not json".write(to: file, atomically: true, encoding: .utf8)
 
-    let kopia = try XCTUnwrap(ConfigStore.backupCorruptFile(configPath: plik))
-    XCTAssertTrue(FileManager.default.fileExists(atPath: kopia.path))
-    XCTAssertEqual(try String(contentsOf: kopia, encoding: .utf8), "{ to nie jest json")
+    let copy = try XCTUnwrap(ConfigStore.backupCorruptFile(configPath: file))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: copy.path))
+    XCTAssertEqual(try String(contentsOf: copy, encoding: .utf8), "{ this is not json")
     XCTAssertTrue(
-      FileManager.default.fileExists(atPath: plik.path),
-      "kopia nie moze zabierac oryginalu - to kopia, nie przeniesienie")
-    XCTAssertTrue(kopia.lastPathComponent.contains("corrupt-"), kopia.lastPathComponent)
+      FileManager.default.fileExists(atPath: file.path),
+      "the copy must not take the original away - it is a copy, not a move")
+    XCTAssertTrue(copy.lastPathComponent.contains("corrupt-"), copy.lastPathComponent)
   }
 
-  /// Nieudana kopia MUSI byc rozpoznawalna po wyniku - tu przez sciezke
-  /// w katalogu, ktorego nie ma.
-  func testNieudanaKopiaOddajeNil() {
-    let nieistniejacy = katalog.appendingPathComponent("nie-ma-takiego-katalogu")
+  /// A failed copy MUST be recognizable from the result - here via a path in a
+  /// directory that does not exist.
+  func testFailedCopyReturnsNil() {
+    let missing = directory.appendingPathComponent("no-such-directory")
       .appendingPathComponent("machines.json")
-    XCTAssertNil(ConfigStore.backupCorruptFile(configPath: nieistniejacy))
+    XCTAssertNil(ConfigStore.backupCorruptFile(configPath: missing))
   }
 }

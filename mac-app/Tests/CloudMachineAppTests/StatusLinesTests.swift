@@ -2,110 +2,118 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Wiersze `drive-status`. To jest tekst, ktory czlowiek CZYTA, pytajac "czy
-/// backup dziala" - a psul sie dotad dokladnie tam, gdzie brak danych
-/// zamieniano na jakas wartosc.
+/// The `drive-status` lines. This is the text a person READS when asking "is
+/// the backup working" - and until now it broke exactly where missing data was
+/// turned into some value.
 final class StatusLinesTests: XCTestCase {
 
-  // MARK: - Montowanie
+  // MARK: - Mount
 
-  func testZamontowaneINiezamontowane() {
+  func testMountedAndNotMounted() {
     XCTAssertEqual(StatusLines.mounted(true), "OK")
-    XCTAssertEqual(StatusLines.mounted(false), "BRAK")
+    XCTAssertEqual(StatusLines.mounted(false), "MISSING")
   }
 
-  /// „BRAK" znaczy „sprawdzilem i nie ma". Przy nieudanym odczycie tablicy
-  /// montowan nikt nie ma prawa wyciagnac tego wniosku - a na tej odpowiedzi
-  /// stoi decyzja o podpieciu obrazu.
-  func testNieodczytanaTablicaToNieBrakMontowania() {
-    let linia = StatusLines.mounted(nil)
-    XCTAssertNotEqual(linia, "BRAK")
-    XCTAssertNotEqual(linia, "OK")
-    XCTAssertTrue(linia.contains("NIE WIADOMO"), "dostalem: \(linia)")
+  /// "MISSING" means "I checked and it is not there". When reading the mount
+  /// table failed, nobody has the right to draw that conclusion - and the
+  /// decision to attach the image rests on this answer.
+  func testUnreadTableIsNotAMissingMount() {
+    let line = StatusLines.mounted(nil)
+    XCTAssertNotEqual(line, "MISSING")
+    XCTAssertNotEqual(line, "OK")
+    XCTAssertTrue(line.contains("UNKNOWN"), "got: \(line)")
   }
 
-  // MARK: - Wolne miejsce
+  // MARK: - Free space
 
-  func testZmierzoneWolneMiejsceJestLiczba() {
+  func testMeasuredFreeSpaceIsANumber() {
     XCTAssertEqual(StatusLines.freeDisk(427), "427 GB")
   }
 
-  /// Regresja z 23 wrzesnia 2026: po zmianie `BufferGuardService.freeGB()` na
-  /// `Int?` wiersz wypisywal `Wolne na dysku: Optional(427) GB`. Kompilator
-  /// zglaszal to ostrzezeniem, nie bledem, wiec ani build, ani testy tego nie
-  /// zatrzymaly.
-  func testBrakPomiaruNieWypisujeOptional() {
-    let linia = StatusLines.freeDisk(nil)
-    XCTAssertFalse(linia.contains("Optional"), "dostalem: \(linia)")
-    XCTAssertFalse(linia.contains("nil"), "dostalem: \(linia)")
+  /// Regression from 23 September 2026: after `BufferGuardService.freeGB()`
+  /// was changed to `Int?` the line printed `Free on disk: Optional(427) GB`.
+  /// The compiler reported it as a warning, not an error, so neither the build
+  /// nor the tests stopped it.
+  func testMissingMeasurementDoesNotPrintOptional() {
+    let line = StatusLines.freeDisk(nil)
+    XCTAssertFalse(line.contains("Optional"), "got: \(line)")
+    XCTAssertFalse(line.contains("nil"), "got: \(line)")
   }
 
-  /// Zero to KONKRETNA liczba, na ktorej dozorca wstrzymuje Time Machine -
-  /// podstawienie go za brak pomiaru bylo pierwotnym bledem, ktory drugi agent
-  /// naprawial zmiana typu. Wiersz nie moze go przywrocic tylnymi drzwiami.
-  func testBrakPomiaruToNieZero() {
+  /// Zero is a CONCRETE number at which the guard pauses Time Machine -
+  /// substituting it for a missing measurement was the original bug, which
+  /// the other agent fixed by changing the type. The line must not bring it
+  /// back through the back door.
+  func testMissingMeasurementIsNotZero() {
     XCTAssertNotEqual(StatusLines.freeDisk(nil), StatusLines.freeDisk(0))
     XCTAssertEqual(StatusLines.freeDisk(0), "0 GB")
   }
 
-  func testBrakPomiaruJestNAZWANY() {
-    let linia = StatusLines.freeDisk(nil)
-    XCTAssertTrue(linia.contains("NIE ZMIERZONO"), "dostalem: \(linia)")
+  func testMissingMeasurementIsNAMED() {
+    let line = StatusLines.freeDisk(nil)
+    XCTAssertTrue(line.contains("NOT MEASURED"), "got: \(line)")
     XCTAssertTrue(
-      linia.contains("dozorca"),
-      "wiersz ma powiedziec, CO z tego wynika - ze dysk nie jest chroniony. Dostalem: \(linia)")
+      line.contains("buffer guard"),
+      "the line must say WHAT follows from it - that the disk is not protected. Got: \(line)")
   }
 
-  // MARK: - Niedoreczony alarm
+  // MARK: - Undelivered alarm
 
-  func testBrakNiedoreczonegoAlarmuNicNieWypisuje() {
+  func testNoUndeliveredAlarmPrintsNothing() {
     XCTAssertEqual(StatusLines.undeliveredAlert(nil), [])
   }
 
-  /// Sens poprawki w `HealthAlert`: nieudane powiadomienie ma dac sie ZOBACZYC.
-  /// Dopoki `drive-status` o tym milczal, alarm istnial tylko w pliku stanu.
-  func testNiedoreczonyAlarmJestWidoczny() {
-    let kiedy = Date(timeIntervalSince1970: 1_790_000_000)
-    let linie = StatusLines.undeliveredAlert(
-      (at: kiedy, summary: "Backup nie powstal od 30 h", reason: "osascript kod 1: brak uprawnien"))
+  /// The point of the fix in `HealthAlert`: a failed notification must be
+  /// VISIBLE. As long as `drive-status` was silent about it, the alarm existed
+  /// only in the state file.
+  func testUndeliveredAlarmIsVisible() {
+    let when = Date(timeIntervalSince1970: 1_790_000_000)
+    let lines = StatusLines.undeliveredAlert(
+      (
+        at: when, summary: "No backup made for 30 h",
+        reason: "osascript code 1: permission denied"
+      ))
 
-    let tekst = linie.joined(separator: "\n")
-    XCTAssertTrue(tekst.contains("NIEDORECZONY ALARM"), tekst)
-    XCTAssertTrue(tekst.contains("Backup nie powstal od 30 h"), "tresc alarmu ma byc widoczna")
-    XCTAssertTrue(tekst.contains("brak uprawnien"), "powod niedoreczenia ma byc widoczny")
+    let text = lines.joined(separator: "\n")
+    XCTAssertTrue(text.contains("UNDELIVERED ALARM"), text)
+    XCTAssertTrue(text.contains("No backup made for 30 h"), "the alarm content must be visible")
     XCTAssertTrue(
-      tekst.contains(BackupHealth.stamp(kiedy)),
-      "bez daty nie wiadomo, czy alarm jest swiezy, czy sprzed tygodnia")
+      text.contains("permission denied"), "the reason for non-delivery must be visible")
+    XCTAssertTrue(
+      text.contains(BackupHealth.stamp(when)),
+      "without a date it is unknown whether the alarm is fresh or from a week ago")
   }
 
-  // MARK: - Cache a zaleglosc: DWIE rozne wielkosci
+  // MARK: - Cache vs backlog: TWO different quantities
 
-  /// Jeden wiersz "Bufor: 103 GB z 100G" odpowiadal na pytanie, na ktore nie
-  /// umial odpowiedziec: czy wysylka nadaza. Cache stoi pod limitem stale,
-  /// a o zaleglosci mowi dopiero drugi wiersz - dlatego sa dwa.
-  func testCacheIZaleglocSaOsobnymiWierszami() {
-    XCTAssertEqual(StatusLines.cacheSize(103, limitGB: 100), "103 GB z 100G")
-    XCTAssertEqual(StatusLines.backlog(14, items: 462), "~14 GB (462 pozycji)")
+  /// A single line "Buffer: 103 GB of 100G" answered a question it could not
+  /// answer: whether the upload keeps up. The cache sits at the limit
+  /// constantly, and only the second line tells about the backlog - that is
+  /// why there are two.
+  func testCacheAndBacklogAreSeparateLines() {
+    XCTAssertEqual(StatusLines.cacheSize(103, limitGB: 100), "103 GB of 100G")
+    XCTAssertEqual(StatusLines.backlog(14, items: 462), "~14 GB (462 items)")
   }
 
-  /// "~" nie jest ozdoba: gigabajty zaleglosci sa SZACOWANE z liczby pozycji,
-  /// a liczba pozycji jest pomiarem. Wiersz podajacy szacunek jako pomiar
-  /// ukrywa, jak mocna jest podstawa decyzji o wstrzymaniu backupu.
-  func testZaleglocJestOznaczonaJakoSzacunekIPodajePomiar() {
-    let linia = StatusLines.backlog(14, items: 462)
-    XCTAssertTrue(linia.hasPrefix("~"), "dostalem: \(linia)")
-    XCTAssertTrue(linia.contains("462"), "dostalem: \(linia)")
+  /// "~" is not decoration: the backlog gigabytes are ESTIMATED from the item
+  /// count, and the item count is a measurement. A line giving the estimate as
+  /// a measurement hides how solid the basis for the decision to pause the
+  /// backup is.
+  func testBacklogIsMarkedAsEstimateAndGivesTheMeasurement() {
+    let line = StatusLines.backlog(14, items: 462)
+    XCTAssertTrue(line.hasPrefix("~"), "got: \(line)")
+    XCTAssertTrue(line.contains("462"), "got: \(line)")
   }
 
-  /// Brak odpowiedzi rclone nie moze wygladac na zero ani na "Optional(0)".
-  func testBrakOdpowiedziRcloneJestNazwanyWObuWierszach() {
+  /// rclone not answering must not look like zero or like "Optional(0)".
+  func testNoRcloneAnswerIsNamedInBothLines() {
     let cache = StatusLines.cacheSize(nil, limitGB: 100)
-    XCTAssertTrue(cache.contains("NIE ZMIERZONO"), "dostalem: \(cache)")
-    XCTAssertFalse(cache.contains("0 GB"), "dostalem: \(cache)")
+    XCTAssertTrue(cache.contains("NOT MEASURED"), "got: \(cache)")
+    XCTAssertFalse(cache.contains("0 GB"), "got: \(cache)")
 
-    let zaleglosc = StatusLines.backlog(nil, items: nil)
-    XCTAssertTrue(zaleglosc.contains("NIE WIADOMO"), "dostalem: \(zaleglosc)")
-    XCTAssertFalse(zaleglosc.contains("Optional"), "dostalem: \(zaleglosc)")
-    XCTAssertFalse(zaleglosc.contains("~0"), "dostalem: \(zaleglosc)")
+    let backlog = StatusLines.backlog(nil, items: nil)
+    XCTAssertTrue(backlog.contains("UNKNOWN"), "got: \(backlog)")
+    XCTAssertFalse(backlog.contains("Optional"), "got: \(backlog)")
+    XCTAssertFalse(backlog.contains("~0"), "got: \(backlog)")
   }
 }
