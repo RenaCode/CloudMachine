@@ -112,6 +112,11 @@ else on the account. `operations/about` through the rclone rc gives real bytes.
 - Nothing else at runtime. CloudMachine installs its own `rclone` and its own
   copy of FUSE-T.
 
+The menu-bar app, CLI output and notifications follow the system language:
+Polish when Polish is the first preferred language, English otherwise.
+`CM_LANGUAGE=en` or `CM_LANGUAGE=pl` overrides it. Logs are always English,
+so they read the same whoever sends them to you.
+
 ### Current limitations
 
 Worth knowing before you start, because none of them announce themselves:
@@ -122,9 +127,6 @@ Worth knowing before you start, because none of them announce themselves:
   `config/machines.example.json` describes several machines with per-machine
   `limit_gb` budgets, but no code enforces those budgets — what is checked is
   the real free space on Drive, reported by rclone.
-- **The interface speaks Polish.** The menu-bar app, the CLI output and the log
-  lines are in Polish; there is no language switch yet. The examples below quote
-  that output verbatim.
 - **Not notarised.** Releases are signed with a self-signed certificate (local
   builds ad hoc or with a local one, see below), not with an Apple Developer ID.
   The Homebrew cask clears the quarantine flag; a DMG downloaded by hand gets
@@ -223,7 +225,7 @@ security add-generic-password -a client_secret -s cloudmachine-gdrive -w -U
 Without `-w <value>`, `security` prompts — the secret stays out of your shell
 history and out of `ps`.
 
-The app window can do the same thing: the *Poświadczenia Google Drive
+The app window can do the same thing: the *Google Drive Credentials
 (OAuth 2.0)* card, folded away at the bottom since it is a once-ever step. It writes through the
 `security` tool rather than the Keychain API on purpose — an entry created by
 `SecItemAdd` gets an ACL limited to the program that made it, and reading it
@@ -258,23 +260,23 @@ cloudmachine-agent drive-status
 ```
 
 ```
-Narzedzia:        OK
-Montowanie Drive: OK
-Obraz podpiety:   OK  (/Volumes/CloudMachine)
-Cache na dysku:   103 GB z 100G
-Do wyslania:      ~14 GB (462 pozycji)
-Wolne na dysku:   288 GB
-Kolejka wysylki:  0 w toku, 0 w kolejce, 0 bledow
-Restart bez pytania: TAK - kolejka pusta
-Wysylka:          Wszystko wysłane na Google Drive
-Cel Time Machine: /Volumes/CloudMachine
-Backup:           nie trwa
+Tools:            OK
+Drive mount:      OK
+Image attached:   OK  (/Volumes/CloudMachine)
+Cache on disk:    103 GB of 100G
+To upload:        ~14 GB (462 items)
+Free on disk:     288 GB
+Upload queue:     0 in progress, 0 queued, 0 errors
+Restart without asking: YES - queue empty
+Upload:           Everything uploaded to Google Drive
+TM destination:   /Volumes/CloudMachine
+Backup:           not running
 ```
 
 The number that matters is the upload queue. Until it returns to zero between
 backups, part of the backup is still only on this Mac.
 
-The `Wysylka:` line is the same verdict the app window shows, computed in one
+The `Upload:` line is the same verdict the app window shows, computed in one
 place so the two can never disagree. When it is not nominal it prints a second
 line saying why, and whether it clears on its own.
 
@@ -282,7 +284,7 @@ It has three kinds of answer, not two. Besides "fine" and "broken" there is
 **"unknown"** — printed when rclone does not answer the question about its
 queue. That third state exists because of a specific lie: the queue read used
 to time out, the caller substituted zeros for the missing numbers, and both the
-CLI and the app then announced *Wszystko wysłane na Google Drive* while 386
+CLI and the app then announced *Everything uploaded to Google Drive* while 386
 bands sat unsent. A verdict computed from numbers nobody measured is worse than
 no verdict, so now it says so.
 
@@ -316,9 +318,9 @@ cloudmachine-agent backup-health
 ```
 
 ```
-Ostatnia udana kopia: 2026-09-12 18:25
-Ostatnia proba:       2026-09-12 18:02
-Cykl backupu: OK
+Last successful backup: 2026-09-12 18:25
+Last attempt:           2026-09-12 18:02
+Backup cycle: OK
 ```
 
 It reads the date of the last **completed** backup — `SnapshotDates` in
@@ -392,8 +394,8 @@ to report. Every run therefore drops its date into
 `drive-status` and the app window show it:
 
 ```
-Czujka backupu:   2026-09-25 22:04 (12 min temu)
-Czujka backupu:   2026-09-22 03:10 (3 dni temu) - CZUJKA MOZE NIE CHODZIC
+Backup watchdog:  2026-09-25 22:04 (12 min ago)
+Backup watchdog:  2026-09-22 03:10 (3 days ago) - THE WATCHDOG MAY NOT BE RUNNING
 ```
 
 The second line means nobody has been asking whether the backup works — not
