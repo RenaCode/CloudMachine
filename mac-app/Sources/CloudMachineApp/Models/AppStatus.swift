@@ -188,6 +188,10 @@ final class AppStatus: ObservableObject {
   @Published var backupProgress: BackupProgressInfo?
   @Published var lastAction: LastRunResult?
   @Published var hasFullDiskAccess: Bool = false
+  /// Folder name offered for this Mac before Google Drive is connected
+  /// (from the computer name), and the folder in use once it is.
+  @Published var suggestedDriveFolder = ""
+  @Published var driveFolderPath = ""
   /// Whether the mount agent is loaded in launchd; `nil` until asked.
   @Published var agentsInstalled: Bool?
   /// Whether this Mac's image exists on the mounted Drive; `nil` while the

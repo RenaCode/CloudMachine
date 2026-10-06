@@ -11,6 +11,9 @@ struct DashboardView: View {
   @State private var credentialsExpanded = false
   /// Logical size of a new backup image. Sparse: Drive holds only what is written.
   @State private var imageSizeGB = "4000"
+  /// This Mac's folder on Google Drive, chosen before connecting. Empty means
+  /// "not edited yet" and shows the suggestion from the computer name.
+  @State private var driveFolder = ""
 
   var body: some View {
     ZStack {
@@ -360,6 +363,40 @@ struct DashboardView: View {
     }
   }
 
+  private var effectiveDriveFolder: String {
+    driveFolder.isEmpty ? controller.status.suggestedDriveFolder : driveFolder
+  }
+
+  /// Each Mac on the same Google account needs its own folder, otherwise
+  /// they would share one backup image. Chosen once: a Mac that already has a
+  /// folder refuses to switch, because the new one would be an empty backup.
+  private var folderField: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 8) {
+        Text(L10n.tr("Folder on Google Drive"))
+          .font(.system(size: 12))
+          .foregroundStyle(RenaCodeTheme.textMain)
+        Text("CloudMachine/")
+          .font(.system(size: 12, design: .monospaced))
+          .foregroundStyle(RenaCodeTheme.textMain.opacity(0.6))
+        TextField(controller.status.suggestedDriveFolder, text: $driveFolder)
+          .textFieldStyle(.roundedBorder)
+          .font(.system(size: 12, design: .monospaced))
+          .frame(width: 180)
+      }
+      Text(
+        DriveFolder.isValid(effectiveDriveFolder)
+          ? L10n.tr(
+            "One folder per Mac. Set once - it cannot be changed after connecting.")
+          : L10n.tr("Use lowercase letters, digits and dashes.")
+      )
+      .font(.system(size: 11))
+      .foregroundStyle(
+        DriveFolder.isValid(effectiveDriveFolder)
+          ? RenaCodeTheme.textMain.opacity(0.6) : RenaCodeTheme.colorWarning)
+    }
+  }
+
   private var parsedImageSize: Int? {
     guard let value = Int(imageSizeGB.trimmingCharacters(in: .whitespaces)), value >= 100
     else { return nil }
@@ -420,7 +457,13 @@ struct DashboardView: View {
               setupActionButton(action)
             }
 
-            if let command = step.command {
+            if step.choosesFolder {
+              folderField
+            }
+
+            if let command = step.choosesFolder
+              ? controller.connectDriveCommand(folder: effectiveDriveFolder) : step.command
+            {
               HStack {
                 Text(command)
                   .font(.system(size: 12, design: .monospaced))
@@ -480,6 +523,16 @@ struct DashboardView: View {
         )
 
         Divider().background(RenaCodeTheme.borderGlass)
+
+        if controller.status.remoteConfigured {
+          row(
+            L10n.tr("Folder on Google Drive"),
+            controller.status.driveFolderPath,
+            ok: true
+          )
+
+          Divider().background(RenaCodeTheme.borderGlass)
+        }
 
         row(
           L10n.tr("Backup disk image (.sparsebundle)"),

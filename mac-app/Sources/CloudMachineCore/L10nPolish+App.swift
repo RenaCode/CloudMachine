@@ -16,6 +16,10 @@ extension L10nPolish {
     "Point Time Machine at CloudMachine: run this in Terminal (needs sudo)":
       "Ustaw CloudMachine jako dysk Time Machine: uruchom to w Terminalu (wymaga sudo)",
     "Size (GB)": "Rozmiar (GB)",
+    "Folder on Google Drive": "Folder na Google Drive",
+    "One folder per Mac. Set once - it cannot be changed after connecting.":
+      "Jeden folder na Maca. Ustawiany raz - po połączeniu nie da się go zmienić.",
+    "Use lowercase letters, digits and dashes.": "Użyj małych liter, cyfr i myślników.",
     "Install rclone": "Zainstaluj rclone",
     "Open System Settings": "Otwórz Ustawienia systemowe",
     "Install agents": "Zainstaluj agentów",
