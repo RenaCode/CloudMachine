@@ -1,36 +1,36 @@
 import Foundation
 
-/// Wciaga FUSE-T do CloudMachine, zeby nie bylo osobnej aplikacji w systemie.
+/// Pulls FUSE-T into CloudMachine, so that there is no separate application in
+/// the system.
 ///
-/// Oficjalny instalator FUSE-T stawia `/Applications/fuse-t.app`, biblioteki
-/// w `/usr/local/lib` i serwer w `/Library/Application Support/fuse-t`. Ta
-/// aplikacja jest hostem rozszerzenia FSKit (`FskitSrvModule.appex`) - backendu,
-/// ktorego u nas i tak nie uzywamy, bo montujemy przez NFS. Zostaje wiec w
-/// systemie ikona i pakiet, ktore nic nie robia.
+/// The official FUSE-T installer puts down `/Applications/fuse-t.app`,
+/// libraries in `/usr/local/lib` and a server in
+/// `/Library/Application Support/fuse-t`. That application hosts the FSKit
+/// extension (`FskitSrvModule.appex`) - a backend we do not use anyway,
+/// because we mount over NFS. So an icon and a package that do nothing are
+/// left in the system.
 ///
-/// Potrzebne sa dokladnie dwa pliki, oba zalezne wylacznie od bibliotek
-/// systemowych:
-///   - `libfuse-t.dylib` - rclone otwiera ja przez dlopen,
-///   - `go-nfsv4`        - serwer NFS, ktory faktycznie trzyma montowanie.
+/// Exactly two files are needed, both depending only on system libraries:
+///   - `libfuse-t.dylib` - rclone opens it via dlopen,
+///   - `go-nfsv4`        - the NFS server that actually holds the mount.
 ///
-/// Serwer wskazujemy zmienna `FUSE_NFSSRV_PATH`, wiec moze lezec gdziekolwiek.
-/// Biblioteka nie: rclone ma zaszyte sciezki bezwzgledne
-/// (`/usr/local/lib/libfuse-t.dylib`, `/usr/local/lib/libfuse.2.dylib`),
-/// a `dlopen` na sciezce bezwzglednej ignoruje `DYLD_*`. Dlatego zostawiamy tam
-/// DOWIAZANIE do naszej kopii - `/usr/local/lib` nalezy do uzytkownika
-/// z grupy admin, wiec nie trzeba do tego roota.
+/// We point at the server via the `FUSE_NFSSRV_PATH` variable, so it can live
+/// anywhere. The library cannot: rclone has absolute paths baked in
+/// (`/usr/local/lib/libfuse-t.dylib`, `/usr/local/lib/libfuse.2.dylib`), and
+/// `dlopen` on an absolute path ignores `DYLD_*`. That is why we leave a
+/// SYMLINK to our copy there - `/usr/local/lib` belongs to a user in the admin
+/// group, so root is not needed for that.
 ///
-/// LICENCJA: FUSE-T nie jest oprogramowaniem otwartym. Binarna dystrybucja jest
-/// darmowa do uzytku niekomercyjnego pod warunkiem zachowania noty
-/// o prawach autorskich - dlatego kopiujemy `LICENSE.rtf` obok binariow.
-/// Bundlowanie z oprogramowaniem komercyjnym wymaga osobnej licencji od
-/// autorow FUSE-T.
+/// LICENSE: FUSE-T is not open-source software. The binary distribution is free
+/// for non-commercial use provided the copyright notice is kept - that is why
+/// we copy `LICENSE.rtf` next to the binaries. Bundling with commercial
+/// software requires a separate license from the FUSE-T authors.
 public enum FuseInstaller {
 
   private static let releasesAPI =
     "https://api.github.com/repos/macos-fuse-t/fuse-t/releases/latest"
 
-  /// Sciezka, pod ktora rclone szuka biblioteki. Nie da sie jej zmienic.
+  /// Path where rclone looks for the library. It cannot be changed.
   static let systemLibLink = "/usr/local/lib/libfuse-t.dylib"
 
   public static var isInstalled: Bool {
@@ -38,12 +38,12 @@ public enum FuseInstaller {
       && FileManager.default.fileExists(atPath: systemLibLink)
   }
 
-  /// Odtwarza dowiazanie w `/usr/local/lib`, jesli zniknelo.
+  /// Recreates the symlink in `/usr/local/lib` if it has disappeared.
   ///
-  /// Potrzebne, bo deinstalator FUSE-T kasuje wszystko pod ta sciezka - razem
-  /// z naszym dowiazaniem. Bez tego usuniecie osobnej aplikacji fuse-t
-  /// zabieraloby ze soba montowanie, mimo ze nasza kopia biblioteki lezy
-  /// nietknieta na swoim miejscu.
+  /// Needed because the FUSE-T uninstaller deletes everything under that path
+  /// - including our symlink. Without this, removing the separate fuse-t
+  /// application would take the mount down with it, even though our copy of
+  /// the library lies untouched in its place.
   @discardableResult
   public static func ensureSystemLink() -> Bool {
     guard FileManager.default.fileExists(atPath: CMTooling.bundledFuseLib.path) else {
@@ -56,7 +56,7 @@ public enum FuseInstaller {
     }
     do {
       try linkSystemLibrary()
-      CMLogger.log("Odtworzono dowiazanie \(systemLibLink) do kopii w CloudMachine")
+      CMLogger.log("Recreated the symlink \(systemLibLink) to the copy in CloudMachine")
       return true
     } catch {
       return false
@@ -70,7 +70,8 @@ public enum FuseInstaller {
     try? FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
 
     guard let (version, pkgURL) = await latestPackage() else {
-      return CMActionResult(succeeded: false, message: "Nie udalo sie ustalic wersji FUSE-T.")
+      return CMActionResult(
+        succeeded: false, message: L10n.tr("Could not determine the FUSE-T version."))
     }
 
     let pkgPath = workDir.appendingPathComponent("fuse-t.pkg")
@@ -79,7 +80,8 @@ public enum FuseInstaller {
         "/usr/bin/curl", ["-fsSL", "-o", pkgPath.path, pkgURL], timeout: 600),
       download.succeeded
     else {
-      return CMActionResult(succeeded: false, message: "Nie udalo sie pobrac pakietu FUSE-T.")
+      return CMActionResult(
+        succeeded: false, message: L10n.tr("Could not download the FUSE-T package."))
     }
 
     let expanded = workDir.appendingPathComponent("expanded")
@@ -88,7 +90,8 @@ public enum FuseInstaller {
         "/usr/sbin/pkgutil", ["--expand-full", pkgPath.path, expanded.path], timeout: 300),
       expand.succeeded
     else {
-      return CMActionResult(succeeded: false, message: "Nie udalo sie rozpakowac pakietu FUSE-T.")
+      return CMActionResult(
+        succeeded: false, message: L10n.tr("Could not unpack the FUSE-T package."))
     }
 
     guard
@@ -97,7 +100,8 @@ public enum FuseInstaller {
       let server = findFile(under: expanded, matching: { $0.hasPrefix("go-nfsv4") })
     else {
       return CMActionResult(
-        succeeded: false, message: "W pakiecie FUSE-T nie ma spodziewanych plikow.")
+        succeeded: false,
+        message: L10n.tr("The FUSE-T package does not contain the expected files."))
     }
 
     let destination = CMTooling.bundledFuseDir
@@ -106,7 +110,7 @@ public enum FuseInstaller {
     do {
       try copy(dylib, to: CMTooling.bundledFuseLib)
       try copy(server, to: CMTooling.bundledNfsServer)
-      // Licencja wymaga zachowania noty o prawach autorskich przy redystrybucji.
+      // The license requires keeping the copyright notice on redistribution.
       if let license = findFile(under: expanded, matching: { $0 == "LICENSE.rtf" }) {
         try? copy(license, to: destination.appendingPathComponent("LICENSE.rtf"))
       }
@@ -114,25 +118,24 @@ public enum FuseInstaller {
     } catch {
       return CMActionResult(
         succeeded: false,
-        message: "Instalacja FUSE-T nie powiodla sie: \(error.localizedDescription)")
+        message: L10n.tr("Installing FUSE-T failed: %@", error.localizedDescription))
     }
 
     return CMActionResult(
       succeeded: true,
-      message: """
-        Zainstalowano FUSE-T \(version) wewnatrz CloudMachine (\(destination.path)).
-        Osobna aplikacja fuse-t nie jest juz potrzebna - mozesz ja usunac:
-          sudo "/Library/Application Support/fuse-t/uninstall.sh"
-        """)
+      message: L10n.tr(
+        "Installed FUSE-T %@ inside CloudMachine (%@).\nThe separate fuse-t application is no longer needed - you can remove it:\n  sudo \"/Library/Application Support/fuse-t/uninstall.sh\"",
+        version, destination.path))
   }
 
-  // MARK: - Szczegoly
+  // MARK: - Details
 
-  /// Podmienia `/usr/local/lib/libfuse-t.dylib` na dowiazanie do naszej kopii.
+  /// Replaces `/usr/local/lib/libfuse-t.dylib` with a symlink to our copy.
   ///
-  /// Nie wymaga roota: `/usr/local/lib` nalezy do uzytkownika i grupy admin.
-  /// Jesli lezy tam prawdziwy plik z oficjalnego instalatora, usuwamy go -
-  /// nasza kopia jest bit w bit taka sama, bo pochodzi z tego samego pakietu.
+  /// Does not need root: `/usr/local/lib` belongs to the user and the admin
+  /// group. If a real file from the official installer lies there, we remove
+  /// it - our copy is bit-for-bit identical, because it comes from the same
+  /// package.
   private static func linkSystemLibrary() throws {
     let fm = FileManager.default
     let linkURL = URL(fileURLWithPath: systemLibLink)
@@ -165,7 +168,7 @@ public enum FuseInstaller {
     return nil
   }
 
-  /// Wersja i adres pakietu z ostatniego wydania na GitHubie.
+  /// Version and URL of the package from the latest release on GitHub.
   static func latestPackage() async -> (version: String, url: String)? {
     guard
       let result = try? await ProcessRunner.run(

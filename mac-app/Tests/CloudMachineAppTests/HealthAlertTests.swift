@@ -2,314 +2,368 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Testy samego ALARMU, a nie czujki.
+/// Tests of the ALARM itself, not of the watchdog.
 ///
-/// Do 23.09.2026 `HealthAlert` nie mial ani jednego testu, mimo ze to on
-/// decyduje, czy ktokolwiek dowie sie o awarii backupu. Obie naprawione tu
-/// usterki sa tego samego rodzaju: alarm uznawal sie za zglosony, choc nikt
-/// go nie zobaczyl.
+/// Until 23.09.2026 `HealthAlert` did not have a single test, even though it is
+/// what decides whether anyone learns about a backup failure. Both defects
+/// fixed here are of the same kind: the alarm considered itself reported,
+/// although nobody saw it.
 ///
-/// Kazdy test PODSTAWIA dziennik (`log:`) - patrz `zglos(_:now:deliver:)`.
-/// Wyjatek jest jeden i celowy: `testPrawdziwyPrzebiegNadalPiszeDoDziennika`,
-/// ktory musi uzyc prawdziwego, zeby udowodnic, ze podstawienie nie uciszylo
-/// produkcji.
+/// Every test SUBSTITUTES the log (`log:`) - see `report(_:now:deliver:)`.
+/// There is exactly one exception, and it is deliberate:
+/// `testRealRunStillWritesToTheLog`, which has to use the real one to prove
+/// that the substitution did not silence production.
 final class HealthAlertTests: XCTestCase {
 
-  private var katalog: URL!
-  private var plikStanu: URL!
-  private var dziennik: PrzechwyconyDziennik!
+  private var directory: URL!
+  private var stateFile: URL!
+  private var log: CapturedLog!
 
   override func setUpWithError() throws {
-    katalog = FileManager.default.temporaryDirectory
+    directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("cm-health-alert-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: katalog, withIntermediateDirectories: true)
-    plikStanu = katalog.appendingPathComponent("health-alert.json")
-    dziennik = PrzechwyconyDziennik()
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    stateFile = directory.appendingPathComponent("health-alert.json")
+    log = CapturedLog()
   }
 
   override func tearDownWithError() throws {
-    try? FileManager.default.removeItem(at: katalog)
+    try? FileManager.default.removeItem(at: directory)
+    L10n.language = .en
   }
 
-  private func raport(_ summaries: [String], lastSuccess: Date? = nil) -> BackupHealth.Report {
+  private func healthReport(_ summaries: [String], lastSuccess: Date? = nil)
+    -> BackupHealth.Report
+  {
     BackupHealth.Report(
-      problems: summaries.map { BackupHealth.Problem(summary: $0, detail: "szczegoly") },
+      problems: summaries.map { BackupHealth.Problem(summary: $0, detail: "details") },
       lastSuccess: lastSuccess, lastAttempt: nil)
   }
 
-  /// `HealthAlert.report` z podstawionym plikiem stanu I podstawionym
-  /// dziennikiem. Wolamy to zamiast `HealthAlert.report` wprost, zeby nie dalo
-  /// sie dopisac testu, ktory przez zapomnienie jednego argumentu znow zacznie
-  /// zasmiecac produkcyjny `cloudmachine.log`.
+  /// `HealthAlert.report` with a substituted state file AND a substituted log.
+  /// We call this instead of `HealthAlert.report` directly, so that no test can
+  /// be added that, by forgetting one argument, starts cluttering the
+  /// production `cloudmachine.log` again.
   @discardableResult
-  private func zglos(
+  private func report(
     _ report: BackupHealth.Report, now: Date = Date(),
     deliver: @escaping @Sendable (String, String) async -> Bool
   ) async -> Bool {
     await HealthAlert.report(
-      report, now: now, stateFile: plikStanu, deliver: deliver, log: dziennik.zapisz)
+      report, now: now, stateFile: stateFile, deliver: deliver, log: log.write)
   }
 
-  // MARK: - Ustalenie 3: testy nie pisza do produkcyjnego dziennika
+  // MARK: - Finding 3: tests do not write to the production log
 
-  /// TA usterka. `report()` logowalo przez `CMLogger.log(...)` na sztywno,
-  /// wiec podstawic dalo sie plik stanu i doreczenie, ale nie dziennik.
-  /// Zmierzone 25.09.2026: `~/Library/Logs/CloudMachine/cloudmachine.log`
-  /// zawieral 117 linii ze slowem "szczegoly", ktore pochodzi wylacznie
-  /// z `raport(_:)` powyzej - wszystkie z jednego dnia, czyli z przebiegow
-  /// `swift test`. Produkcyjny dziennik jest jedynym sladem po awariach
-  /// backupu i przestal pozwalac odroznic zdarzenia prawdziwe od testowych.
-  func testZgloszenieZPodstawionymDziennikiemNieDotykaProdukcyjnego() async {
-    let znacznik = "CM-TEST-\(UUID().uuidString)"
+  /// THAT defect. `report()` logged via a hard-wired `CMLogger.log(...)`, so
+  /// the state file and the delivery could be substituted, but not the log.
+  /// Measured 25.09.2026: `~/Library/Logs/CloudMachine/cloudmachine.log`
+  /// contained 117 lines with the word "szczegoly" (Polish for "details"),
+  /// which came only from this class's report helper - all from one day, i.e.
+  /// from `swift test` runs. The production log is the only trace of backup
+  /// failures and it stopped allowing real events to be told apart from test
+  /// ones.
+  func testReportWithSubstitutedLogDoesNotTouchTheProductionOne() async {
+    let marker = "CM-TEST-\(UUID().uuidString)"
     XCTAssertEqual(
-      liniiWProdukcyjnymDzienniku(z: znacznik), 0,
-      "znacznik jest swiezym UUID - przed testem nie moze go tam byc")
+      linesInProductionLog(containing: marker), 0,
+      "the marker is a fresh UUID - it cannot be there before the test")
 
-    let doreczone = await zglos(
-      raport(["Brak udanej kopii od 5 h \(znacznik)"]), deliver: { _, _ in false })
-    XCTAssertFalse(doreczone)
+    let delivered = await report(
+      healthReport(["No successful backup for 5 h \(marker)"]), deliver: { _, _ in false })
+    XCTAssertFalse(delivered)
 
-    // Tresc MA powstac - tylko nie w produkcyjnym pliku. Gdyby zniknela,
-    // "naprawa" polegalaby na uciszeniu alarmu, a nie na przekierowaniu go.
+    // The content MUST be produced - just not in the production file. If it
+    // disappeared, the "fix" would consist of silencing the alarm, not of
+    // redirecting it.
     XCTAssertTrue(
-      dziennik.linie.contains { $0.contains(znacznik) },
-      "podstawiony dziennik ma dostac tresc zgloszenia: \(dziennik.linie)")
+      log.lines.contains { $0.contains(marker) },
+      "the substituted log must receive the report content: \(log.lines)")
     XCTAssertTrue(
-      dziennik.linie.contains { $0.contains("NIE UDALO SIE pokazac powiadomienia") },
-      "nieudane doreczenie tez musi byc zapisane - tam, gdzie test je widzi")
+      log.lines.contains { $0.contains("FAILED to show the backup failure notification") },
+      "a failed delivery must also be recorded - where the test can see it")
 
     XCTAssertEqual(
-      liniiWProdukcyjnymDzienniku(z: znacznik), 0,
-      "test nie moze dopisac ani jednej linii do \(CMPaths.combinedLogFile.path)")
+      linesInProductionLog(containing: marker), 0,
+      "the test must not append a single line to \(CMPaths.combinedLogFile.path)")
   }
 
-  /// Druga strona tej samej poprawki - i jedyny test w tej klasie, ktory
-  /// SWIADOMIE pisze do produkcyjnego dziennika (jedna linia, oznaczona jako
-  /// kanarka).
+  /// The other side of the same fix - and the only test in this class that
+  /// DELIBERATELY writes to the production log (one line, marked as a canary).
   ///
-  /// Bez tego testu poprawka mogla uciszyc PRAWDZIWE alarmy i nikt by tego nie
-  /// zauwazyl: awaria backupu nie przeszkadza w codziennej pracy, a dziennik
-  /// jest jedynym sladem, po ktorym da sie ja pozniej odtworzyc. Cisza w logu
-  /// wygladalaby dokladnie tak samo jak dzialajacy backup.
-  func testPrawdziwyPrzebiegNadalPiszeDoDziennika() async throws {
-    let znacznik = "KANARKA-TESTU-\(UUID().uuidString)"
-    let kanarka = BackupHealth.Report(
+  /// Without this test the fix could have silenced REAL alarms and nobody
+  /// would have noticed: a backup failure does not get in the way of daily
+  /// work, and the log is the only trace from which it can be reconstructed
+  /// later. Silence in the log would look exactly the same as a working
+  /// backup.
+  func testRealRunStillWritesToTheLog() async throws {
+    let marker = "TEST-CANARY-\(UUID().uuidString)"
+    let canary = BackupHealth.Report(
       problems: [
         BackupHealth.Problem(
-          summary: "to nie byla awaria, to kanarka testu \(znacznik)",
+          summary: "this was not a failure, it is a test canary \(marker)",
           detail:
-            "linie dopisal HealthAlertTests, zeby dowiesc, ze zgloszenie bez podstawionego dziennika nadal trafia do cloudmachine.log"
+            "the line was appended by HealthAlertTests to prove that a report without a substituted log still reaches cloudmachine.log"
         )
       ], lastSuccess: nil, lastAttempt: nil)
 
-    XCTAssertEqual(liniiWProdukcyjnymDzienniku(z: znacznik), 0)
+    XCTAssertEqual(linesInProductionLog(containing: marker), 0)
 
-    // `log:` NIE jest podstawiane - to sedno testu. `deliver:` jest, i tylko
-    // dlatego, ze inaczej na ekranie uzytkownika wyskoczyloby powiadomienie
-    // o awarii, ktorej nie ma; zwracamy `true`, zeby nie doszla do dziennika
-    // druga linia (o nieudanym doreczeniu).
+    // `log:` is NOT substituted - that is the core of the test. `deliver:` is,
+    // and only because otherwise a notification about a failure that does not
+    // exist would pop up on the user's screen; we return `true` so that a
+    // second line (about a failed delivery) does not reach the log.
     await HealthAlert.report(
-      kanarka, stateFile: plikStanu, deliver: { _, _ in true })
+      canary, stateFile: stateFile, deliver: { _, _ in true })
 
     XCTAssertEqual(
-      liniiWProdukcyjnymDzienniku(z: znacznik), 1,
+      linesInProductionLog(containing: marker), 1,
       """
-      Prawdziwe zgloszenie MUSI trafic do \(CMPaths.combinedLogFile.path). \
-      Jesli tu jest 0, to poprawka uciszyla alarm zamiast go przekierowac.
+      A real report MUST reach \(CMPaths.combinedLogFile.path). \
+      If this is 0, the fix silenced the alarm instead of redirecting it.
       """)
   }
 
-  /// Ile linii ogona produkcyjnego dziennika zawiera `znacznik`.
+  /// How many lines of the tail of the production log contain `marker`.
   ///
-  /// Czytamy OGON, a nie caly plik: `CMLogger.rotateIfLarge` przycina go
-  /// dopiero przy 200 MB, wiec wciagniecie calosci do pamieci w tescie to
-  /// zaproszenie do testu, ktory z czasem zaczyna trwac sekundy. Znacznik jest
-  /// swiezym UUID, wiec interesuja nas wylacznie linie dopisane w trakcie tego
-  /// przebiegu - te zawsze sa na koncu.
-  private func liniiWProdukcyjnymDzienniku(z znacznik: String) -> Int {
-    let plik = CMPaths.combinedLogFile
-    guard let handle = try? FileHandle(forReadingFrom: plik) else { return 0 }
+  /// We read the TAIL, not the whole file: `CMLogger.rotateIfLarge` trims it
+  /// only at 200 MB, so pulling the whole thing into memory in a test invites a
+  /// test that over time starts taking seconds. The marker is a fresh UUID, so
+  /// we are interested only in lines appended during this run - those are
+  /// always at the end.
+  private func linesInProductionLog(containing marker: String) -> Int {
+    let file = CMPaths.combinedLogFile
+    guard let handle = try? FileHandle(forReadingFrom: file) else { return 0 }
     defer { try? handle.close() }
-    let rozmiar = (try? handle.seekToEnd()) ?? 0
-    let ogon: UInt64 = 256 * 1024
-    try? handle.seek(toOffset: rozmiar > ogon ? rozmiar - ogon : 0)
-    guard let dane = try? handle.readToEnd(), let tekst = String(data: dane, encoding: .utf8)
+    let size = (try? handle.seekToEnd()) ?? 0
+    let tail: UInt64 = 256 * 1024
+    try? handle.seek(toOffset: size > tail ? size - tail : 0)
+    guard let data = try? handle.readToEnd(), let text = String(data: data, encoding: .utf8)
     else { return 0 }
-    return tekst.split(separator: "\n").filter { $0.contains(znacznik) }.count
+    return text.split(separator: "\n").filter { $0.contains(marker) }.count
   }
 
-  // MARK: - Punkt 6: nieudane powiadomienie nie jest zgloszeniem
+  // MARK: - Item 6: a failed notification is not a report
 
-  /// TA awaria. `osascript` pada (odmowa uprawnien dla procesu launchd, brak
-  /// sesji Aqua, limit czasu), a `report()` i tak zapisywalo `lastSummary`
-  /// i `lastAlertAt` oraz zwracalo `true`. Od tej chwili `shouldAlert`
-  /// blokowalo kolejne proby na 12 godzin - alarm ginal po cichu, czyli
-  /// nadzor ginal razem z nadzorowanym.
-  func testNieudanePowiadomienieNieUciszaAlarmu() async {
-    let problemy = raport(["Brak udanej kopii od 5 h"])
+  /// THAT failure. `osascript` fails (permission refused for the launchd
+  /// process, no Aqua session, time limit), and `report()` still wrote
+  /// `lastSummary` and `lastAlertAt` and returned `true`. From that moment
+  /// `shouldAlert` blocked further attempts for 12 hours - the alarm vanished
+  /// silently, i.e. the supervision died together with the supervised.
+  func testFailedNotificationDoesNotSilenceTheAlarm() async {
+    let problems = healthReport(["No successful backup for 5 h"])
 
-    let pierwsze = await zglos(problemy, deliver: { _, _ in false })
-    XCTAssertFalse(pierwsze, "Zgloszenie, ktorego nikt nie zobaczyl, nie jest zgloszeniem.")
+    let first = await report(problems, deliver: { _, _ in false })
+    XCTAssertFalse(first, "A report nobody saw is not a report.")
 
-    // Piec minut pozniej, ten sam problem: MUSI sprobowac jeszcze raz,
-    // a nie czekac 12 godzin.
-    let sprobowanoPonownie = LicznikProb()
-    let drugie = await zglos(
-      problemy, now: Date().addingTimeInterval(300),
+    // Five minutes later, the same problem: it MUST try again, not wait 12
+    // hours.
+    let retried = AttemptCounter()
+    let second = await report(
+      problems, now: Date().addingTimeInterval(300),
       deliver: { _, _ in
-        sprobowanoPonownie.zwieksz()
+        retried.increment()
         return true
       })
-    XCTAssertEqual(sprobowanoPonownie.ile, 1, "Po nieudanej probie alarm ma wrocic.")
-    XCTAssertTrue(drugie)
+    XCTAssertEqual(retried.count, 1, "After a failed attempt the alarm must come back.")
+    XCTAssertTrue(second)
   }
 
-  /// Nieudane doreczenie ma byc WIDOCZNE - alarmu, ktory nie doszedl, nikt
-  /// nie zauwazy z definicji, wiec musi dac sie go zobaczyc tam, gdzie
-  /// czlowiek zaglada sam (`drive-status`).
-  func testNieudaneDoreczenieDaSieOdczytac() async {
-    let kiedy = Date(timeIntervalSince1970: 1_758_000_000)
-    await zglos(
-      raport(["Obraz backupu nie jest podpiety"]), now: kiedy, deliver: { _, _ in false })
+  /// A failed delivery must be VISIBLE - an alarm that did not arrive will by
+  /// definition not be noticed, so it must be possible to see it where a
+  /// person looks on their own (`drive-status`).
+  func testFailedDeliveryCanBeRead() async {
+    let when = Date(timeIntervalSince1970: 1_758_000_000)
+    await report(
+      healthReport(["The backup image is not attached"]), now: when, deliver: { _, _ in false })
 
-    let awaria = HealthAlert.lastDeliveryFailure(stateFile: plikStanu)
-    XCTAssertNotNil(awaria)
-    XCTAssertEqual(awaria?.at, kiedy)
-    XCTAssertEqual(awaria?.summary, "Obraz backupu nie jest podpiety")
+    let failure = HealthAlert.lastDeliveryFailure(stateFile: stateFile)
+    XCTAssertNotNil(failure)
+    XCTAssertEqual(failure?.at, when)
+    XCTAssertEqual(failure?.summary, "The backup image is not attached")
 
-    // Po udanym doreczeniu slad znika - inaczej wisialby tam na zawsze.
-    await zglos(
-      raport(["Obraz backupu nie jest podpiety"]), now: kiedy.addingTimeInterval(3600),
+    // After a successful delivery the trace disappears - otherwise it would
+    // hang there forever.
+    await report(
+      healthReport(["The backup image is not attached"]), now: when.addingTimeInterval(3600),
       deliver: { _, _ in true })
-    XCTAssertNil(HealthAlert.lastDeliveryFailure(stateFile: plikStanu))
+    XCTAssertNil(HealthAlert.lastDeliveryFailure(stateFile: stateFile))
   }
 
-  // MARK: - Punkt 8: odstep miedzy przypomnieniami
+  // MARK: - Item 8: the gap between reminders
 
-  /// TA usterka. Tekst problemu zawiera wiek awarii ("Brak udanej kopii od
-  /// 3 h"), wiec przy trwajacej awarii zmienial sie CO GODZINE. Warunek
-  /// "inny tekst = nowy problem" byl wtedy spelniony przy kazdym przebiegu
-  /// i powiadomienie wracalo co godzine zamiast raz na dwanascie - a alarm
-  /// bez odstepu zamienia sie w szum i przestaje cokolwiek znaczyc.
-  func testRosnacyWiekAwariiNieJestNowymProblemem() async {
+  /// THAT defect. The problem text contains the age of the failure ("No
+  /// successful backup for 3 h"), so during an ongoing failure it changed
+  /// EVERY HOUR. The condition "different text = new problem" was then met on
+  /// every run and the notification came back every hour instead of once
+  /// every twelve - and an alarm without a gap turns into noise and stops
+  /// meaning anything.
+  func testGrowingFailureAgeIsNotANewProblem() async {
     let start = Date(timeIntervalSince1970: 1_758_000_000)
-    let doreczone = await zglos(
-      raport(["Brak udanej kopii od 3 h"]), now: start, deliver: { _, _ in true })
-    XCTAssertTrue(doreczone)
+    let delivered = await report(
+      healthReport(["No successful backup for 3 h"]), now: start, deliver: { _, _ in true })
+    XCTAssertTrue(delivered)
 
-    // Godzine pozniej ta sama awaria opisuje sie innym tekstem.
-    let licznik = LicznikProb()
-    let znowu = await zglos(
-      raport(["Brak udanej kopii od 4 h"]), now: start.addingTimeInterval(3600),
+    // An hour later the same failure describes itself with a different text.
+    let counter = AttemptCounter()
+    let again = await report(
+      healthReport(["No successful backup for 4 h"]), now: start.addingTimeInterval(3600),
       deliver: { _, _ in
-        licznik.zwieksz()
+        counter.increment()
         return true
       })
-    XCTAssertEqual(licznik.ile, 0, "To ta sama awaria, tylko starsza - nie alarmujemy od nowa.")
-    XCTAssertFalse(znowu)
+    XCTAssertEqual(counter.count, 0, "It is the same failure, just older - we do not alarm anew.")
+    XCTAssertFalse(again)
   }
 
-  /// Po okresie przypomnienia ta sama awaria ma sie odezwac ponownie -
-  /// inaczej alarm zapala sie raz i gasnie na zawsze.
-  func testPoOkresiePrzypomnieniaTaSamaAwariaWraca() {
+  /// After the reminder period the same failure must speak up again -
+  /// otherwise the alarm lights up once and goes out forever.
+  func testAfterTheReminderPeriodTheSameFailureComesBack() {
     let start = Date(timeIntervalSince1970: 1_758_000_000)
-    zapisz(
-      identity: HealthAlert.identity(of: raport(["Brak udanej kopii od 3 h"]).problems),
+    save(
+      identity: HealthAlert.identity(of: healthReport(["No successful backup for 3 h"]).problems),
       at: start)
 
-    let odcisk = HealthAlert.identity(of: raport(["Brak udanej kopii od 15 h"]).problems)
+    let fingerprint = HealthAlert.identity(
+      of: healthReport(["No successful backup for 15 h"]).problems)
     XCTAssertFalse(
       HealthAlert.shouldAlert(
-        identity: odcisk, now: start.addingTimeInterval(11 * 3600), stateFile: plikStanu),
-      "Przed uplywem 12 h milczymy.")
+        identity: fingerprint, now: start.addingTimeInterval(11 * 3600), stateFile: stateFile),
+      "Before 12 h have passed we stay silent.")
     XCTAssertTrue(
       HealthAlert.shouldAlert(
-        identity: odcisk, now: start.addingTimeInterval(13 * 3600), stateFile: plikStanu),
-      "Po 12 h przypominamy - awaria trwa, dopoki ktos jej nie naprawi.")
+        identity: fingerprint, now: start.addingTimeInterval(13 * 3600), stateFile: stateFile),
+      "After 12 h we remind - the failure lasts until someone fixes it.")
   }
 
-  /// NOWY problem dolozony do listy musi zaalarmowac od razu, bez czekania na
-  /// okno przypomnienia. Bez tego testu "naprawa" uciszajaca wszystko na
-  /// 12 godzin przeszlaby niezauwazona.
-  func testNowyProblemAlarmujeOdRazu() {
+  /// A NEW problem added to the list must alarm right away, without waiting
+  /// for the reminder window. Without this test a "fix" silencing everything
+  /// for 12 hours would go unnoticed.
+  func testNewProblemAlarmsRightAway() {
     let start = Date(timeIntervalSince1970: 1_758_000_000)
-    zapisz(
-      identity: HealthAlert.identity(of: raport(["Brak udanej kopii od 3 h"]).problems),
+    save(
+      identity: HealthAlert.identity(of: healthReport(["No successful backup for 3 h"]).problems),
       at: start)
 
-    let dwaProblemy = HealthAlert.identity(
-      of: raport(["Brak udanej kopii od 4 h", "Obraz backupu nie jest podpiety"]).problems)
+    let twoProblems = HealthAlert.identity(
+      of: healthReport(["No successful backup for 4 h", "The backup image is not attached"])
+        .problems)
     XCTAssertTrue(
       HealthAlert.shouldAlert(
-        identity: dwaProblemy, now: start.addingTimeInterval(600), stateFile: plikStanu))
+        identity: twoProblems, now: start.addingTimeInterval(600), stateFile: stateFile))
   }
 
-  /// Sam odcisk: liczby znikaja, tresc zostaje.
-  func testOdciskWycinaLiczbyAleNieTresc() {
+  /// The fingerprint itself: numbers disappear, content stays.
+  func testFingerprintCutsNumbersButNotContent() {
     XCTAssertEqual(
-      HealthAlert.fingerprint("Brak udanej kopii od 3 h"),
-      HealthAlert.fingerprint("Brak udanej kopii od 27 h"))
+      HealthAlert.fingerprint("No successful backup for 3 h"),
+      HealthAlert.fingerprint("No successful backup for 27 h"))
     XCTAssertNotEqual(
-      HealthAlert.fingerprint("Brak udanej kopii od 3 h"),
-      HealthAlert.fingerprint("Obraz backupu nie jest podpiety"))
-    // Dwa RONE problemy roznia sie tylko liczba w nawiasie - to nadal ten
-    // sam rodzaj awarii i nie ma powodu alarmowac od nowa przy kazdym GB.
+      HealthAlert.fingerprint("No successful backup for 3 h"),
+      HealthAlert.fingerprint("The backup image is not attached"))
+    // Two DIFFERENT problems differ only by the number in parentheses - it is
+    // still the same kind of failure and there is no reason to alarm anew at
+    // every GB.
     XCTAssertEqual(
-      HealthAlert.fingerprint("Konczy sie miejsce na Google Drive (28 GB)"),
-      HealthAlert.fingerprint("Konczy sie miejsce na Google Drive (12 GB)"))
+      HealthAlert.fingerprint("Google Drive is running out of space (28 GB)"),
+      HealthAlert.fingerprint("Google Drive is running out of space (12 GB)"))
   }
 
-  /// Wyzdrowienie kasuje stan, zeby nastepna awaria zglosila sie od razu.
-  func testWyzdrowienieKasujeStan() async {
-    await zglos(raport(["Brak udanej kopii od 3 h"]), deliver: { _, _ in true })
-    XCTAssertTrue(FileManager.default.fileExists(atPath: plikStanu.path))
+  /// Recovery deletes the state, so that the next failure is reported right
+  /// away.
+  func testRecoveryDeletesTheState() async {
+    await report(healthReport(["No successful backup for 3 h"]), deliver: { _, _ in true })
+    XCTAssertTrue(FileManager.default.fileExists(atPath: stateFile.path))
 
-    await zglos(raport([]), deliver: { _, _ in true })
-    XCTAssertFalse(FileManager.default.fileExists(atPath: plikStanu.path))
+    await report(healthReport([]), deliver: { _, _ in true })
+    XCTAssertFalse(FileManager.default.fileExists(atPath: stateFile.path))
   }
 
-  // MARK: - Pomocnicze
+  // MARK: - The UI language does not change identity or persisted state
 
-  private func zapisz(identity: String, at date: Date) {
-    let stan = HealthAlert.AlertState(
-      lastSummary: "nieistotne", lastAlertAt: date, lastIdentity: identity, delivered: true,
+  /// The same failure seen by a Polish-language run and by an English-language
+  /// run must have the same identity. Otherwise switching the system language
+  /// - or the GUI and a launchd agent running with different languages -
+  /// would look like a new problem and break the 12-hour quiet window.
+  func testIdentityDoesNotDependOnTheUILanguage() {
+    let now = Date(timeIntervalSince1970: 1_758_000_000)
+    func evaluated() -> BackupHealth.Report {
+      BackupHealth.evaluate(
+        lastSuccess: now.addingTimeInterval(-5 * 3600), lastAttempt: nil, result: 0, now: now,
+        mounted: true, attached: false, destinationRegistered: nil, erroredFiles: 3,
+        outOfSpace: false, queueReadable: true)
+    }
+
+    L10n.language = .pl
+    let polish = evaluated()
+    L10n.language = .en
+    let english = evaluated()
+
+    XCTAssertNotEqual(
+      polish.problems.map(\.summary), english.problems.map(\.summary),
+      "the summaries are translated - otherwise this test checks nothing")
+    XCTAssertEqual(
+      HealthAlert.identity(of: polish.problems), HealthAlert.identity(of: english.problems))
+  }
+
+  /// The delivery-failure reason is written in a language-independent form
+  /// and translated only when shown.
+  func testDeliveryFailureReasonIsPersistedLanguageIndependently() async throws {
+    L10n.language = .pl
+    await report(healthReport(["No successful backup for 5 h"]), deliver: { _, _ in false })
+    L10n.language = .en
+
+    let state = try XCTUnwrap(HealthAlert.loadState(stateFile))
+    XCTAssertEqual(state.deliveryError, HealthAlert.osascriptFailureReason)
+    XCTAssertEqual(
+      HealthAlert.lastDeliveryFailure(stateFile: stateFile)?.reason,
+      "osascript did not show the notification (permissions or no graphical session)")
+  }
+
+  // MARK: - Helpers
+
+  private func save(identity: String, at date: Date) {
+    let state = HealthAlert.AlertState(
+      lastSummary: "irrelevant", lastAlertAt: date, lastIdentity: identity, delivered: true,
       deliveryError: nil)
-    let dane = try! JSONEncoder().encode(stan)
-    try! dane.write(to: plikStanu)
+    let data = try! JSONEncoder().encode(state)
+    try! data.write(to: stateFile)
   }
 
-  /// Dziennik zbierany do pamieci. Klasa, bo domkniecie `log` jest `@Sendable`.
-  private final class PrzechwyconyDziennik: @unchecked Sendable {
+  /// A log collected in memory. A class, because the `log` closure is
+  /// `@Sendable`.
+  private final class CapturedLog: @unchecked Sendable {
     private let lock = NSLock()
-    private var zebrane: [String] = []
+    private var collected: [String] = []
 
-    /// Referencja do metody idzie wprost jako argument `log:`.
-    func zapisz(_ linia: String) {
+    /// The method reference is passed directly as the `log:` argument.
+    func write(_ line: String) {
       lock.lock()
-      zebrane.append(linia)
+      collected.append(line)
       lock.unlock()
     }
 
-    var linie: [String] {
+    var lines: [String] {
       lock.lock()
       defer { lock.unlock() }
-      return zebrane
+      return collected
     }
   }
 
-  /// Licznik prob doreczenia. Klasa, bo domkniecie `deliver` jest `@Sendable`.
-  private final class LicznikProb: @unchecked Sendable {
+  /// Counter of delivery attempts. A class, because the `deliver` closure is
+  /// `@Sendable`.
+  private final class AttemptCounter: @unchecked Sendable {
     private let lock = NSLock()
-    private var licznik = 0
-    func zwieksz() {
+    private var value = 0
+    func increment() {
       lock.lock()
-      licznik += 1
+      value += 1
       lock.unlock()
     }
-    var ile: Int {
+    var count: Int {
       lock.lock()
       defer { lock.unlock() }
-      return licznik
+      return value
     }
   }
 }

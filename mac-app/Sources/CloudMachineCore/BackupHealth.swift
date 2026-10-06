@@ -1,66 +1,71 @@
 import Foundation
 
-/// Odpowiada na jedno pytanie: czy cykl godzinowy NADAL dziala.
+/// Answers one question: is the hourly cycle STILL working.
 ///
-/// Reszta tego projektu mierzy stan chwilowy - czy montowanie stoi, czy obraz
-/// jest podpiety, ile czeka w kolejce. Zaden z tych pomiarow nie wykrywa
-/// najgrozniejszej awarii tego systemu: wszystko wyglada na zamontowane
-/// i podpiete, a Time Machine od dwoch dni nie dokonczyl ani jednego backupu.
-/// Interfejs pokazuje wtedy zielony znaczek i napis "Gotowe".
+/// The rest of this project measures the momentary state - whether the mount
+/// is up, whether the image is attached, how much is waiting in the queue. None
+/// of these measurements detects the most dangerous failure of this system:
+/// everything looks mounted and attached, and Time Machine has not finished a
+/// single backup for two days. The interface then shows a green badge and the
+/// word "Ready".
 ///
-/// Dlatego zrodlem prawdy jest tutaj DATA OSTATNIEJ UDANEJ kopii, a nie stan
-/// urzadzen. Licznik, ktory rosnie tylko przy sukcesie, bierzemy od samego
-/// macOS: `SnapshotDates` w `/Library/Preferences/com.apple.TimeMachine.plist`
-/// dostaje wpis dopiero po ZAKONCZONYM backupie. `AttemptDates` obok niego
-/// liczy proby - w tym te, ktore padly - wiec roznica miedzy nimi jest
-/// dokladnie tym, czego szukamy.
+/// That is why the source of truth here is the DATE OF THE LAST SUCCESSFUL
+/// backup, not the state of the devices. We take a counter that grows only on
+/// success from macOS itself: `SnapshotDates` in
+/// `/Library/Preferences/com.apple.TimeMachine.plist` gets an entry only after
+/// a COMPLETED backup. `AttemptDates` next to it counts attempts - including
+/// the ones that failed - so the difference between them is exactly what we
+/// are looking for.
 ///
-/// Czytamy plik lokalny, a nie `tmutil latestbackup`. To nie jest optymalizacja:
-/// `tmutil latestbackup` montuje migawke na wolumenie lezacym na Google Drive
-/// i przy chorym montowaniu potrafi wisiec w nieprzerywalnym I/O. Czujka, ktora
-/// zawiesza sie dokladnie wtedy, gdy ma zaalarmowac, jest gorsza niz jej brak.
+/// We read the local file, not `tmutil latestbackup`. This is not an
+/// optimization: `tmutil latestbackup` mounts a snapshot on the volume that
+/// lives on Google Drive and, with a sick mount, can hang in uninterruptible
+/// I/O. A watchdog that hangs exactly when it should raise the alarm is worse
+/// than none.
 ///
-/// To zdanie bylo do 23.09.2026 deklaracja, a nie faktem: `currentReport()`
-/// wola `tmutil destinationinfo` (po cel Time Machine), a ten odczyt siega
-/// na montowanie i BEZ LIMITU CZASU wisial w nieprzerywalnym I/O dokladnie
-/// tak, jak `latestbackup`, przed ktorym ten komentarz ostrzega. Od tej daty
-/// kazde wywolanie tmutil ma twardy limit (`TimeMachineStatus.commandTimeout`),
-/// a brak odpowiedzi jest zglaszany jako AWARIA - nie jako "cel przestawiony"
-/// i nie jako cisza.
+/// Until 23.09.2026 that sentence was a declaration, not a fact:
+/// `currentReport()` calls `tmutil destinationinfo` (for the Time Machine
+/// destination), and that read reaches the mount and hung WITHOUT A TIME LIMIT
+/// in uninterruptible I/O exactly like `latestbackup`, which this comment warns
+/// against. Since that date every tmutil call has a hard limit
+/// (`TimeMachineStatus.commandTimeout`), and no answer is reported as a FAILURE
+/// - not as "destination changed" and not as silence.
 public enum BackupHealth {
 
   public static let preferencesPath = "/Library/Preferences/com.apple.TimeMachine.plist"
 
-  /// Po tylu godzinach bez UDANEJ kopii uznajemy cykl za zerwany.
+  /// After this many hours without a SUCCESSFUL backup we consider the cycle
+  /// broken.
   ///
-  /// Cykl jest godzinowy, wiec trzy godziny to trzy pominiete przebiegi z rzedu
-  /// - za duzo na przypadek. Jednoczesnie zostawia zapas na backup, ktory
-  /// trwa dlugo, i na dozorce bufora, ktory celowo wstrzymuje Time Machine
-  /// na czas nadganiania wysylki.
+  /// The cycle is hourly, so three hours are three missed runs in a row - too
+  /// many to be chance. At the same time it leaves headroom for a backup that
+  /// takes long, and for the buffer guard, which deliberately pauses Time
+  /// Machine while the upload catches up.
   public static let maxAgeHours = 3.0
 
-  /// Przez tyle minut od startu systemu "montowanie / obraz / cel jeszcze nie
-  /// stoi" NIE jest awaria.
+  /// For this many minutes after system startup "the mount / image /
+  /// destination is not up yet" is NOT a failure.
   ///
-  /// Agent `backup-health` ma `RunAtLoad`, wiec odpala sie razem z sesja -
-  /// kilka sekund po tym, jak rclone dopiero ruszyl. Po kazdym restarcie
-  /// (21.09, 25.09, 01.10.2026) czujka meldowala wtedy "AWARIA BACKUPU:
-  /// Montowanie Google Drive nie dziala" 4-8 s po zalogowaniu, zanim cokolwiek
-  /// mialo szanse wstac. Alarm, ktory pada przy kazdym starcie, uczy go
-  /// ignorowac - i wtedy przepada ten jeden prawdziwy.
+  /// The `backup-health` agent has `RunAtLoad`, so it starts together with the
+  /// session - a few seconds after rclone has only just started. After every
+  /// restart (21.09, 25.09, 01.10.2026) the watchdog then reported "BACKUP
+  /// FAILURE: Google Drive mount is not working" 4-8 s after login, before
+  /// anything had a chance to come up. An alarm that fires on every startup
+  /// teaches people to ignore it - and then the one real alarm is lost.
   ///
-  /// 20 min, bo tyle zmierzono w najgorszym przypadku: 01.10.2026 po
-  /// restarcie z ~19 GB niewyslanych pasm rclone wczytywal i wysylal zaleglosc
-  /// do 15:42, a obraz podpial sie o 15:49 - 17 min po starcie agentow.
-  /// Odroczone sa WYLACZNIE stany `false` urzadzen. Wiek ostatniej udanej
-  /// kopii, RESULT, bledy wysylki i "nie wiadomo" (zawieszony odczyt) alarmuja
-  /// od pierwszej sekundy, a nastepny przebieg czujki (co 30 min) wypada juz
-  /// po tym oknie i zglosi kazdy stan, ktory sam sie nie naprawil.
+  /// 20 min, because that is what was measured in the worst case: on
+  /// 01.10.2026, after a restart with ~19 GB of unsent bands, rclone was loading
+  /// and uploading the backlog until 15:42, and the image attached at 15:49 -
+  /// 17 min after the agents started. ONLY the devices' `false` states are
+  /// deferred. The age of the last successful backup, RESULT, upload errors and
+  /// "unknown" (a hung read) alarm from the first second, and the next
+  /// watchdog run (every 30 min) already falls after this window and will
+  /// report every state that did not fix itself.
   public static let startupGraceMinutes = 20.0
 
-  /// Ile sekund minelo od startu systemu (`kern.boottime`). `nil` = nie
-  /// udalo sie odczytac - wtedy okresu rozruchu NIE stosujemy, bo "nie wiem"
-  /// nie moze wyciszac alarmu.
+  /// How many seconds have passed since system startup (`kern.boottime`).
+  /// `nil` = could not be read - then the startup grace period is NOT applied,
+  /// because "I do not know" must not silence an alarm.
   public static func systemUptime(now: Date = Date()) -> TimeInterval? {
     var boot = timeval()
     var size = MemoryLayout<timeval>.size
@@ -71,15 +76,24 @@ public enum BackupHealth {
     return now.timeIntervalSince(booted)
   }
 
-  /// Pojedyncza rzecz, ktora poszla nie tak. Tekst jest gotowy do pokazania
-  /// uzytkownikowi - to jedyna forma, w jakiej ktokolwiek to zobaczy.
+  /// A single thing that went wrong. The text is ready to be shown to the
+  /// user - it is the only form in which anyone will see it.
   public struct Problem: Equatable {
     public var summary: String
     public var detail: String
+    /// Stable, language-independent name of the problem.
+    ///
+    /// `summary` follows the UI language, so it cannot identify the problem:
+    /// `HealthAlert` recognizes "the same failure" by this field, and the alert
+    /// state written by a Polish-language run must still match an
+    /// English-language run. Defaults to `summary` for problems built outside
+    /// `BackupHealth` (tests), which keeps the old behaviour for them.
+    public var code: String
 
-    public init(summary: String, detail: String) {
+    public init(summary: String, detail: String, code: String? = nil) {
       self.summary = summary
       self.detail = detail
+      self.code = code ?? summary
     }
   }
 
@@ -87,17 +101,19 @@ public enum BackupHealth {
     public var problems: [Problem]
     public var lastSuccess: Date?
     public var lastAttempt: Date?
-    /// Czy licznik udanych kopii w ogole dalo sie ODCZYTAC.
+    /// Whether the counter of successful backups could be READ at all.
     ///
-    /// Bez tego pola `lastSuccess == nil` znaczylo dwie zupelnie rozne rzeczy:
-    /// "Time Machine nie zrobil ani jednej kopii" i "nie mamy dostepu do
-    /// pliku, wiec nic nie wiemy". Kto czyta ten raport (np. panel GUI), musi
-    /// je rozroznic, zeby nie pokazac braku wiedzy jako faktu.
+    /// Without this field `lastSuccess == nil` meant two completely different
+    /// things: "Time Machine has not made a single backup" and "we have no
+    /// access to the file, so we know nothing". Whoever reads this report
+    /// (e.g. the GUI panel) has to tell them apart, so as not to present a
+    /// lack of knowledge as a fact.
     public var preferencesReadable: Bool
-    /// Stany "jeszcze niegotowe" odlozone na okres rozruchu - patrz
-    /// `startupGraceMinutes`. NIE sa awaria i NIE ida do powiadomienia, ale
-    /// nie znikaja: `backup-health` wypisuje je osobno, zeby czlowiek pytajacy
-    /// tuz po starcie widzial, na co jeszcze czekamy.
+    /// "Not ready yet" states deferred for the startup grace period - see
+    /// `startupGraceMinutes`. They are NOT a failure and do NOT go to a
+    /// notification, but they do not disappear: `backup-health` prints them
+    /// separately, so that a person asking right after startup sees what we
+    /// are still waiting for.
     public var deferred: [Problem]
     public var healthy: Bool { problems.isEmpty }
 
@@ -113,22 +129,23 @@ public enum BackupHealth {
     }
   }
 
-  // MARK: - Odczyt licznika udanych kopii
+  // MARK: - Reading the counter of successful backups
 
-  /// Daty z preferencji Time Machine dla celu pod wskazanym punktem
-  /// montowania. Czysta funkcja - bierze juz odczytany slownik, zeby dalo sie
-  /// ja sprawdzic testem bez pliku systemowego i bez Time Machine.
+  /// Dates from the Time Machine preferences for the destination at the given
+  /// mount point. Pure function - takes an already read dictionary, so it can
+  /// be tested without the system file and without Time Machine.
   ///
-  /// `result` to pole `RESULT` z tego samego bloku: 0 znaczy, ze ostatni
-  /// przebieg skonczyl sie dobrze, cokolwiek innego - ze nie.
+  /// `result` is the `RESULT` field from the same block: 0 means the last run
+  /// ended well, anything else - that it did not.
   public static func dates(
     inPreferences plist: [String: Any], volumeNamed volumeName: String
   ) -> (lastSuccess: Date?, lastAttempt: Date?, result: Int?) {
     guard let destinations = plist["Destinations"] as? [[String: Any]] else {
       return (nil, nil, nil)
     }
-    // Cel wybieramy po nazwie wolumenu, nie po indeksie 0 - Mac moze miec
-    // zarejestrowanych kilka celow Time Machine, a nas obchodzi wylacznie ten.
+    // We pick the destination by volume name, not by index 0 - a Mac can have
+    // several Time Machine destinations registered, and we care only about
+    // this one.
     let destination =
       destinations.first { ($0["LastKnownVolumeName"] as? String) == volumeName }
       ?? (destinations.count == 1 ? destinations[0] : nil)
@@ -141,9 +158,9 @@ public enum BackupHealth {
     return (snapshots.max(), attempts.max(), result)
   }
 
-  /// Ocena stanu. Czysta funkcja - kazde wejscie podaje sie wprost, wiec
-  /// wstrzykniecie ZNANEJ ZLEJ probki (stara data, niezerowy RESULT, martwe
-  /// montowanie) jest jednym wywolaniem w tescie, a nie psuciem produkcji.
+  /// Assessment of the state. Pure function - every input is passed in
+  /// directly, so injecting a KNOWN BAD sample (an old date, a non-zero
+  /// RESULT, a dead mount) is one call in a test, not breaking production.
   public static func evaluate(
     lastSuccess: Date?,
     lastAttempt: Date?,
@@ -158,255 +175,287 @@ public enum BackupHealth {
     driveFreeBytes: UInt64? = nil,
     localFreeGB: Int? = nil,
     imageDeadErrno: Int32? = nil,
-    // Obraz JEST w tablicy montowan, ale sonda czytelnosci nie wrocila.
-    // Chodzi w parze z `attached: nil` i sluzy WYLACZNIE do tego, by
-    // powiedziec czlowiekowi, czego dokladnie nie wiemy - decyzja jest ta sama.
+    // The image IS in the mount table, but the readability probe did not
+    // return. Goes together with `attached: nil` and serves ONLY to tell the
+    // person exactly what we do not know - the decision is the same.
     imageProbeTimedOut: Bool = false,
     maxAgeHours: Double = BackupHealth.maxAgeHours,
-    // Czy trwa okres rozruchu po starcie systemu - patrz `startupGraceMinutes`.
+    // Whether the startup grace period is in progress - see `startupGraceMinutes`.
     withinStartupGrace: Bool = false,
-    // Czy Time Machine WLASNIE wykonuje przebieg (`tmutil status`).
+    // Whether Time Machine is RIGHT NOW performing a run (`tmutil status`).
     backupRunning: Bool? = nil
   ) -> Report {
     var problems: [Problem] = []
     var deferred: [Problem] = []
-    // Stan urzadzenia, ktory tuz po starcie jest NORMALNY, bo jeszcze nic nie
-    // zdazylo wstac. Po okresie rozruchu to zwykla awaria.
+    // A device state that is NORMAL right after startup, because nothing has
+    // had time to come up yet. After the grace period it is an ordinary
+    // failure.
     func notReadyYet(_ problem: Problem) {
       if withinStartupGrace { deferred.append(problem) } else { problems.append(problem) }
     }
 
-    // Kolejnosc od przyczyny do skutku: jesli montowanie lezy, wiek kopii
-    // i tak bedzie rosl, ale to montowanie trzeba naprawic.
+    // Order from cause to effect: if the mount is down, the backup age will
+    // grow anyway, but it is the mount that has to be fixed.
     //
-    // `mounted` i `attached` sa TROJSTANOWE z tego samego powodu, co
-    // `destinationRegistered` nizej: odczyt tablicy montowan moze sie nie
-    // udac, a wtedy nie wiemy ani ze jest, ani ze nie ma. Zlanie tego
-    // w `Bool` konczylo sie dwojako i oba sposoby byly zle - `?? false`
-    // dawalo alarm o odmontowanym Dysku, ktory moze byc zamontowany,
-    // a `!= .detached` dawalo CISZE o obrazie, o ktorym nie wiemy nic.
+    // `mounted` and `attached` are THREE-STATE for the same reason as
+    // `destinationRegistered` below: reading the mount table can fail, and
+    // then we know neither that it is there nor that it is not. Collapsing
+    // that into a `Bool` ended in one of two ways and both were wrong -
+    // `?? false` produced an alarm about an unmounted Drive that may be
+    // mounted, and `!= .detached` produced SILENCE about an image we know
+    // nothing about.
     switch mounted {
     case .some(true):
       break
     case .some(false):
       notReadyYet(
         Problem(
-          summary: "Montowanie Google Drive nie dziala",
-          detail: "Bez niego obraz backupu jest nieosiagalny i Time Machine nie ma gdzie pisac."))
+          summary: L10n.tr("Google Drive mount is not working"),
+          detail: L10n.tr(
+            "Without it the backup image is unreachable and Time Machine has nowhere to write."),
+          code: "drive-not-mounted"))
     case .none:
       problems.append(
         Problem(
-          summary: "Nie wiadomo, czy montowanie Google Drive dziala",
-          detail:
-            "Nie udalo sie odczytac tablicy montowan. To nie znaczy, ze Dysk jest odmontowany - znaczy, ze nikt tego nie sprawdzil. Bez tej odpowiedzi nie da sie stwierdzic, czy kopie maja gdzie powstawac."
-        ))
+          summary: L10n.tr("Unknown whether the Google Drive mount is working"),
+          detail: L10n.tr(
+            "Could not read the mount table. That does not mean the Drive is unmounted - it means nobody has checked. Without this answer there is no way to tell whether backups have anywhere to go."
+          ),
+          code: "drive-mount-unknown"))
     }
 
     switch attached {
     case .some(true):
       if let errno = imageDeadErrno {
-        // Podpiety, ale martwy - stan, ktory do 22 wrz 2026 nie istnial dla
-        // zadnego czujnika i przez to trwal 15 godzin. Patrz `ImageProbe`.
+        // Attached but dead - a state that until 22 Sep 2026 did not exist for
+        // any sensor and therefore lasted 15 hours. See `ImageProbe`.
         problems.append(
           Problem(
-            summary: "Obraz backupu jest podpiety, ale MARTWY (errno \(errno))",
-            detail:
-              "Urzadzenie obrazu przestalo oddawac dane - Time Machine widzi to jako odlaczony dysk. "
-              + "Naprawa: cloudmachine-agent attach-image (odpina na sile i podpina na nowo)."))
+            summary: L10n.tr("The backup image is attached, but DEAD (errno %@)", "\(errno)"),
+            detail: L10n.tr(
+              "The image device stopped returning data - Time Machine sees it as a disconnected disk. Fix: cloudmachine-agent attach-image (force-detaches and attaches again)."
+            ),
+            code: "image-dead"))
       }
     case .some(false):
       notReadyYet(
         Problem(
-          summary: "Obraz backupu nie jest podpiety",
-          detail: "Time Machine nie widzi celu \(BackupImageService.targetPath.path)."))
+          summary: L10n.tr("The backup image is not attached"),
+          detail: L10n.tr(
+            "Time Machine cannot see the destination %@.", BackupImageService.targetPath.path),
+          code: "image-detached"))
     case .none:
-      // TA cisza. Do 23.09.2026 wolajacy przekazywal tu `attachment !=
-      // .detached`, wiec nowy przypadek `.unknown` ("tablicy montowan nie
-      // udalo sie odczytac") wpadal na `true` - czyli "podpiety". Czujka,
-      // ktorej JEDYNYM zadaniem jest nie twierdzic rzeczy, ktorych nie wie,
-      // milczala o stanie, ktorego nie znala. Komunikat musi byc INNY niz
-      // przy realnym odpieciu: "nie jest podpiety" wysyla czlowieka do
-      // podpinania obrazu, ktory moze byc podpiety poprawnie.
-      // Dwie przyczyny "nie wiem" i DWA rozne komunikaty, bo wysylaja czlowieka
-      // w dwa rozne miejsca. Trzeci moment, w ktorym to samo rozroznienie
-      // ratuje ten raport - patrz `mounted` wyzej i `destinationRegistered`
-      // nizej.
+      // THAT silence. Until 23.09.2026 the caller passed `attachment !=
+      // .detached` here, so the new `.unknown` case ("the mount table could
+      // not be read") fell into `true` - i.e. "attached". The watchdog, whose
+      // ONLY job is not to claim things it does not know, stayed silent about
+      // a state it did not know. The message must be DIFFERENT from a real
+      // detachment: "is not attached" sends the person off to attach an image
+      // that may be attached correctly.
+      // Two causes of "I do not know" and TWO different messages, because they
+      // send the person to two different places. The third point at which the
+      // same distinction saves this report - see `mounted` above and
+      // `destinationRegistered` below.
       if imageProbeTimedOut {
         problems.append(
           Problem(
-            summary: "Nie wiadomo, czy obraz backupu oddaje dane",
-            detail:
-              "Obraz \(BackupImageService.targetPath.path) figuruje w tablicy montowan, ale sonda czytelnosci nie odpowiedziala w \(Int(ImageProbe.probeTimeout)) s - tak zachowuje sie odczyt zablokowany na martwym montowaniu FUSE-T. To NIE jest dowod, ze obraz jest martwy, wiec NIE odpinaj go na sile: `attach-image` swiadomie nic wtedy nie robi, bo odpiecie zywego urzadzenia porzuca dane czekajace na wysylke. Sprawdz najpierw, czy rclone odpowiada (cloudmachine-agent drive-status) i czy agent gdrive-buffer zyje."
-          ))
+            summary: L10n.tr("Unknown whether the backup image returns data"),
+            detail: L10n.tr(
+              "The image %@ is listed in the mount table, but the readability probe did not answer within %@ s - that is how a read blocked on a dead FUSE-T mount behaves. This is NOT proof that the image is dead, so do NOT force-detach it: `attach-image` deliberately does nothing in that case, because detaching a live device abandons data waiting to be uploaded. First check whether rclone responds (cloudmachine-agent drive-status) and whether the gdrive-buffer agent is alive.",
+              BackupImageService.targetPath.path, "\(Int(ImageProbe.probeTimeout))"),
+            code: "image-probe-timed-out"))
       } else {
         problems.append(
           Problem(
-            summary: "Nie wiadomo, czy obraz backupu jest podpiety",
-            detail:
-              "Nie udalo sie odczytac tablicy montowan, wiec stan obrazu \(BackupImageService.targetPath.path) jest NIEZNANY. Nie podpinaj go na oslepe - najpierw sprawdz, czy `mount` w ogole odpowiada (przy martwym montowaniu FUSE-T potrafi wisiec)."
-          ))
+            summary: L10n.tr("Unknown whether the backup image is attached"),
+            detail: L10n.tr(
+              "Could not read the mount table, so the state of the image %@ is UNKNOWN. Do not attach it blindly - first check whether `mount` responds at all (with a dead FUSE-T mount it can hang).",
+              BackupImageService.targetPath.path),
+            code: "image-attachment-unknown"))
       }
     }
-    // `nil` to NIE to samo co `false`. Od 23.09.2026 `tmutil` ma limit czasu
-    // (patrz `TimeMachineStatus.commandTimeout`), wiec przy martwym montowaniu
-    // czujka wraca z brakiem odpowiedzi zamiast wisiec. Brak odpowiedzi jest
-    // AWARIA - ale inna niz przestawiony cel, i musi brzmiec inaczej, zeby nie
-    // wyslac czlowieka do przestawiania czegos, co jest ustawione dobrze.
+    // `nil` is NOT the same as `false`. Since 23.09.2026 `tmutil` has a time
+    // limit (see `TimeMachineStatus.commandTimeout`), so with a dead mount the
+    // watchdog comes back with no answer instead of hanging. No answer is a
+    // FAILURE - but a different one from a changed destination, and it has to
+    // sound different, so as not to send the person off to change something
+    // that is set correctly.
     switch destinationRegistered {
     case .some(true):
       break
     case .some(false):
       notReadyYet(
         Problem(
-          summary: "Time Machine nie wskazuje na CloudMachine",
-          detail: "Cel backupu zostal przestawiony albo wyrejestrowany - kopie nie powstaja."))
+          summary: L10n.tr("Time Machine does not point to CloudMachine"),
+          detail: L10n.tr(
+            "The backup destination was changed or unregistered - backups are not being made."),
+          code: "destination-not-registered"))
     case .none:
       problems.append(
         Problem(
-          summary: "tmutil nie odpowiada - nie wiadomo, gdzie idzie backup",
-          detail:
-            "Odczyt celu Time Machine nie wrocil w \(Int(TimeMachineStatus.commandTimeout)) s. Tak zachowuje sie tmutil zablokowany na martwym montowaniu Google Drive. Naprawa: cloudmachine-agent attach-image, a gdy to nie pomoze - restart agenta gdrive-buffer."
-        ))
+          summary: L10n.tr("tmutil is not responding - unknown where the backup goes"),
+          detail: L10n.tr(
+            "Reading the Time Machine destination did not return within %@ s. That is how tmutil behaves when blocked on a dead Google Drive mount. Fix: cloudmachine-agent attach-image, and if that does not help - restart the gdrive-buffer agent.",
+            "\(Int(TimeMachineStatus.commandTimeout))"),
+          code: "tmutil-no-answer"))
     }
 
-    // TO jest licznik, ktory rosnie wylacznie przy sukcesie.
+    // THIS is the counter that grows only on success.
     if let lastSuccess {
       let age = now.timeIntervalSince(lastSuccess)
       if age > maxAgeHours * 3600 {
         problems.append(
           Problem(
-            summary: "Brak udanej kopii od \(formatAge(age))",
-            detail:
-              "Ostatnia ZAKONCZONA kopia: \(stamp(lastSuccess)). Cykl jest godzinowy, wiec to \(max(1, Int(age / 3600))) pominietych przebiegow."
-          ))
+            summary: L10n.tr("No successful backup for %@", formatAge(age)),
+            detail: L10n.tr(
+              "Last COMPLETED backup: %@. The cycle is hourly, so that is %@ missed runs.",
+              stamp(lastSuccess), "\(max(1, Int(age / 3600)))"),
+            code: "no-recent-backup"))
       }
     } else {
       problems.append(
         Problem(
-          summary: "Nie ma ANI JEDNEJ udanej kopii",
-          detail:
-            "Preferencje Time Machine nie zawieraja zadnej daty zakonczonego backupu dla tego celu."
-        ))
+          summary: L10n.tr("There is NOT A SINGLE successful backup"),
+          detail: L10n.tr(
+            "The Time Machine preferences contain no date of a completed backup for this destination."
+          ),
+          code: "no-backup-ever"))
     }
 
-    // Proba bez sukcesu po niej to backup, ktory ruszyl i padl. Sam wiek
-    // ostatniego sukcesu tego nie pokaze, dopoki nie przekroczy progu.
+    // An attempt with no success after it is a backup that started and failed.
+    // The age of the last success alone will not show that until it crosses
+    // the threshold.
     //
-    // Wyjatek: przebieg, ktory WCIAZ TRWA. Po restarcie Time Machine potrafi
-    // przejsc caly dysk (01.10.2026: 882 GB, 3,6 mln plikow, ~4 h), a czujka
-    // meldowala wtedy po godzinie "proba nie skonczyla sie kopia" o probie,
-    // ktora po prostu jeszcze sie nie skonczyla. Przebieg zawieszony na
-    // zawsze i tak zlapie prog wieku ostatniej udanej kopii wyzej.
+    // Exception: a run that is STILL IN PROGRESS. After a restart Time Machine
+    // can walk the whole disk (01.10.2026: 882 GB, 3.6 million files, ~4 h),
+    // and after an hour the watchdog then reported "the attempt did not end
+    // in a backup" about an attempt that simply had not finished yet. A run
+    // stuck forever will be caught by the last-successful-backup age
+    // threshold above anyway.
     if let lastAttempt, let lastSuccess, lastAttempt > lastSuccess,
       now.timeIntervalSince(lastAttempt) > 3600, backupRunning != true
     {
       problems.append(
         Problem(
-          summary: "Ostatnia proba backupu nie skonczyla sie kopia",
-          detail:
-            "Proba \(stamp(lastAttempt)) jest nowsza niz ostatnia udana kopia \(stamp(lastSuccess))."
-        ))
+          summary: L10n.tr("The last backup attempt did not end in a backup"),
+          detail: L10n.tr(
+            "The attempt at %@ is newer than the last successful backup at %@.",
+            stamp(lastAttempt), stamp(lastSuccess)),
+          code: "last-attempt-failed"))
     }
 
     if let result, result != 0 {
       problems.append(
         Problem(
-          summary: "Time Machine zglasza blad ostatniego przebiegu (RESULT=\(result))",
-          detail: "Niezerowy RESULT w preferencjach Time Machine znaczy, ze przebieg sie nie udal.")
-      )
+          summary: L10n.tr(
+            "Time Machine reports an error in the last run (RESULT=%@)", "\(result)"),
+          detail: L10n.tr(
+            "A non-zero RESULT in the Time Machine preferences means the run did not succeed."),
+          code: "time-machine-result"))
     }
 
     if erroredFiles > 0 {
       problems.append(
         Problem(
-          summary: "rclone nie wyslal \(erroredFiles) plikow",
-          detail:
-            "Te pasma obrazu istnieja tylko lokalnie. Kopia na Google Drive jest NIEPELNA i moze sie nie otworzyc."
-        ))
+          summary: L10n.tr("rclone failed to upload %@ files", "\(erroredFiles)"),
+          detail: L10n.tr(
+            "These image bands exist only locally. The backup on Google Drive is INCOMPLETE and may not open."
+          ),
+          code: "upload-errors"))
     }
     if outOfSpace {
       problems.append(
         Problem(
-          summary: "Bufor pelny samymi niewyslanymi danymi",
-          detail: "rclone nie ma juz czego usunac z bufora - wysylka nie nadaza albo stoi."))
+          summary: L10n.tr("Buffer full of nothing but unsent data"),
+          detail: L10n.tr(
+            "rclone has nothing left to evict from the buffer - the upload cannot keep up or has stalled."
+          ),
+          code: "buffer-out-of-space"))
     }
-    // `mounted == true`, nie `mounted != false`: gdy montowania nie ma ALBO
-    // nie wiadomo, czy jest, mowia o tym juz twardsze komunikaty wyzej, a
-    // drugi komunikat o tym samym tylko rozmywa ten pierwszy.
+    // `mounted == true`, not `mounted != false`: when there is no mount OR it
+    // is unknown whether there is one, harder messages above already say so,
+    // and a second message about the same thing only dilutes the first.
     if !queueReadable && mounted == true {
       problems.append(
         Problem(
-          summary: "Interfejs sterujacy rclone nie odpowiada",
-          detail:
-            "Bez niego nie da sie sprawdzic, czy cokolwiek dolecialo na Dysk - dozorca bufora jest wtedy slepy."
-        ))
+          summary: L10n.tr("The rclone control interface is not responding"),
+          detail: L10n.tr(
+            "Without it there is no way to check whether anything reached the Drive - the buffer guard is blind then."
+          ),
+          code: "rclone-rc-no-answer"))
     }
 
-    // Miejsce na Dysku. Wyczerpanie go jest dla rclone bledem FATALNYM, wiec
-    // montowanie znika i Time Machine traci cel - o tym trzeba wiedziec
-    // WCZESNIEJ, a nie z awarii. Prog liczony w cyklach, nie w procentach:
-    // przy przyroscie ~600 MB na godzine 30 GB to okolo dwoch tygodni zapasu.
+    // Space on the Drive. Running out of it is a FATAL error for rclone, so
+    // the mount disappears and Time Machine loses its destination - this has
+    // to be known EARLIER, not from a failure. The threshold is counted in
+    // cycles, not in percent: at a growth of ~600 MB per hour, 30 GB is about
+    // two weeks of headroom.
     if let driveFreeBytes {
       let freeGB = Int(driveFreeBytes / 1_073_741_824)
       if freeGB < driveFreeWarningGB {
         problems.append(
           Problem(
-            summary: "Konczy sie miejsce na Google Drive (\(freeGB) GB)",
-            detail:
-              "Po wyczerpaniu rclone konczy prace z bledem storageQuotaExceeded, montowanie znika i backupy przestaja powstawac. Przy przyroscie ~600 MB na cykl godzinowy to okolo \(max(1, freeGB * 1024 / 600 / 24)) dni."
-          ))
+            summary: L10n.tr("Google Drive is running out of space (%@ GB)", "\(freeGB)"),
+            detail: L10n.tr(
+              "Once it runs out, rclone exits with a storageQuotaExceeded error, the mount disappears and backups stop being made. At a growth of ~600 MB per hourly cycle that is about %@ days.",
+              "\(max(1, freeGB * 1024 / 600 / 24))"),
+            code: "drive-low-space"))
       }
     }
 
     if let localFreeGB, localFreeGB < localFreeWarningGB {
       problems.append(
         Problem(
-          summary: "Konczy sie miejsce na dysku Maca (\(localFreeGB) GB)",
-          detail:
-            "Bufor wysylki lezy na tym dysku. Gdy sie zapelni, dozorca wstrzyma Time Machine, a przy calkowitym braku miejsca rclone nie ma gdzie odlozyc danych czekajacych na wyslanie."
-        ))
+          summary: L10n.tr("The Mac's disk is running out of space (%@ GB)", "\(localFreeGB)"),
+          detail: L10n.tr(
+            "The upload buffer lives on this disk. When it fills up, the guard pauses Time Machine, and with no space left at all rclone has nowhere to put data waiting to be uploaded."
+          ),
+          code: "local-low-space"))
     }
 
     return Report(
       problems: problems, lastSuccess: lastSuccess, lastAttempt: lastAttempt, deferred: deferred)
   }
 
-  /// Ponizej tylu GB wolnych na Google Drive zglaszamy problem.
+  /// Below this many GB free on Google Drive we report a problem.
   public static let driveFreeWarningGB = 30
-  /// Ponizej tylu GB wolnych lokalnie zglaszamy problem. Wyzej niz prog pauzy
-  /// dozorcy bufora - czujka ma ostrzegac, zanim dozorca zacznie hamowac.
+  /// Below this many GB free locally we report a problem. Higher than the
+  /// buffer guard's pause threshold - the watchdog should warn before the
+  /// guard starts braking.
   public static let localFreeWarningGB = 120
 
-  // MARK: - Odczyt na zywo
+  // MARK: - Live reading
 
-  /// Czy plik, z ktorego czytamy historie kopii, DA SIE PRZECZYTAC.
+  /// Whether the file we read the backup history from CAN BE READ.
   ///
-  /// To jest jednoczesnie jedyna uczciwa odpowiedz na pytanie "czy mamy Pelny
-  /// dostep do dysku": TCC nie ma interfejsu do zapytania o uprawnienie, wiec
-  /// sprawdza sie je PROBUJAC.
+  /// This is at the same time the only honest answer to the question "do we
+  /// have Full Disk Access": TCC has no interface for asking about the
+  /// permission, so it is checked by TRYING.
   ///
-  /// Interfejs robil to do 25.09.2026 przez
-  /// `FileManager.isReadableFile(atPath:)` na
-  /// `~/Library/Application Support/com.apple.TCC`. Dwa bledy w jednej linii:
-  /// to KATALOG, a nie plik z historia kopii, a `isReadableFile` sprowadza sie
-  /// do `access(R_OK)`, ktory patrzy tylko na prawa POSIX i o TCC nie wie nic.
-  /// Odpowiedz wychodzila wiec twierdzaca niezaleznie od stanu uprawnien -
-  /// a panel mowil "dostep jest" w chwili, w ktorej czujka nie mogla odczytac
-  /// ani jednej daty kopii. Czlowiek szukal potem awarii wszedzie poza
-  /// miejscem, w ktorym siedziala.
+  /// Until 25.09.2026 the interface did this via
+  /// `FileManager.isReadableFile(atPath:)` on
+  /// `~/Library/Application Support/com.apple.TCC`. Two bugs in one line: that
+  /// is a DIRECTORY, not the file with the backup history, and
+  /// `isReadableFile` boils down to `access(R_OK)`, which looks only at POSIX
+  /// permissions and knows nothing about TCC. So the answer came out
+  /// affirmative regardless of the permission state - and the panel said
+  /// "access granted" at a moment when the watchdog could not read a single
+  /// backup date. The person then looked for the failure everywhere except
+  /// where it was.
   ///
-  /// `preferencesFile` podmienialny z tego samego powodu, co w `currentReport`.
+  /// `preferencesFile` is replaceable for the same reason as in `currentReport`.
   public static func preferencesReadable(
     preferencesFile: String = BackupHealth.preferencesPath
   ) -> Bool {
     (try? Data(contentsOf: URL(fileURLWithPath: preferencesFile))) != nil
   }
 
-  /// `preferencesFile` da sie podmienic, zeby dalo sie PRZEJSC CALA sciezke
-  /// czujki na znanej zlej probce - odczyt pliku, parsowanie, wybor celu,
-  /// ocena, zgloszenie, kod wyjscia - bez psucia dzialajacego backupu. Test
-  /// jednostkowy na `evaluate` nie pokrywa tego, co dzieje sie miedzy plikiem
-  /// a decyzja, a wlasnie tam siedzialy w tym projekcie ciche awarie.
+  /// `preferencesFile` can be replaced so that the WHOLE watchdog path can be
+  /// run on a known bad sample - reading the file, parsing, choosing the
+  /// destination, assessment, reporting, exit code - without breaking the
+  /// working backup. A unit test of `evaluate` does not cover what happens
+  /// between the file and the decision, and that is exactly where the silent
+  /// failures in this project were.
   public static func currentReport(
     now: Date = Date(), maxAgeHours: Double = BackupHealth.maxAgeHours,
     preferencesFile: String = BackupHealth.preferencesPath
@@ -422,10 +471,11 @@ public enum BackupHealth {
       return Report(
         problems: [
           Problem(
-            summary: "Nie da sie odczytac preferencji Time Machine",
-            detail:
-              "\(preferencesFile) jest nieczytelny - najczesciej brak Pelnego dostepu do dysku. Bez tego pliku NIE WIADOMO, kiedy ostatnio powstala kopia, wiec traktujemy to jak awarie, a nie jak brak problemu."
-          )
+            summary: L10n.tr("Cannot read the Time Machine preferences"),
+            detail: L10n.tr(
+              "%@ is unreadable - most often Full Disk Access is missing. Without this file it is UNKNOWN when the last backup was made, so we treat it as a failure, not as the absence of a problem.",
+              preferencesFile),
+            code: "preferences-unreadable")
         ], lastSuccess: nil, lastAttempt: nil, preferencesReadable: false)
     }
 
@@ -433,34 +483,35 @@ public enum BackupHealth {
       inPreferences: plist, volumeNamed: BackupImageService.volumeName)
 
     let stats = await DriveBufferService.queueStats()
-    // `attachmentReading()`, nie `attachment()`: sonda czytelnosci ma limit
-    // czasu i po jego przekroczeniu oddaje `.unknown`. Czujka DOKANCZA wtedy
-    // przebieg i zglasza brak wiedzy - to jest cala roznica wzgledem stanu do
-    // 26.09.2026, w ktorym ten odczyt nie mial limitu, a `StartInterval 1800`
-    // bez `KeepAlive` znaczy, ze launchd NIE uruchomi drugiej instancji,
-    // dopoki zyje pierwsza. Jedno zawieszenie uciszalo wiec czujke NA STALE,
-    // a cisza w tym systemie wyglada identycznie jak zdrowie.
+    // `attachmentReading()`, not `attachment()`: the readability probe has a
+    // time limit and, once it is exceeded, returns `.unknown`. The watchdog
+    // then FINISHES the run and reports the lack of knowledge - that is the
+    // whole difference compared with the state until 26.09.2026, in which
+    // this read had no limit, and `StartInterval 1800` without `KeepAlive`
+    // means launchd will NOT start a second instance while the first one is
+    // alive. A single hang therefore silenced the watchdog PERMANENTLY, and
+    // silence in this system looks identical to health.
     let reading = await BackupImageService.attachmentReading()
     let attachment = reading.attachment
     var deadErrno: Int32?
     if case .dead(let errno) = attachment { deadErrno = errno }
 
-    // Trzy stany, tak samo jak przy celu Time Machine nizej.
+    // Three states, just like for the Time Machine destination below.
     //
-    // Wyliczamy je z `attachment`, a nie drugim wywolaniem
-    // `BackupImageService.attachedState()` - ten sam odczyt tablicy montowan
-    // dal juz `deadErrno` powyzej, a dwa osobne odczyty moglyby sie
-    // rozjechac i dac raport opisujacy dwie rozne chwile.
+    // We derive them from `attachment`, not from a second call to
+    // `BackupImageService.attachedState()` - the same mount-table read already
+    // gave `deadErrno` above, and two separate reads could diverge and
+    // produce a report describing two different moments.
     let attached: Bool?
     switch attachment {
-    // `.dead` to nadal PODPIETY obraz - tylko martwy, i to osobny problem
-    // zglaszany przez `imageDeadErrno`.
+    // `.dead` is still an ATTACHED image - just a dead one, and that is a
+    // separate problem reported via `imageDeadErrno`.
     case .attached, .dead: attached = true
     case .detached: attached = false
     case .unknown: attached = nil
     }
-    // Trzy stany, nie dwa: `noAnswer` (zawieszony tmutil) nie ma prawa
-    // udawac "cel przestawiony" - patrz `evaluate`.
+    // Three states, not two: `noAnswer` (a hung tmutil) has no right to
+    // pretend to be "destination changed" - see `evaluate`.
     let registered: Bool?
     switch await TimeMachineStatus.destinationReading() {
     case .mountPoint(let path): registered = (path == BackupImageService.targetPath.path)
@@ -468,8 +519,8 @@ public enum BackupHealth {
     case .noAnswer: registered = nil
     }
 
-    // Pomiar wolnego miejsca moze sie NIE UDAC (statfs zwraca blad) i wtedy
-    // `freeGB()` oddaje `nil`, a nie zmyslone zero - patrz komentarz przy niej.
+    // Measuring free space can FAIL (statfs returns an error), and then
+    // `freeGB()` returns `nil`, not a made-up zero - see the comment on it.
     let localFree = BufferGuardService.freeGB()
 
     var report = evaluate(
@@ -477,25 +528,26 @@ public enum BackupHealth {
       lastAttempt: lastAttempt,
       result: result,
       now: now,
-      // `mountedState()`, a NIE `isMounted` - to drugie jest
-      // `mountedState() ?? false`, czyli zamienia "nie wiem" w "nie dziala"
-      // i kaze czlowiekowi naprawiac montowanie, ktore moze byc sprawne.
+      // `mountedState()`, and NOT `isMounted` - the latter is
+      // `mountedState() ?? false`, i.e. it turns "I do not know" into "not
+      // working" and tells the person to fix a mount that may be fine.
       mounted: DriveBufferService.mountedState(),
       attached: attached,
       destinationRegistered: registered,
       erroredFiles: stats?.erroredFiles ?? 0,
       outOfSpace: stats?.outOfSpace ?? false,
       queueReadable: stats != nil,
-      // Nieczytelna pojemnosc Dysku NIE jest tu osobnym alarmem: gdy rclone
-      // nie odpowiada, mowia o tym juz twardsze sygnaly powyzej, a drugi
-      // komunikat o tym samym tylko rozmywa ten pierwszy.
+      // An unreadable Drive quota is NOT a separate alarm here: when rclone
+      // does not respond, harder signals above already say so, and a second
+      // message about the same thing only dilutes the first.
       driveFreeBytes: (await DriveBufferService.remoteQuota())?.free,
       localFreeGB: localFree,
       imageDeadErrno: deadErrno,
       imageProbeTimedOut: reading.probeTimedOut,
       maxAgeHours: maxAgeHours,
-      // Zegar RZECZYWISTY, nie `now`: testy podstawiaja `now` z przeszlosci,
-      // a uptime liczony od niego wychodzilby ujemny, czyli "trwa rozruch".
+      // The REAL clock, not `now`: tests substitute a `now` from the past, and
+      // uptime computed from it would come out negative, i.e. "startup in
+      // progress".
       withinStartupGrace: (systemUptime() ?? .infinity) < startupGraceMinutes * 60,
       backupRunning: await TimeMachineStatus.runningState())
 
@@ -503,40 +555,42 @@ public enum BackupHealth {
     return report
   }
 
-  /// Problem zglaszany, gdy pomiaru wolnego miejsca NIE DA SIE wykonac.
+  /// Problem reported when the free-space measurement CANNOT be made.
   ///
-  /// `evaluate` traktuje `localFreeGB: nil` jako "nie pytano" (taki jest jego
-  /// kontrakt od poczatku i opiera sie na nim kilkanascie testow), ale
-  /// `currentReport` WIE, ze pytalo i nie wyszlo. To osobna awaria: dozorca
-  /// bufora podejmuje decyzje o wstrzymaniu Time Machine wlasnie na tej
-  /// liczbie, wiec gdy jej nie ma, nie chroni juz dysku przed zapelnieniem.
+  /// `evaluate` treats `localFreeGB: nil` as "not asked" (that has been its
+  /// contract from the start, and a dozen or so tests rely on it), but
+  /// `currentReport` KNOWS it asked and it did not work. That is a separate
+  /// failure: the buffer guard decides on pausing Time Machine precisely on
+  /// this number, so when it is missing, it no longer protects the disk from
+  /// filling up.
   ///
-  /// Wydzielone z `currentReport()` WYLACZNIE po to, zeby dalo sie sprawdzic
-  /// testem: `currentReport()` dotyka rclone, tmutil i hdiutil, wiec ta galaz
-  /// bylaby inaczej niesprawdzalna - a galaz "nie wiem", ktorej nikt nie
-  /// sprawdzil, to dokladnie ten rodzaj martwego kodu, o ktory pytal przeglad
-  /// (kompilator ostrzegal wczesniej, ze `Int` porownywany do `nil` zawsze
-  /// daje falsz, czyli ze galaz jest martwa).
+  /// Split out of `currentReport()` SOLELY so that it can be tested:
+  /// `currentReport()` touches rclone, tmutil and hdiutil, so this branch
+  /// would otherwise be untestable - and an "I do not know" branch nobody has
+  /// checked is exactly the kind of dead code the review asked about (the
+  /// compiler warned earlier that an `Int` compared to `nil` always yields
+  /// false, i.e. that the branch was dead).
   static func unmeasuredLocalDiskProblems(localFreeGB: Int?) -> [Problem] {
     guard localFreeGB == nil else { return [] }
     return [
       Problem(
-        summary: "Nie da sie zmierzyc wolnego miejsca na dysku Maca",
-        detail:
-          "statfs('/System/Volumes/Data') zwrocil blad. Dozorca bufora nie wstrzyma wtedy Time Machine przed zapelnieniem dysku, bo nie zna liczby, na ktorej opiera ta decyzje."
-      )
+        summary: L10n.tr("Cannot measure free space on the Mac's disk"),
+        detail: L10n.tr(
+          "statfs('/System/Volumes/Data') returned an error. The buffer guard will then not pause Time Machine before the disk fills up, because it does not know the number it bases that decision on."
+        ),
+        code: "local-space-unmeasured")
     ]
   }
 
-  // MARK: - Formatowanie
+  // MARK: - Formatting
 
-  /// Wiek slowami. Minuty ponizej dwoch godzin - inaczej przy niskim progu
-  /// komunikat brzmi "Brak udanej kopii od 0 h", co nie znaczy nic.
+  /// Age in words. Minutes below two hours - otherwise, with a low threshold,
+  /// the message reads "No successful backup for 0 h", which means nothing.
   public static func formatAge(_ seconds: TimeInterval) -> String {
     let hours = Int(seconds / 3600)
     if hours < 2 { return "\(Int(seconds / 60)) min" }
     if hours < 48 { return "\(hours) h" }
-    return "\(hours / 24) dni"
+    return L10n.tr("%@ days", "\(hours / 24)")
   }
 
   public static func stamp(_ date: Date) -> String {

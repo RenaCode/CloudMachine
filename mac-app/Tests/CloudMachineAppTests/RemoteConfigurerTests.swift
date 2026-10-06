@@ -13,10 +13,10 @@ final class RemoteConfigurerTests: XCTestCase {
   }
 
   func testExtractToken_missingMarkers() {
-    XCTAssertNil(RemoteConfigurer.extractToken(from: "cos posz\u{142}o nie tak, brak markerow"))
+    XCTAssertNil(RemoteConfigurer.extractToken(from: "something went wrong, no markers"))
   }
 
   func testExtractToken_onlyStartMarker() {
-    XCTAssertNil(RemoteConfigurer.extractToken(from: "tekst ---> reszta bez konca"))
+    XCTAssertNil(RemoteConfigurer.extractToken(from: "text ---> rest without an end"))
   }
 }

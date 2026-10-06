@@ -1,61 +1,64 @@
 import Foundation
 
-/// Czy podpiety obraz NAPRAWDE oddaje dane - a nie tylko figuruje w tablicy
-/// montowan.
+/// Whether the attached image REALLY returns data - and does not merely appear
+/// in the mount table.
 ///
-/// DLACZEGO TO ISTNIEJE
+/// WHY THIS EXISTS
 ///
-/// 22 wrz 2026 o 00:17 rclone dostal od Google HTTP 401 na listowaniu pasm,
-/// oddal blad we/wy do FUSE-T, a sterownik obrazu uznal urzadzenie za
-/// odlaczone. Od tej chwili kazdy odczyt pliku spod `/Volumes/CloudMachine`
-/// konczyl sie `errno 6 ENXIO` ("Device not configured") i Time Machine
-/// padal co przebieg z `BACKUP_FAILED_DISCONNECTED_DESTINATION`.
+/// On 22 Sep 2026 at 00:17 rclone got HTTP 401 from Google while listing the
+/// bands, passed an I/O error to FUSE-T, and the image driver considered the
+/// device disconnected. From that moment every read of a file under
+/// `/Volumes/CloudMachine` ended with `errno 6 ENXIO` ("Device not
+/// configured") and Time Machine failed every run with
+/// `BACKUP_FAILED_DISCONNECTED_DESTINATION`.
 ///
-/// Tymczasem `mount` nadal pokazywal wolumen, `hdiutil info` nadal pokazywal
-/// obraz, `ls` katalogu dzialal (z cache jadra), a `statfs` oddawal wolne
-/// miejsce. Wszystko, na czym stal `isAttached`, mowilo "OK". Skutek:
-/// `drive-status` "Obraz podpiety: OK", GUI "Wszystko wyslane", a agent
-/// `gdrive-attach` co 15 minut meldowal "Juz podpiete" i NIE podpinal na nowo.
-/// Przez 15 godzin jedynym, co krzyczalo, byl `backup-health` - po fakcie,
-/// z wieku ostatniej kopii.
+/// Meanwhile `mount` still showed the volume, `hdiutil info` still showed the
+/// image, `ls` of the directory worked (from the kernel cache), and `statfs`
+/// returned free space. Everything `isAttached` was built on said "OK". The
+/// result: `drive-status` said "Image attached: OK", the GUI "Everything
+/// uploaded", and the `gdrive-attach` agent reported "Already attached" every
+/// 15 minutes and did NOT reattach. For 15 hours the only thing that cried out
+/// was `backup-health` - after the fact, from the age of the last backup.
 ///
-/// Zmierzone na martwym urzadzeniu: `open()` katalogu - OK, `listdir` - OK,
-/// `statvfs` - OK, `fsync` - OK, **`open`+`read` 1 bajtu zwyklego pliku - ENXIO**.
-/// Dlatego sonda czyta bajt. Nic slabszego nie odroznia zywego od martwego.
+/// Measured on the dead device: `open()` of the directory - OK, `listdir` -
+/// OK, `statvfs` - OK, `fsync` - OK, **`open`+`read` of 1 byte of a regular
+/// file - ENXIO**. That is why the probe reads a byte. Nothing weaker tells a
+/// live device from a dead one.
 public enum ImageProbe {
 
   public enum Verdict: Equatable, Sendable {
-    /// Odczyt sie udal.
+    /// The read succeeded.
     case readable
-    /// Urzadzenie nie oddaje danych. `errno` z nieudanego odczytu.
+    /// The device does not return data. `errno` from the failed read.
     case dead(errno: Int32)
-    /// W katalogu glownym nie ma zwyklego pliku, ktory daloby sie przeczytac -
-    /// tak wyglada swiezy wolumen przed pierwsza kopia. Nie da sie stwierdzic
-    /// awarii, wiec NIE zglaszamy jej.
+    /// There is no regular file in the root directory that could be read -
+    /// that is what a fresh volume looks like before the first backup. A
+    /// failure cannot be established, so we do NOT report one.
     case nothingToProbe
-    /// Sonda NIE ODPOWIEDZIALA w wyznaczonym czasie.
+    /// The probe DID NOT ANSWER within the allotted time.
     ///
-    /// To NIE jest `.dead` i zlanie tych dwoch przypadkow byloby grozne:
-    /// `.dead` wyzwala w `attach-image` odpiecie NA SILE obrazu, na ktorym
-    /// czekaja jeszcze niewyslane dane, a tutaj nie wiemy nawet tego, czy
-    /// urzadzenie jest martwe. Brak wiedzy ma WSTRZYMYWAC operacje
-    /// nieodwracalna, nie ja wyzwalac - dlatego ten werdykt mapuje sie na
-    /// `BackupImageService.Attachment.unknown`, ktore juz blokuje `attach`
-    /// i `create`.
+    /// This is NOT `.dead`, and merging the two cases would be dangerous:
+    /// `.dead` triggers a FORCED detach in `attach-image` of an image on which
+    /// unsent data is still waiting, while here we do not even know whether
+    /// the device is dead. A lack of knowledge must HOLD BACK an irreversible
+    /// operation, not trigger it - that is why this verdict maps to
+    /// `BackupImageService.Attachment.unknown`, which already blocks `attach`
+    /// and `create`.
     case timedOut
   }
 
-  /// Bledy, ktore znacza "urzadzenie zniklo", a nie "plik jest dziwny".
+  /// Errors that mean "the device is gone", not "the file is odd".
   ///
-  /// EACCES czy EISDIR to wlasciwosc pliku, nie wolumenu - taki plik pomijamy
-  /// i probujemy nastepnego. ENXIO/EIO/ENODEV/ENOTCONN to wolumen.
+  /// EACCES or EISDIR are a property of the file, not of the volume - we skip
+  /// such a file and try the next one. ENXIO/EIO/ENODEV/ENOTCONN are the
+  /// volume.
   static let deviceErrors: Set<Int32> = [ENXIO, EIO, ENODEV, ENOTCONN]
 
-  /// Czysta wersja: listowanie i odczyt sa wstrzykiwane, zeby test mogl
-  /// podstawic ENXIO bez psucia prawdziwego urzadzenia.
+  /// Pure version: listing and reading are injected, so that a test can
+  /// substitute ENXIO without breaking a real device.
   ///
-  /// - `regularFiles`: zwykle pliki w katalogu glownym wolumenu.
-  /// - `readFirstByte`: rzuca `POSIXError`-podobny blad z `errno`, gdy odczyt pada.
+  /// - `regularFiles`: regular files in the volume's root directory.
+  /// - `readFirstByte`: returns the `errno` when the read fails.
   public static func probe(
     regularFiles: () throws -> [URL],
     readFirstByte: (URL) -> Int32?
@@ -64,39 +67,41 @@ public enum ImageProbe {
     do {
       files = try regularFiles()
     } catch {
-      // Listowanie tez potrafi pasc na martwym urzadzeniu - i to jest ten
-      // przypadek, ktory `try?` polykal. `--dir-cache-time` wynosi 5 minut:
-      // dopoki cache jest swiezy, `contentsOfDirectory` chodzi z pamieci jadra
-      // i dziala nawet po ENXIO (stad zdanie wyzej, ze listowanie "to nie jest
-      // test"). Po wygasnieciu cache to samo listowanie idzie po dane do
-      // rclone i pada tym samym ENXIO, co odczyt. Do 23 wrzesnia 2026 sonda
-      // mowila wtedy `.nothingToProbe`, `BackupImageService.attachment`
-      // mapowalo to na `.attached`, a agent `gdrive-attach` co 15 minut
-      // meldowal "Juz podpiete" - czyli dokladnie ta awaria, dla ktorej ta
-      // sonda powstala, wracala tylnymi drzwiami po piatej minucie.
+      // Listing can also fail on a dead device - and that is the case `try?`
+      // used to swallow. `--dir-cache-time` is 5 minutes: while the cache is
+      // fresh, `contentsOfDirectory` runs from kernel memory and works even
+      // after ENXIO (hence the statement above that listing "is not a test").
+      // Once the cache expires, the same listing goes to rclone for data and
+      // fails with the same ENXIO as the read. Until 23 September 2026 the
+      // probe then said `.nothingToProbe`, `BackupImageService.attachment`
+      // mapped that to `.attached`, and the `gdrive-attach` agent reported
+      // "Already attached" every 15 minutes - i.e. exactly the failure this
+      // probe was created for came back through the back door after the
+      // fifth minute.
       if let code = deviceErrno(of: error), deviceErrors.contains(code) {
         return .dead(errno: code)
       }
-      // Blad bez rozpoznanego errno urzadzenia nie dowodzi niczego o wolumenie.
+      // An error without a recognized device errno proves nothing about the volume.
       return .nothingToProbe
     }
     guard !files.isEmpty else { return .nothingToProbe }
     for file in files {
       guard let errno = readFirstByte(file) else { return .readable }
       if deviceErrors.contains(errno) { return .dead(errno: errno) }
-      // Blad wlasciwy dla pliku - sprobuj innego.
+      // An error specific to the file - try another one.
     }
     return .nothingToProbe
   }
 
-  /// Wyciaga surowe `errno` z bledu rzuconego przez listowanie katalogu.
+  /// Extracts the raw `errno` from an error thrown by the directory listing.
   ///
-  /// Foundation nie oddaje go wprost: `contentsOfDirectory` opakowuje blad
-  /// POSIX-a w `NSCocoaErrorDomain` (np. 256 `NSFileReadUnknownError`),
-  /// a oryginalne `errno` chowa pod `NSUnderlyingErrorKey` jako
-  /// `NSPOSIXErrorDomain`. Sprawdzamy trzy postacie, bo kazda z nich wychodzi
-  /// z innej warstwy: `POSIXError` z kodu wolajacego libc wprost,
-  /// `NSPOSIXErrorDomain` z cienkiego opakowania, i dopiero potem zagniezdzenie.
+  /// Foundation does not hand it over directly: `contentsOfDirectory` wraps
+  /// the POSIX error in `NSCocoaErrorDomain` (e.g. 256
+  /// `NSFileReadUnknownError`), and hides the original `errno` under
+  /// `NSUnderlyingErrorKey` as `NSPOSIXErrorDomain`. We check three forms,
+  /// because each comes from a different layer: `POSIXError` from code calling
+  /// libc directly, `NSPOSIXErrorDomain` from a thin wrapper, and only then the
+  /// nested one.
   static func deviceErrno(of error: Error) -> Int32? {
     if let posix = error as? POSIXError { return posix.code.rawValue }
     let ns = error as NSError
@@ -109,67 +114,68 @@ public enum ImageProbe {
     return nil
   }
 
-  // MARK: - Limit czasu
+  // MARK: - Time limit
   //
-  // DLACZEGO WATEK ODDZIELONY DEADLINEM, A NIE `ProcessRunner.run(timeout:)`
+  // WHY A THREAD SEPARATED BY A DEADLINE, AND NOT `ProcessRunner.run(timeout:)`
   //
-  // Sonda to `readdir` plus `open`/`read` na wolumenie stojacym na FUSE-T.
-  // Kiedy rclone przestaje odpowiadac, te wywolania wchodza w NIEPRZERYWALNE
-  // oczekiwanie w jadrze (stan "U" w `ps`). Takiego watku nie da sie ani
-  // anulowac, ani ubic: `Task.cancel()` jest kooperacyjne i `read()` w jadrze
-  // z nim nie wspolpracuje, a SIGKILL tez nie dziala - to samo ograniczenie
-  // opisuje juz `ProcessRunner` przy swojej "ostatecznej granicy". Skoro sondy
-  // nie da sie PRZERWAC, jedyne, co da sie zagwarantowac, to ze jej
-  // zawieszenie nie zawiesza WOLAJACEGO. Sonda dostaje wiec wlasny watek,
-  // a wolajacy deadline i werdykt `.timedOut`.
+  // The probe is a `readdir` plus `open`/`read` on a volume living on FUSE-T.
+  // When rclone stops responding, these calls enter an UNINTERRUPTIBLE wait in
+  // the kernel (state "U" in `ps`). Such a thread can be neither cancelled
+  // nor killed: `Task.cancel()` is cooperative and `read()` in the kernel does
+  // not cooperate with it, and SIGKILL does not work either - the same
+  // limitation `ProcessRunner` already describes for its "final limit". Since
+  // the probe cannot be INTERRUPTED, the only thing that can be guaranteed is
+  // that its hang does not hang the CALLER. So the probe gets its own thread,
+  // and the caller gets a deadline and the `.timedOut` verdict.
   //
-  // Dlatego tez nie ma tu (i nie moze byc) synchronicznego `probe(volume:)` -
-  // byl do 26.09.2026 i wlasnie on zamrazal panel na `@MainActor` oraz
-  // uciszal czujke `backup-health` na stale. Jedyne wejscie na zywy wolumen
-  // jest `async`, zeby wolajacy czekal bez blokowania watku.
+  // That is also why there is not (and cannot be) a synchronous
+  // `probe(volume:)` here - there was one until 26.09.2026 and it was exactly
+  // what froze the panel on `@MainActor` and silenced the `backup-health`
+  // watchdog permanently. The only entry point onto a live volume is `async`,
+  // so that the caller waits without blocking a thread.
   //
-  // Rozwazone i ODRZUCONE:
+  // Considered and REJECTED:
   //
-  // - Sonda w PODPROCESIE przez `ProcessRunner.run(..., timeout:)` - wzorzec,
-  //   ktory w tym repo ratuje `tmutil`. Kupuje tu dokladnie tyle samo, co
-  //   watek (zawieszenie nie zatrzymuje wolajacego), a placi znacznie wiecej:
-  //   nowa podkomenda agenta, odnajdywanie binarki w trzech ukladach (bundel
-  //   GUI, `.build/` przy pracy z terminala, `/Applications` pod launchd),
-  //   `fork`+`exec` co 10 s w petli odswiezania panelu i - tak samo jak tu -
-  //   osierocony proces zawieszony w jadrze, ktorego nikt nie ubije. Trzy nowe
-  //   miejsca, w ktorych sonda moze przestac dzialac po cichu, za zysk
-  //   ograniczony do tego, ze zaklinowany watek nalezy do obcego procesu.
+  // - A probe in a SUBPROCESS via `ProcessRunner.run(..., timeout:)` - the
+  //   pattern that saves `tmutil` in this repo. Here it buys exactly as much
+  //   as a thread (a hang does not stop the caller), and costs much more: a
+  //   new agent subcommand, finding the binary in three layouts (GUI bundle,
+  //   `.build/` when working from the terminal, `/Applications` under
+  //   launchd), a `fork`+`exec` every 10 s in the panel's refresh loop and -
+  //   just like here - an orphaned process stuck in the kernel that nobody
+  //   will kill. Three new places where the probe can silently stop working,
+  //   for a gain limited to the stuck thread belonging to another process.
   //
-  // - `open(..., O_NONBLOCK)`. Na PLIKU ZWYKLYM O_NONBLOCK nie czyni `read()`
-  //   nieblokujacym - dotyczy FIFO, gniazd i urzadzen znakowych, a nie
-  //   oczekiwania na I/O pliku; `readdir` nie ma nawet takiego wariantu.
-  //   Sonda stracilaby wiec czytelnosc kodu, nie zyskujac gwarancji, a przy
-  //   okazji przestalaby mierzyc to, po co istnieje: ODDANIE bajtu przez
-  //   urzadzenie.
+  // - `open(..., O_NONBLOCK)`. On a REGULAR FILE O_NONBLOCK does not make
+  //   `read()` non-blocking - it applies to FIFOs, sockets and character
+  //   devices, not to waiting for file I/O; `readdir` does not even have such
+  //   a variant. The probe would thus lose code clarity without gaining a
+  //   guarantee, and would incidentally stop measuring what it exists for: the
+  //   device HANDING OVER a byte.
   //
-  // - Wyscig dwoch `Task` z `Task.sleep` i `cancel()` na przegranym - patrz
-  //   wyzej, anulowanie nie ma jak dosiegnac `read()` w jadrze. Watek z puli
-  //   `DispatchQueue.global()` odpada z tego samego powodu, tylko gorzej:
-  //   zaklinowany watek zostaje zajety na zawsze, a pula ma ~64 miejsca
-  //   i jest wspoldzielona z cala reszta procesu.
+  // - A race between two `Task`s with `Task.sleep` and `cancel()` on the loser
+  //   - see above, cancellation has no way to reach `read()` in the kernel. A
+  //   thread from the `DispatchQueue.global()` pool is out for the same
+  //   reason, only worse: a stuck thread stays occupied forever, and the pool
+  //   has ~64 slots and is shared with the whole rest of the process.
 
-  /// Ile czekamy na werdykt, zanim oglosimy `.timedOut`.
+  /// How long we wait for a verdict before declaring `.timedOut`.
   ///
-  /// Na zywym wolumenie sonda trwa mikrosekundy - jeden `readdir` i odczyt
-  /// jednego bajtu. Te 15 s to wiec nie budzet na prace, a granica
-  /// cierpliwosci. Dolna granice wyznacza ZYWY, ale wolny FUSE-T (pasmo
-  /// sciagane z Dysku w trakcie odczytu), ktorego nie wolno brac za
-  /// niewiadoma; gorna - to, po co ten limit istnieje: 25.09.2026
-  /// `drive-status` wisial ponad 25 s i trzeba go bylo zabic recznie, a czujka
-  /// `backup-health` chodzi co 1800 s, wiec pelne 15 s i tak nie zblizy sie
-  /// do jej okna.
+  /// On a live volume the probe takes microseconds - one `readdir` and a read
+  /// of one byte. So these 15 s are not a budget for work but a limit of
+  /// patience. The lower bound is set by a LIVE but slow FUSE-T (a band being
+  /// downloaded from the Drive during the read), which must not be taken for
+  /// an unknown; the upper one - by what this limit exists for: on 25.09.2026
+  /// `drive-status` hung for over 25 s and had to be killed by hand, and the
+  /// `backup-health` watchdog runs every 1800 s, so the full 15 s will not come
+  /// anywhere near its window anyway.
   public static let probeTimeout: TimeInterval = 15
 
-  /// Werdykt przekazywany z watku sondujacego do wolajacego.
+  /// Verdict passed from the probing thread to the caller.
   ///
-  /// Obie strony musza przezyc brak drugiej: wolajacy moze sie poddac na
-  /// deadline i nigdy nie odebrac werdyktu, a watek moze nigdy nie dojsc do
-  /// `finish`, bo utknal w jadrze.
+  /// Both sides must survive the absence of the other: the caller may give up
+  /// on the deadline and never collect the verdict, and the thread may never
+  /// reach `finish`, because it got stuck in the kernel.
   private final class ProbeBox: @unchecked Sendable {
     private let lock = NSLock()
     private var verdict: Verdict?
@@ -188,8 +194,8 @@ public enum ImageProbe {
       waiting?(value)
     }
 
-    /// Wola `handler` z werdyktem - natychmiast, jesli sonda zdazyla
-    /// odpowiedziec, zanim wolajacy zapisal sie na powiadomienie.
+    /// Calls `handler` with the verdict - immediately if the probe managed to
+    /// answer before the caller subscribed to the notification.
     func whenDone(_ handler: @escaping (Verdict) -> Void) {
       lock.lock()
       if let verdict {
@@ -202,13 +208,13 @@ public enum ImageProbe {
     }
   }
 
-  /// Ktore wolumeny maja wlasnie sonde w locie.
+  /// Which volumes currently have a probe in flight.
   private final class ProbeSlots: @unchecked Sendable {
     static let shared = ProbeSlots()
     private let lock = NSLock()
     private var busy: Set<String> = []
 
-    /// `true` = slot byl wolny i od tej chwili nalezy do wolajacego.
+    /// `true` = the slot was free and from now on belongs to the caller.
     func claim(_ slot: String) -> Bool {
       lock.lock()
       defer { lock.unlock() }
@@ -222,14 +228,15 @@ public enum ImageProbe {
     }
   }
 
-  /// Startuje sonde na WLASNYM watku. `nil` = sonda tego slotu wciaz trwa.
+  /// Starts the probe on its OWN thread. `nil` = the probe for this slot is
+  /// still running.
   ///
-  /// Jedna sonda na slot to nie optymalizacja. Bez tego panel GUI, ktory
-  /// odswieza sie co 10 s, zostawialby na trwale zaklinowanym wolumenie po
-  /// jednym wiszacym watku na przebieg - kilkaset na godzine, kazdy z wlasnym
-  /// stosem i zaden do odzyskania. Drugi watek i tak nie dowiedzialby sie
-  /// niczego nowego: skoro pierwszy stoi w jadrze, odpowiedzi nie ma, wiec
-  /// kolejny wolajacy dostaje `.timedOut` od razu.
+  /// One probe per slot is not an optimization. Without it, the GUI panel,
+  /// which refreshes every 10 s, would leave one hanging thread per run on a
+  /// permanently stuck volume - several hundred per hour, each with its own
+  /// stack and none recoverable. A second thread would not learn anything new
+  /// anyway: since the first one is stuck in the kernel, there is no answer,
+  /// so the next caller gets `.timedOut` right away.
   private static func startProbe(
     slot: String,
     regularFiles: @escaping @Sendable () throws -> [URL],
@@ -239,8 +246,8 @@ public enum ImageProbe {
     let box = ProbeBox()
     let thread = Thread {
       let verdict = probe(regularFiles: regularFiles, readFirstByte: readFirstByte)
-      // Zwolnienie slotu PRZED oddaniem werdyktu: inaczej wolajacy obudzony
-      // przez `finish` widzialby slot jako wciaz zajety.
+      // Release the slot BEFORE handing over the verdict: otherwise a caller
+      // woken by `finish` would see the slot as still occupied.
       ProbeSlots.shared.release(slot)
       box.finish(verdict)
     }
@@ -250,9 +257,10 @@ public enum ImageProbe {
     return box
   }
 
-  /// Sonda na zywym wolumenie. Po `timeout` oddaje `.timedOut`, a wolajacy
-  /// idzie dalej - sam odczyt moze zostac w jadrze na zawsze i to jest
-  /// przyjete, byle nie zabral ze soba czujki ani interfejsu.
+  /// Probe on a live volume. After `timeout` it returns `.timedOut` and the
+  /// caller moves on - the read itself may stay in the kernel forever and that
+  /// is accepted, as long as it does not take the watchdog or the interface
+  /// down with it.
   public static func probe(volume: URL, timeout: TimeInterval = probeTimeout) async -> Verdict {
     await probe(
       slot: volume.path, timeout: timeout,
@@ -260,10 +268,10 @@ public enum ImageProbe {
       readFirstByte: { readFirstByteErrno(of: $0) })
   }
 
-  /// Jak wyzej, ale z wstrzykiwanym listowaniem i odczytem - zeby test mogl
-  /// podstawic sonde, ktora NIGDY NIE ODPOWIADA, bez martwego wolumenu pod
-  /// reka. `slot` jest osobnym parametrem z tego samego powodu: dwa testy nie
-  /// moga sobie wzajemnie zajmowac tego samego slotu.
+  /// As above, but with injected listing and reading - so that a test can
+  /// substitute a probe that NEVER ANSWERS, without a dead volume at hand.
+  /// `slot` is a separate parameter for the same reason: two tests must not
+  /// occupy each other's slot.
   static func probe(
     slot: String,
     timeout: TimeInterval,
@@ -284,12 +292,12 @@ public enum ImageProbe {
     }
   }
 
-  /// Zwykle pliki w katalogu glownym. Dopoki cache katalogu jest swiezy
-  /// (`--dir-cache-time 5m`), listowanie chodzi z pamieci i dziala takze na
-  /// martwym urzadzeniu - dlatego samo powodzenie listowania NIE jest dowodem
-  /// zycia, tylko lista kandydatow do testu. Po wygasnieciu cache to samo
-  /// listowanie pada ENXIO i wtedy jest juz dowodem smierci - obsluguje to
-  /// `probe`, nie ta funkcja.
+  /// Regular files in the root directory. While the directory cache is fresh
+  /// (`--dir-cache-time 5m`), listing runs from memory and works on a dead
+  /// device too - that is why a successful listing alone is NOT proof of
+  /// life, only a list of candidates for the test. Once the cache expires,
+  /// the same listing fails with ENXIO and then it is proof of death - that
+  /// is handled by `probe`, not by this function.
   static func regularFiles(in volume: URL) throws -> [URL] {
     try FileManager.default.contentsOfDirectory(
       at: volume, includingPropertiesForKeys: [.isRegularFileKey],
@@ -299,10 +307,10 @@ public enum ImageProbe {
     .sorted { $0.lastPathComponent < $1.lastPathComponent }
   }
 
-  /// `nil` = odczyt sie udal (takze pusty plik), inaczej `errno`.
+  /// `nil` = the read succeeded (an empty file too), otherwise `errno`.
   ///
-  /// Przez `open`/`read` z libc, nie przez `Data(contentsOf:)`: Foundation
-  /// czyta caly plik, a nas interesuje jeden bajt i surowe errno.
+  /// Via libc `open`/`read`, not via `Data(contentsOf:)`: Foundation reads the
+  /// whole file, and we are interested in one byte and the raw errno.
   static func readFirstByteErrno(of file: URL) -> Int32? {
     let fd = open(file.path, O_RDONLY)
     guard fd >= 0 else { return errno }

@@ -3,78 +3,88 @@ import XCTest
 
 @testable import CloudMachineApp
 
-/// Trzy odpowiedzi `tmutil destinationinfo` MUSZA dac trzy rozne stany panelu.
+/// Three answers of `tmutil destinationinfo` MUST give three different panel
+/// states.
 ///
-/// Do 25.09.2026 panel pytal `TimeMachineStatus.currentDestinationMountPoint()`,
-/// ktora zwraca `nil` i przy braku celu, i przy braku odpowiedzi tmutil - obie
-/// sciezki konczyly sie tym samym `.notRegistered`, czyli napisem "Time Machine
-/// nie wskazuje na CloudMachine". Kierunek pomylki byl bezpieczny (falszywy
-/// alarm), ale zdanie jest falszywe i kaze zrobic zla rzecz: rejestrowac cel,
-/// ktory jest caly. Czujka `backup-health` rozroznia te dwa przypadki od
-/// 23.09.2026 (`destinationReading()`), panel byl ostatnim miejscem, ktore je
-/// zlewalo.
+/// Until 25.09.2026 the panel asked
+/// `TimeMachineStatus.currentDestinationMountPoint()`, which returns `nil` both
+/// when there is no destination and when tmutil does not answer - both paths
+/// ended in the same `.notRegistered`, i.e. the text "Time Machine does not
+/// point to CloudMachine". The direction of the mistake was safe (a false
+/// alarm), but the sentence is false and tells the person to do the wrong
+/// thing: register a destination that is intact. The `backup-health` watchdog
+/// has told these two cases apart since 23.09.2026 (`destinationReading()`);
+/// the panel was the last place that merged them.
 @MainActor
 final class TimeMachineDestinationStateTests: XCTestCase {
 
-  private let cel = "/Volumes/CloudMachine"
+  private let target = "/Volumes/CloudMachine"
 
-  // MARK: - Przeklad odpowiedzi tmutil na stan panelu
+  // MARK: - Translating the tmutil answer into a panel state
 
-  func testZarejestrowanyCelToNaszObraz() {
+  func testRegisteredDestinationIsOurImage() {
     XCTAssertEqual(
-      TimeMachineState.from(.mountPoint(cel), target: cel), .registered(mountPoint: cel))
+      TimeMachineState.from(.mountPoint(target), target: target),
+      .registered(mountPoint: target))
   }
 
-  /// Cel istnieje, ale wskazuje gdzie indziej - backupu na Drive NIE MA.
-  func testCelWskazujacyGdzieIndziejToBrakRejestracji() {
+  /// A destination exists, but points elsewhere - there is NO backup on the
+  /// Drive.
+  func testDestinationPointingElsewhereIsNotRegistered() {
     XCTAssertEqual(
-      TimeMachineState.from(.mountPoint("/Volumes/ObcyDysk"), target: cel), .notRegistered)
+      TimeMachineState.from(.mountPoint("/Volumes/SomeOtherDisk"), target: target),
+      .notRegistered)
   }
 
-  /// tmutil odpowiedzial i zadnego celu nie ma - TO jest "nie wskazuje".
-  func testBrakCeluToBrakRejestracji() {
-    XCTAssertEqual(TimeMachineState.from(.none, target: cel), .notRegistered)
+  /// tmutil answered and there is no destination - THAT is "does not point".
+  func testNoDestinationIsNotRegistered() {
+    XCTAssertEqual(TimeMachineState.from(.none, target: target), .notRegistered)
   }
 
-  /// TA usterka. Brak odpowiedzi tmutil nie ma prawa wygladac jak przestawiony
-  /// cel. `tmutil destinationinfo` siega na montowanie lezace na Google Drive
-  /// i przy chorym montowaniu nie odpowiada wcale - a wtedy o celu nie wiemy
-  /// nic, co jest inna informacja niz "celu nie ma".
-  func testBrakOdpowiedziTmutilToNieBrakRejestracji() {
-    let stan = TimeMachineState.from(.noAnswer, target: cel)
+  /// THAT defect. tmutil not answering has no right to look like a changed
+  /// destination. `tmutil destinationinfo` reaches the mount living on Google
+  /// Drive and with a sick mount does not answer at all - and then we know
+  /// nothing about the destination, which is different information from
+  /// "there is no destination".
+  func testNoTmutilAnswerIsNotNotRegistered() {
+    let state = TimeMachineState.from(.noAnswer, target: target)
     XCTAssertNotEqual(
-      stan, .notRegistered,
-      "brak odpowiedzi tmutil nie moze udawac przestawionego celu")
-    XCTAssertEqual(stan, .noAnswer)
+      state, .notRegistered,
+      "tmutil not answering must not pretend to be a changed destination")
+    XCTAssertEqual(state, .noAnswer)
   }
 
-  // MARK: - Zdanie, ktore czlowiek CZYTA
+  // MARK: - The sentence a person READS
 
-  /// Naglowek jest jedyna forma, w jakiej ktokolwiek to zobaczy, wiec o tym
-  /// rozroznieniu musi mowic on, a nie tylko typ wewnetrzny.
-  func testNaglowekPrzyBrakuOdpowiedziNieOskarzaCelu() {
-    let status = stanPoza(timeMachine: .noAnswer)
+  /// The headline is the only form in which anyone will see this, so it is the
+  /// headline that must express the distinction, not just the internal type.
+  func testHeadlineOnNoAnswerDoesNotBlameTheDestination() {
+    let status = statusApartFrom(timeMachine: .noAnswer)
     XCTAssertNotEqual(
-      status.headline, "Time Machine nie wskazuje na CloudMachine",
-      "to zdanie kaze rejestrowac cel na nowo - czynnosc zbedna, gdy cel jest caly")
+      status.headline, "Time Machine does not point to CloudMachine",
+      "this sentence tells the person to register the destination again - needless when the destination is intact"
+    )
     XCTAssertTrue(
-      status.headline.contains("NIE WIADOMO"), "dostalem: \(status.headline)")
+      status.headline.contains("UNKNOWN"), "got: \(status.headline)")
     XCTAssertFalse(
       status.healthy,
-      "brak wiedzy o celu to NIE zielony znaczek - nikt nie potwierdzil, ze backup dochodzi")
+      "not knowing about the destination is NOT a green badge - nobody confirmed the backup arrives"
+    )
   }
 
-  /// Druga strona tego samego: PRAWDZIWIE przestawiony cel nadal musi to
-  /// powiedziec wprost. Inaczej "poprawka" polegalaby na uciszeniu komunikatu.
-  func testNaglowekPrzyPrawdziwiePrzestawionymCeluNieZmiekl() {
-    let status = stanPoza(timeMachine: .notRegistered)
-    XCTAssertEqual(status.headline, "Time Machine nie wskazuje na CloudMachine")
+  /// The other side of the same thing: a TRULY changed destination must still
+  /// say so plainly. Otherwise the "fix" would consist of silencing the
+  /// message.
+  func testHeadlineForATrulyChangedDestinationDidNotSoften() {
+    let status = statusApartFrom(timeMachine: .notRegistered)
+    XCTAssertEqual(status.headline, "Time Machine does not point to CloudMachine")
     XCTAssertFalse(status.healthy)
   }
 
-  /// Stan, w ktorym wszystko poza celem Time Machine jest w porzadku - zeby
-  /// naglowek mowil wlasnie o celu, a nie o czyms wczesniejszym.
-  private func stanPoza(timeMachine: TimeMachineState) -> AppStatus {
+  /// A state in which everything except the Time Machine destination is fine -
+  /// so that the headline talks about the destination, not about something
+  /// earlier.
+  private func statusApartFrom(timeMachine: TimeMachineState) -> AppStatus {
     let status = AppStatus()
     status.dependencyState = .ready
     status.remoteConfigured = true

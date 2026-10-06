@@ -2,57 +2,60 @@ import XCTest
 
 @testable import CloudMachineCore
 
-/// Testy stanu wlasnych poswiadczen OAuth.
+/// Tests for the state of the own OAuth credentials.
 ///
-/// Najwazniejszy przypadek to POLOWICZNA konfiguracja: wyglada na zrobiona, a
-/// rclone i tak wraca na wspoldzielony `client_id`. Gdyby interfejs pokazywal
-/// wtedy zielone "ustawione", uzytkownik mialby dowod na cos, co nie dziala.
+/// The most important case is a HALF-DONE configuration: it looks done, and
+/// rclone falls back to the shared `client_id` anyway. If the interface then
+/// showed a green "set", the user would have proof of something that does not
+/// work.
 final class RemoteCredentialsTests: XCTestCase {
 
   private typealias State = RemoteConfigurer.CredentialsState
 
-  func testObaUstawioneToKonfiguracjaKompletna() {
+  func testBothSetIsACompleteConfiguration() {
     let state = State(hasClientID: true, hasClientSecret: true)
     XCTAssertTrue(state.isComplete)
     XCTAssertFalse(state.isPartial)
-    XCTAssertTrue(state.summary.contains("ustawione"))
+    XCTAssertTrue(state.summary.contains("set."))
   }
 
-  func testZadneNieUstawioneToBrakKonfiguracji() {
+  func testNeitherSetIsNoConfiguration() {
     let state = State(hasClientID: false, hasClientSecret: false)
     XCTAssertFalse(state.isComplete)
-    XCTAssertFalse(state.isPartial, "Brak obu to nie jest stan polowiczny")
-    XCTAssertTrue(state.summary.contains("Brak wlasnych poswiadczen"))
+    XCTAssertFalse(state.isPartial, "Both missing is not a half-done state")
+    XCTAssertTrue(state.summary.contains("No own credentials"))
   }
 
-  /// ZNANA ZLA PROBKA: sam `client_id`, bez sekretu.
-  func testSamClientIdToStanPolowicznyANieKompletny() {
+  /// KNOWN BAD SAMPLE: `client_id` alone, without the secret.
+  func testClientIdAloneIsHalfDoneNotComplete() {
     let state = State(hasClientID: true, hasClientSecret: false)
-    XCTAssertFalse(state.isComplete, "Bez sekretu rclone nie uzyje wlasnego client_id")
+    XCTAssertFalse(state.isComplete, "Without the secret rclone will not use its own client_id")
     XCTAssertTrue(state.isPartial)
-    XCTAssertTrue(state.summary.contains("client_secret"), "Komunikat ma nazwac to, czego brakuje")
+    XCTAssertTrue(
+      state.summary.contains("client_secret"), "The message must name what is missing")
   }
 
-  /// I odwrotnie - sam sekret bez identyfikatora.
-  func testSamSekretToStanPolowiczny() {
+  /// And the other way round - the secret alone without the identifier.
+  func testSecretAloneIsHalfDone() {
     let state = State(hasClientID: false, hasClientSecret: true)
     XCTAssertFalse(state.isComplete)
     XCTAssertTrue(state.isPartial)
     XCTAssertTrue(state.summary.contains("client_id"))
   }
 
-  /// Komunikat przy braku poswiadczen ma mowic, CO Z TEGO WYNIKA - inaczej
-  /// nikt nie ma powodu tego uzupelniac. Wspoldzielony `client_id` rclone jest
-  /// limitowany wspolnie i wycofywany w 2026.
-  func testKomunikatTlumaczySkutekBrakuPoswiadczen() {
+  /// The message for missing credentials must say WHAT FOLLOWS FROM IT -
+  /// otherwise nobody has a reason to fill them in. rclone's shared
+  /// `client_id` is rate-limited jointly and being retired in 2026.
+  func testMessageExplainsConsequenceOfMissingCredentials() {
     let summary = State(hasClientID: false, hasClientSecret: false).summary
-    XCTAssertTrue(summary.contains("wspoldzielonego client_id"))
+    XCTAssertTrue(summary.contains("shared client_id"))
     XCTAssertTrue(summary.contains("2026"))
   }
 
-  func testNazwyKontWKeychainieSaStabilne() {
-    // Zmiana tych nazw rozjezdza zapis z interfejsu i odczyt z agenta, a obie
-    // strony milcza - agent po prostu wraca na wspoldzielony client_id.
+  func testKeychainAccountNamesAreStable() {
+    // Changing these names makes the write from the interface and the read
+    // from the agent drift apart, and both sides stay silent - the agent
+    // simply falls back to the shared client_id.
     XCTAssertEqual(RemoteConfigurer.clientIDAccount, "client_id")
     XCTAssertEqual(RemoteConfigurer.clientSecretAccount, "client_secret")
     XCTAssertEqual(RemoteConfigurer.keychainService, "cloudmachine-gdrive")

@@ -1,35 +1,36 @@
 import Foundation
 
-/// Generuje pliki `.plist` z podstawiona sciezka do skompilowanej binarki
-/// `cloudmachine-agent` i instaluje je jako LaunchAgents (sesja zalogowanego
-/// uzytkownika) - instaluje generycznie KAZDY szablon `*.plist.template`
-/// znaleziony w `launchd/` (obecnie `verify-watchdog` i `archive-watchdog`).
-/// W usunietej wczesniejszej architekturze sieciowego mountu NFS istnialy tu
-/// dodatkowo szablony dla mount/backup/quota, ktore odpadly wraz z nia.
+/// Generates `.plist` files with the path to the compiled `cloudmachine-agent`
+/// binary substituted in and installs them as LaunchAgents (the logged-in
+/// user's session) - generically installs EVERY `*.plist.template` template
+/// found in `launchd/` (currently `verify-watchdog` and `archive-watchdog`).
+/// The removed earlier network NFS mount architecture additionally had
+/// templates for mount/backup/quota here, which went away with it.
 public enum LaunchdInstaller {
   public static var launchAgentsDir: URL {
     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
   }
 
-  /// Nazwa procesu interfejsu - binarka w `Contents/MacOS`, nie bundel.
+  /// Process name of the interface - the binary in `Contents/MacOS`, not the bundle.
   static let appProcessName = "CloudMachine.app/Contents/MacOS/CloudMachine"
 
-  /// Zamyka dzialajacy interfejs, zeby launchd mogl wystartowac NOWY.
+  /// Closes the running interface so that launchd can start a NEW one.
   ///
-  /// Najpierw grzecznie (`osascript quit`), zeby aplikacja zdazyla posprzatac;
-  /// dopiero potem twardo. Interfejs nie robi backupow - robia je agenty - wiec
-  /// jego ubicie niczego nie przerywa.
+  /// Politely first (`osascript quit`), so the app has time to clean up; only
+  /// then forcefully. The interface does not make backups - the agents do - so
+  /// killing it interrupts nothing.
   static func terminateRunningApp() async {
     let running = try? await ProcessRunner.run("/usr/bin/pgrep", ["-f", appProcessName])
     guard running?.succeeded == true,
       !(running?.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     else { return }
 
-    CMLogger.log("Instalacja agentow: zamykam dzialajacy interfejs, zeby wstal na nowej binarce")
+    CMLogger.log(
+      "Agent installation: closing the running interface so it comes up on the new binary")
     _ = try? await ProcessRunner.run(
       "/usr/bin/osascript", ["-e", "quit app \"CloudMachine\""], timeout: 30)
 
-    // Dajemy chwile na czyste zamkniecie, potem sprawdzamy i dobijamy.
+    // Give it a moment to close cleanly, then check and finish it off.
     for _ in 0..<10 {
       try? await Task.sleep(nanoseconds: 500_000_000)
       let still = try? await ProcessRunner.run("/usr/bin/pgrep", ["-f", appProcessName])
@@ -38,107 +39,107 @@ public enum LaunchdInstaller {
         && !(still?.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
       if !alive { return }
     }
-    CMLogger.log("Instalacja agentow: interfejs nie zamknal sie sam - koncze go twardo")
+    CMLogger.log(
+      "Agent installation: the interface did not close by itself - terminating it forcefully")
     _ = try? await ProcessRunner.run("/usr/bin/pkill", ["-f", appProcessName], timeout: 30)
   }
 
   public static func install() async -> CMActionResult {
-    // Zeby polecenia z dokumentacji dzialaly z terminala, a nie konczyly sie
-    // "command not found" - binarka siedzi w bundlu aplikacji.
+    // So that the commands from the documentation work from the terminal
+    // instead of ending in "command not found" - the binary sits inside the
+    // app bundle.
     CMTooling.linkCommandIntoPath()
 
-    // Instalacja przeladowuje agentow, w tym ten trzymajacy montowanie. Zrobienie
-    // tego przy podpietym obrazie wyrywa mu podloge w trakcie - a odpiecie jest
-    // zapisem, ktory musi jeszcze doleciec na Dysk. Popelnilem ten blad trzy razy
-    // z rzedu, wiec nie polegamy juz na pamietaniu o nim.
+    // Installation reloads the agents, including the one holding the mount.
+    // Doing that with the image attached pulls the floor out from under it
+    // mid-way - and detaching is a write that still has to reach the Drive. I
+    // made this mistake three times in a row, so we no longer rely on
+    // remembering it.
     if BackupImageService.isAttached {
-      // Martwy obraz (patrz `ImageProbe`) nie da sie odpiac grzecznie -
-      // `hdiutil detach` bez `-force` odmawia, a instalacja stanelaby na
-      // dokladnie tym stanie, ktory ma naprawic.
-      // WYLACZNIE `.dead`, a nie `!isUsable`. `.unknown` tez nie jest
-      // "uzywalny", ale znaczy "nie wiem" - a `detach -force` na urzadzeniu,
-      // ktore moze byc zywe, porzuca zapisy czekajace na wysylke na Dysk.
-      // Od 26.09.2026 `.unknown` jest tu OSIAGALNY (sonda czytelnosci ma limit
-      // czasu i po jego przekroczeniu oddaje wlasnie ten stan), wiec roznica
-      // przestala byc teoretyczna. Bez `-force` `hdiutil detach` po prostu
-      // odmowi, instalacja przerwie sie z komunikatem i nikt nie straci danych.
+      // A dead image (see `ImageProbe`) cannot be detached politely -
+      // `hdiutil detach` without `-force` refuses, and the installation would
+      // get stuck on exactly the state it is meant to fix.
+      // ONLY `.dead`, not `!isUsable`. `.unknown` is not "usable" either, but
+      // it means "I do not know" - and `detach -force` on a device that may be
+      // alive abandons writes waiting to be uploaded to the Drive. Since
+      // 26.09.2026 `.unknown` is REACHABLE here (the readability probe has a
+      // time limit and, once it is exceeded, returns exactly this state), so
+      // the difference is no longer theoretical. Without `-force`,
+      // `hdiutil detach` simply refuses, the installation aborts with a
+      // message and nobody loses data.
       var force = false
       if case .dead = await BackupImageService.attachment() { force = true }
       CMLogger.log(
-        "Instalacja agentow: najpierw odpinam obraz\(force ? " (martwy - na sile)" : "") i czekam na wysylke"
+        "Agent installation: detaching the image first\(force ? " (dead - forcefully)" : "") and waiting for the upload"
       )
       let detached = await BackupImageService.detach(force: force)
-      CMLogger.log("Instalacja agentow: \(detached.message)")
+      CMLogger.log("Agent installation: \(detached.message)")
       if !detached.succeeded {
         return CMActionResult(
           succeeded: false,
-          message: """
-            Nie odpieto obrazu przed przeladowaniem agentow - przerywam, zeby nie \
-            stracic danych czekajacych w buforze.
-            \(detached.message)
-            """)
+          message: L10n.tr(
+            "The image was not detached before reloading the agents - aborting, so as not to lose data waiting in the buffer.\n%@",
+            detached.message))
       }
     }
 
     guard let templatesDir = CMPaths.launchdTemplatesDir else {
       return CMActionResult(
-        succeeded: false, message: "Nie znaleziono katalogu launchd/ z szablonami.")
+        succeeded: false, message: L10n.tr("Could not find the launchd/ directory with templates."))
     }
     guard let resolvedAgentBin = CMPaths.agentBinaryPath else {
       return CMActionResult(
-        succeeded: false, message: "Nie znaleziono skompilowanej binarki cloudmachine-agent.")
+        succeeded: false,
+        message: L10n.tr("Could not find the compiled cloudmachine-agent binary."))
     }
-    // PRZERYWAMY, nie ostrzegamy. Wczesniej nieudane odlozenie binarki
-    // konczylo sie wpisem "OSTRZEZENIE" w logu i dokonczeniem instalacji -
-    // launchd dostawal sciezke do `.build/`, ktora kolejny `swift build` albo
-    // `git clean` kasuje spod dzialajacych agentow. Agent, ktory znika, to
-    // backup, ktory przestaje powstawac, a jedynym sladem jest linia w logu,
-    // do ktorej nikt nie zaglada. Instalacja bez stabilnej binarki jest gorsza
-    // niz brak instalacji, bo wyglada na udana.
+    // We ABORT, not warn. Previously a failure to stash the binary ended with
+    // a "WARNING" entry in the log and the installation being completed -
+    // launchd got a path into `.build/`, which the next `swift build` or `git
+    // clean` deletes from under the running agents. An agent that disappears
+    // is a backup that stops being made, and the only trace is a log line
+    // nobody looks at. An installation without a stable binary is worse than
+    // no installation, because it looks successful.
     let agentBin: URL
     do {
       agentBin = try stableAgentBinaryPath(resolvedFrom: resolvedAgentBin)
     } catch let error as NoStableBinary {
       return CMActionResult(
         succeeded: false,
-        message: """
-          PRZERWANO: nie udalo sie odlozyc cloudmachine-agent w stabilnym miejscu
-          (\(error.attemptedPath)) - najczesciej brak miejsca albo uprawnien.
-          NIE instaluje agentow wskazujacych na \(error.fallbackPath): ta sciezka
-          znika przy kolejnym `swift build` albo `git clean`, a backupy ustaja
-          bez zadnego widocznego sygnalu.
-          """)
+        message: L10n.tr(
+          "ABORTED: could not put cloudmachine-agent in a stable location\n(%@) - most often a lack of space or permissions.\nNOT installing agents pointing at %@: that path\ndisappears on the next `swift build` or `git clean`, and backups stop\nwithout any visible signal.",
+          error.attemptedPath, error.fallbackPath))
     } catch {
       return CMActionResult(
-        succeeded: false, message: "PRZERWANO: \(error.localizedDescription)")
+        succeeded: false, message: L10n.tr("ABORTED: %@", error.localizedDescription))
     }
 
     try? FileManager.default.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
 
-    // Migracja: starsza wersja instalowala oddzielny agent
-    // "com.renacode.cloudmachine.mount", zastapiony dawno przez
-    // mount-watchdog - usuwamy, jesli nadal zaladowany na czyims Maku.
+    // Migration: an older version installed a separate agent
+    // "com.renacode.cloudmachine.mount", long since replaced by
+    // mount-watchdog - remove it if it is still loaded on someone's Mac.
     let oldMountPlist = launchAgentsDir.appendingPathComponent(
       "com.renacode.cloudmachine.mount.plist")
     if FileManager.default.fileExists(atPath: oldMountPlist.path) {
       CMLogger.log(
-        "Usuwam przestarzaly agent com.renacode.cloudmachine.mount (zastapiony przez mount-watchdog)."
+        "Removing the obsolete agent com.renacode.cloudmachine.mount (replaced by mount-watchdog)."
       )
       _ = try? await ProcessRunner.run("/bin/launchctl", ["unload", oldMountPlist.path])
       try? FileManager.default.removeItem(at: oldMountPlist)
     }
 
-    // Interfejs trzeba UBIC, zanim launchd wystartuje go na nowo.
+    // The interface has to be KILLED before launchd starts it again.
     //
-    // Agent uruchamia go przez `open -a`, a `open -a` na DZIALAJACEJ aplikacji
-    // tylko ja uaktywnia - nie podmienia. Dzialajacy proces trzyma stary,
-    // odlaczony plik wykonywalny (inode sprzed podmiany bundla) i chodzi na nim
-    // do wylogowania albo restartu Maca.
+    // The agent starts it via `open -a`, and `open -a` on a RUNNING application
+    // only activates it - it does not replace it. The running process holds
+    // the old, unlinked executable (the inode from before the bundle was
+    // replaced) and keeps running on it until logout or a Mac restart.
     //
-    // Zaobserwowane 13 wrz 2026: po DWoCH wdrozeniach pasek menu wciaz pokazywal
-    // "dysk niepodpiety", bo interfejs byl z 12 wrz - inode procesu 1129507643
-    // wobec 1129717794 na dysku. Wersja z CLI byla juz nowa, wiec CLI i GUI
-    // mowily co innego o tej samej maszynie.
+    // Observed 13 Sep 2026: after TWO deployments the menu bar still showed
+    // "disk not attached", because the interface was from 12 Sep - process
+    // inode 1129507643 versus 1129717794 on disk. The CLI version was already
+    // new, so the CLI and the GUI said different things about the same
+    // machine.
     await terminateRunningApp()
 
     guard
@@ -146,7 +147,8 @@ public enum LaunchdInstaller {
         at: templatesDir, includingPropertiesForKeys: nil)
     else {
       return CMActionResult(
-        succeeded: false, message: "Nie udalo sie wylistowac szablonow w \(templatesDir.path).")
+        succeeded: false,
+        message: L10n.tr("Could not list the templates in %@.", templatesDir.path))
     }
 
     return installVerdict(
@@ -154,11 +156,12 @@ public enum LaunchdInstaller {
         templates: templates, into: launchAgentsDir, agentBin: agentBin, logDir: CMPaths.logDir))
   }
 
-  /// Co weszlo i co NIE weszlo - z powodem, po jednym na agenta.
+  /// What went in and what did NOT - with a reason, one per agent.
   ///
-  /// Do 25.09.2026 zbieralismy tylko `installedLabels`, a porazki nie zostawialy
-  /// sladu w wyniku: nieczytelny szablon szedl przez `continue`, nieudany zapis
-  /// przez `try?`, a nieudany `launchctl load` po prostu nie dopisywal etykiety.
+  /// Until 25.09.2026 we collected only `installedLabels`, and failures left no
+  /// trace in the result: an unreadable template went through `continue`, a
+  /// failed write through `try?`, and a failed `launchctl load` simply did not
+  /// add the label.
   struct InstallOutcome: Equatable {
     struct Failure: Equatable {
       var label: String
@@ -169,15 +172,16 @@ public enum LaunchdInstaller {
     var failed: [Failure] = []
   }
 
-  /// Generuje `.plist` z szablonow i przeladowuje agentow, ZBIERAJAC porazki.
+  /// Generates `.plist` files from the templates and reloads the agents,
+  /// COLLECTING failures.
   ///
-  /// Czytanie szablonu, zapis i przeladowanie sa podmienialne, bo inaczej nie da
-  /// sie wstrzyknac ZNANEJ ZLEJ probki - nieczytelnego szablonu, zapisu bez
-  /// uprawnien, `launchctl` odmawiajacego zaladowania - a wlasnie w obsludze
-  /// tych trzech przypadkow siedziala usterka. Test podstawia je zamiast pisac
-  /// do prawdziwego `~/Library/LaunchAgents` i przeladowywac agentow tej
-  /// maszyny, czyli zamiast rozbierac dzialajacy backup, zeby sprawdzic
-  /// komunikat o bledzie.
+  /// Reading the template, writing and reloading are replaceable, because
+  /// otherwise a KNOWN BAD sample cannot be injected - an unreadable template,
+  /// a write without permission, `launchctl` refusing to load - and the defect
+  /// was precisely in the handling of these three cases. The test substitutes
+  /// them instead of writing to the real `~/Library/LaunchAgents` and reloading
+  /// this machine's agents, i.e. instead of taking the working backup apart to
+  /// check an error message.
   static func installAgents(
     templates: [URL],
     into destinationDir: URL,
@@ -196,124 +200,122 @@ public enum LaunchdInstaller {
         template.deletingPathExtension().lastPathComponent)
       let label = destURL.deletingPathExtension().lastPathComponent
 
-      let szablon: String
+      let templateText: String
       do {
-        szablon = try read(template)
+        templateText = try read(template)
       } catch {
-        // Wczesniej: `guard ... else { continue }`. Szablon, ktorego nie dalo
-        // sie przeczytac, wypadal z instalacji BEZ SLADU - ani w logu, ani
-        // w wyniku - a `buffer-guard` jest jedyna ochrona dysku na tej maszynie.
-        let powod = "nie dalo sie odczytac szablonu \(template.lastPathComponent)"
-        outcome.failed.append(.init(label: label, reason: powod))
-        log("NIE zainstalowano \(label): \(powod)")
+        // Previously: `guard ... else { continue }`. A template that could not
+        // be read dropped out of the installation WITHOUT A TRACE - neither in
+        // the log nor in the result - and `buffer-guard` is the only protection
+        // of the disk on this machine.
+        let reason = L10n.tr("could not read the template %@", template.lastPathComponent)
+        outcome.failed.append(.init(label: label, reason: reason))
+        log("NOT installed \(label): \(reason)")
         continue
       }
 
-      var content = szablon.replacingOccurrences(of: "__CM_AGENT_BIN__", with: agentBin.path)
+      var content = templateText.replacingOccurrences(of: "__CM_AGENT_BIN__", with: agentBin.path)
       content = content.replacingOccurrences(of: "__CM_LOG_DIR__", with: logDir.path)
       do {
         try write(content, destURL)
       } catch {
-        // `continue` jest tu ISTOTNY, nie porzadkowy. Wczesniej zapis szedl
-        // przez `try?` i po nieudanym zapisie lecialo `launchctl load` na
-        // STARYM pliku .plist, ktory nadal lezy w ~/Library/LaunchAgents.
-        // `launchctl` konczyl sie kodem 0, agent ladowal na wynikowej liscie
-        // i instalacja meldowala sukces - przy launchd chodzacym na
-        // poprzedniej wersji, byc moze wskazujacej na binarke, ktorej juz nie
-        // ma. Sukces jest wtedy gorszy od porazki, bo nikt nie szuka.
-        let powod = "nie udalo sie zapisac \(destURL.path) (brak miejsca albo uprawnien)"
-        outcome.failed.append(.init(label: label, reason: powod))
-        log("NIE zainstalowano \(label): \(powod) - NIE przeladowuje, zeby nie zaliczyc starego")
+        // `continue` is ESSENTIAL here, not cosmetic. Previously the write went
+        // through `try?` and after a failed write `launchctl load` ran on the
+        // OLD .plist file, which still lies in ~/Library/LaunchAgents.
+        // `launchctl` exited with code 0, the agent landed on the result list
+        // and the installation reported success - with launchd running the
+        // previous version, possibly pointing at a binary that no longer
+        // exists. Success is then worse than failure, because nobody looks.
+        let reason = L10n.tr(
+          "could not write %@ (lack of space or permissions)", destURL.path)
+        outcome.failed.append(.init(label: label, reason: reason))
+        log("NOT installed \(label): \(reason) - NOT reloading, so as not to count the old one")
         continue
       }
-      log("Wygenerowano \(destURL.path)")
+      log("Generated \(destURL.path)")
 
       if await reload(destURL) {
         outcome.installed.append(label)
-        log("Zaladowano \(label) przez launchctl")
+        log("Loaded \(label) via launchctl")
       } else {
-        let powod = "launchctl load odmowil zaladowania \(destURL.lastPathComponent)"
-        outcome.failed.append(.init(label: label, reason: powod))
-        log("NIE zaladowano \(label): \(powod)")
+        let reason = L10n.tr("launchctl load refused to load %@", destURL.lastPathComponent)
+        outcome.failed.append(.init(label: label, reason: reason))
+        log("NOT loaded \(label): \(reason)")
       }
     }
     return outcome
   }
 
-  /// Werdykt calej instalacji - czysty, zeby dal sie sprawdzic testem.
+  /// Verdict of the whole installation - pure, so it can be tested.
   ///
-  /// JEDEN udany agent wystarczal do `succeeded: true` i do komunikatu
-  /// "Zainstalowano agentow: ...", ktory wymienial wylacznie te udane.
-  /// Zaobserwowany skutek: `buffer-guard` nie ladowal sie, instalator meldowal
-  /// sukces, jedyna ochrona dysku nie dzialala i nikt o tym nie wiedzial - a
-  /// brakujacej nazwy na liscie nie widzi nikt, kto nie zna listy z pamieci.
+  /// ONE successful agent was enough for `succeeded: true` and for the message
+  /// "Installed agents: ...", which listed only the successful ones. The
+  /// observed result: `buffer-guard` did not load, the installer reported
+  /// success, the only protection of the disk was not working and nobody knew
+  /// - and nobody who does not know the list by heart sees a name missing from
+  /// it.
   ///
-  /// Ten sam powod, co przy `stableAgentBinaryPath`: instalacja niepelna jest
-  /// gorsza niz brak instalacji, bo wyglada na udana.
+  /// The same reason as with `stableAgentBinaryPath`: an incomplete
+  /// installation is worse than none, because it looks successful.
   static func installVerdict(_ outcome: InstallOutcome) -> CMActionResult {
     guard outcome.failed.isEmpty else {
-      let lista = outcome.failed.map { "  - \($0.label): \($0.reason)" }.joined(separator: "\n")
-      let weszly =
+      let list = outcome.failed.map { "  - \($0.label): \($0.reason)" }.joined(separator: "\n")
+      let wentIn =
         outcome.installed.isEmpty
-        ? "Nie zaladowano ANI JEDNEGO agenta."
-        : "Weszly tylko: \(outcome.installed.joined(separator: ", "))."
+        ? L10n.tr("NOT A SINGLE agent was loaded.")
+        : L10n.tr("Only these went in: %@.", outcome.installed.joined(separator: ", "))
       return CMActionResult(
         succeeded: false,
-        message: """
-          Instalacja agentow NIEPELNA - nie weszlo \(outcome.failed.count) \
-          z \(outcome.failed.count + outcome.installed.count):
-          \(lista)
-          \(weszly)
-          Kazdy brakujacy agent to funkcja, ktora przestala dzialac po cichu \
-          (buffer-guard pilnuje dysku, backup-health zglasza awarie). Napraw \
-          powod i powtorz instalacje.
-          """)
+        message: L10n.tr(
+          "Agent installation INCOMPLETE - %@ of %@ did not go in:\n%@\n%@\nEvery missing agent is a function that has silently stopped working (buffer-guard watches the disk, backup-health reports failures). Fix the cause and repeat the installation.",
+          "\(outcome.failed.count)", "\(outcome.failed.count + outcome.installed.count)", list,
+          wentIn))
     }
     guard !outcome.installed.isEmpty else {
       return CMActionResult(
-        succeeded: false, message: "Nie udalo sie zaladowac zadnego agenta launchd.")
+        succeeded: false, message: L10n.tr("Could not load any launchd agent."))
     }
     return CMActionResult(
       succeeded: true,
-      message: "Zainstalowano agentow: \(outcome.installed.joined(separator: ", "))")
+      message: L10n.tr("Installed agents: %@", outcome.installed.joined(separator: ", ")))
   }
 
-  /// Przeladowanie jednego agenta: `unload` (moze nie byc zaladowany - dlatego
-  /// wynik ignorujemy), potem `load -w`. `true` tylko gdy `load` sie UDAL.
+  /// Reloading one agent: `unload` (it may not be loaded - that is why we
+  /// ignore the result), then `load -w`. `true` only when `load` SUCCEEDED.
   private static func launchctlReload(_ plist: URL) async -> Bool {
     _ = try? await ProcessRunner.run("/bin/launchctl", ["unload", plist.path])
     let loaded = try? await ProcessRunner.run("/bin/launchctl", ["load", "-w", plist.path])
     return loaded?.succeeded == true
   }
 
-  /// Rzucane, gdy nie da sie odlozyc binarki w stabilnym miejscu. Wolajacy ma
-  /// wtedy PRZERWAC instalacje, nie dokonczyc jej gorszym wariantem.
+  /// Thrown when the binary cannot be put in a stable location. The caller
+  /// must then ABORT the installation, not complete it with a worse variant.
   struct NoStableBinary: Error {
     var attemptedPath: String
     var fallbackPath: String
   }
 
-  /// Jesli `resolved` wskazuje do wewnatrz `.build/` checkoutu
-  /// deweloperskiego (przypadek 3 w `CMPaths.agentBinaryPath` - GUI/CLI
-  /// odpalone przez `swift run` w drzewie repo), zywa automatyzacja launchd
-  /// wskazywalaby WPROST na plik, ktory kazdy kolejny `swift build`/`git
-  /// clean` w repo moze podmienic albo skasowac (zaobserwowane realnie: to
-  /// dokladnie sciezka, ktora prowadzila produkcyjne watchdogi tej
-  /// instalacji). Kopiujemy wiec binarke RAZ, przy kazdej instalacji, do
-  /// stabilnej lokalizacji poza drzewem repo - launchd wskazuje na TA kopie.
-  /// Binarka spakowana w .app (przypadek 1/2) jest juz stabilna sama w
-  /// sobie i nie wymaga kopiowania.
+  /// If `resolved` points inside the `.build/` of a development checkout
+  /// (case 3 in `CMPaths.agentBinaryPath` - GUI/CLI started via `swift run` in
+  /// the repo tree), the live launchd automation would point DIRECTLY at a
+  /// file that every subsequent `swift build`/`git clean` in the repo can
+  /// replace or delete (observed for real: that was exactly the path the
+  /// production watchdogs of this installation ran from). So we copy the
+  /// binary ONCE, on every installation, to a stable location outside the
+  /// repo tree - launchd points at THAT copy. A binary packaged in the .app
+  /// (case 1/2) is already stable in itself and needs no copying.
   ///
-  /// Rzuca `NoStableBinary`, gdy sie nie uda - patrz `install()`.
+  /// Throws `NoStableBinary` when that fails - see `install()`.
   private static func stableAgentBinaryPath(resolvedFrom resolved: URL) throws -> URL {
     guard resolved.path.contains("/.build/") else { return resolved }
     let stableDir = CMPaths.appSupportDir.appendingPathComponent("bin")
     try? FileManager.default.createDirectory(at: stableDir, withIntermediateDirectories: true)
     let stableBin = stableDir.appendingPathComponent("cloudmachine-agent")
 
-    // Kopiujemy OBOK, a stara kopie podmieniamy dopiero po udanym zapisie.
-    // Poprzednia wersja kasowala stary plik PRZED kopiowaniem, wiec nieudane
-    // kopiowanie zostawialo instalacje bez stabilnej binarki w ogole.
+    // We copy ALONGSIDE, and replace the old copy only after a successful
+    // write. The previous version deleted the old file BEFORE copying, so a
+    // failed copy left the installation without a stable binary at all.
+    // l10n-polish-ok: staging file name on disk; "nowy" means "new".
     let staging = stableDir.appendingPathComponent("cloudmachine-agent.nowy")
     try? FileManager.default.removeItem(at: staging)
     guard (try? FileManager.default.copyItem(at: resolved, to: staging)) != nil else {
