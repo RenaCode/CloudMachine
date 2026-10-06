@@ -107,8 +107,7 @@ else on the account. `operations/about` through the rclone rc gives real bytes.
 
 - macOS 14 (Sonoma) or newer. Administrator rights for two commands, listed below.
 - A Google account with room to spare.
-- Homebrew, to install a release — or Xcode / a Swift 5.9+ toolchain, to build
-  the app yourself (see below).
+- [Homebrew](https://brew.sh).
 - Nothing else at runtime. CloudMachine installs its own `rclone` and its own
   copy of FUSE-T.
 
@@ -119,141 +118,105 @@ so they read the same whoever sends them to you.
 
 ### Current limitations
 
-Worth knowing before you start, because none of them announce themselves:
-
-- **One Mac per Google account.** The Drive folder is a constant,
-  `gdrive:CloudMachine/mac-studio`, whatever the Mac is called, so a second Mac
-  on the same account would share the folder and the image with the first.
-  `config/machines.example.json` describes several machines with per-machine
-  `limit_gb` budgets, but no code enforces those budgets — what is checked is
-  the real free space on Drive, reported by rclone.
-- **Not notarised.** Releases are signed with a self-signed certificate (local
-  builds ad hoc or with a local one, see below), not with an Apple Developer ID.
-  The Homebrew cask clears the quarantine flag; a DMG downloaded by hand gets
-  Gatekeeper's "unidentified developer" warning.
+- **Not notarised.** Releases are signed with a self-signed certificate, not
+  with an Apple Developer ID. The Homebrew cask clears the quarantine flag; a
+  DMG downloaded by hand gets Gatekeeper's "unidentified developer" warning.
+- **Per-machine budgets are not enforced.** `config/machines.example.json`
+  describes `limit_gb` per Mac, but nothing acts on it — what is checked is the
+  real free space on Drive, reported by rclone. Several Macs on one account
+  share that space.
 
 ---
 
-## Installing
+## Getting started
 
 ```sh
 brew install --cask renacode/tap/cloudmachine
+open -a CloudMachine
 ```
 
-The cask installs a universal (Apple Silicon + Intel) `CloudMachine.app` into
-`/Applications`. `brew upgrade` does not restart the Google Drive mount, and
-neither `brew uninstall` nor `--zap` touches the launchd agents or the upload
-buffer in `~/.cloudmachine`, which may hold backups that have not reached
-Google Drive yet. Run `cloudmachine-agent prepare-shutdown` before
-uninstalling. Releases, signing and the cask are described in
-[`packaging/README.md`](packaging/README.md).
+CloudMachine lives in the menu bar. Its window opens on a **Required Setup
+Steps** card listing what is left to do on this Mac, in order, each with a
+button — or, for the two steps an app cannot do, a command to copy:
 
-### Building the app
+1. **Install rclone** and **Install FUSE-T.** CloudMachine downloads its own
+   copies; nothing else is installed system-wide.
+2. **Connect Google Drive** — a command to run in Terminal. It opens Google's
+   sign-in in the browser and waits for your approval. Enter your own OAuth
+   credentials first (see [below](#your-own-google-oauth-credentials)).
+3. **Grant Full Disk Access** — opens the right pane of System Settings.
+   Without it CloudMachine cannot read when Time Machine last *finished* a
+   backup, which is the one check that matters.
+4. **Install agents** — the launchd agents that keep the Drive mounted, attach
+   the image and watch the backup.
+5. **Create image**, then **Attach image** — the backup image on Google Drive.
+   The size is a ceiling, not an allocation: the image is sparse, and Drive
+   only holds what has been written.
+6. **Point Time Machine at CloudMachine** — a `sudo tmutil setdestination`
+   command to copy, because only an administrator can change it.
 
-```sh
-cd mac-app
-swift run cloudmachine-agent setup-signing-cert   # optional, once per Mac
-swift run cloudmachine-agent build-app            # -> mac-app/build/CloudMachine.app
-rm -rf /Applications/CloudMachine.app             # never copy over a live bundle
-cp -R build/CloudMachine.app /Applications/
-```
+When the card disappears, setup is done. Turn on automatic backups in System
+Settings → General → Time Machine, or run `sudo tmutil enable`.
 
-Removing the installed copy first is not optional. `cp -R` onto an existing
-bundle overwrites its files in place; macOS still holds the old signature for
-them and kills every agent started from the bundle
-(`last exit reason = OS_REASON_CODESIGNING`), while `codesign --verify` keeps
-passing. Removed and copied anew, the files get new identities. The mount
-survives this: the rclone process that holds it lives outside the bundle.
+### Several Macs, one Google account
 
-`build-app` puts the menu-bar app and `cloudmachine-agent` side by side in
-`Contents/MacOS/`, with the launchd templates as resources, so the installed app
-does not need the repository next to it. It must live in `/Applications`: the
-launchd agent that starts the app opens `/Applications/CloudMachine.app`.
+Install CloudMachine on each Mac and go through the same steps; they can all
+use the same Google account and the same OAuth credentials. Each Mac backs up
+into its own folder, `gdrive:CloudMachine/<folder>`, holding
+`<folder>.sparsebundle`, so their backups never mix.
 
-`setup-signing-cert` creates a local, self-signed code-signing certificate in the
-login keychain. Without it every build is signed ad hoc with a new identity, and
-macOS revokes permissions such as Full Disk Access after each rebuild. With it,
-`build-app` signs with that certificate automatically.
+The folder name is chosen once, at **Connect Google Drive**, from the computer
+name. To pick it yourself, add `--folder NAME` to the command the card gives
+you, e.g. `… configure-remote --folder office-imac`. It cannot be changed
+afterwards, because a new name is a new, empty backup; CloudMachine refuses
+rather than orphan the old one. Installations set up before per-Mac folders
+keep `mac-studio`, which is where their backup already is.
 
-`swift run cloudmachine-agent make-dmg` packs the built app into
-`mac-app/build/CloudMachine-<version>.dmg`; `build-app --universal` builds for
-both architectures, as releases do. Releases are built by
-`.github/workflows/release.yml` from a `vX.Y.Z` tag. The version
-comes from `mac-app/VERSION`, and `cloudmachine-agent version` prints it
-together with the build number and the commit the binary was built from.
+### Upgrading and uninstalling
 
----
+`brew upgrade` replaces the app without restarting the Google Drive mount; the
+agents pick up the new version on their next run. Neither `brew uninstall` nor
+`--zap` touches the launchd agents or the upload buffer in `~/.cloudmachine`,
+which may hold backups that have not reached Google Drive yet. Run
+`cloudmachine-agent prepare-shutdown` before uninstalling.
 
-## Setup
-
-`cloudmachine-agent` lives inside the app bundle. `install-launchd` symlinks it
-into `/usr/local/bin`; until then, call it by its full path:
-
-```sh
-/Applications/CloudMachine.app/Contents/MacOS/cloudmachine-agent --help
-```
-
-```sh
-cloudmachine-agent install-rclone     # official binary — the Homebrew build cannot mount
-cloudmachine-agent install-fuse       # FUSE-T, inside CloudMachine, no separate app
-cloudmachine-agent configure-remote   # Google OAuth in the browser
-cloudmachine-agent create-image --size-gb 4000
-cloudmachine-agent attach-image
-cloudmachine-agent install-launchd    # agents that keep it running
-```
-
-Two steps need `sudo`, because they change system-wide settings:
-
-```sh
-sudo tmutil setdestination /Volumes/CloudMachine
-sudo tmutil enable                    # hourly backups; skip if you prefer manual
-```
+Setting up without the app is described in [docs/setup-cli.md](docs/setup-cli.md);
+building from source, releases and the measurement harnesses in
+[docs/building.md](docs/building.md).
 
 ### Your own Google OAuth credentials
 
-`configure-remote` reads `client_id` and `client_secret` from the macOS Keychain
-under the service `cloudmachine-gdrive`. Create them at
+Do this before **Connect Google Drive**. Create the credentials at
 [console.developers.google.com](https://console.developers.google.com/): new
 project, enable the Google Drive API, consent screen, credentials, OAuth 2.0 of
-type *Desktop*. Then:
+type *Desktop*. Paste the client ID and secret into the **Google Drive
+Credentials (OAuth 2.0)** card at the bottom of the app window; it stores them
+in the macOS Keychain.
 
-```sh
-security add-generic-password -a client_id     -s cloudmachine-gdrive -w -U
-security add-generic-password -a client_secret -s cloudmachine-gdrive -w -U
-```
+They are not optional polish: rclone's shared `client_id` is being retired
+during 2026, and Google rate-limits per `client_id`, so on the shared one you
+compete with every other rclone user.
 
-Without `-w <value>`, `security` prompts — the secret stays out of your shell
-history and out of `ps`.
-
-The app window can do the same thing: the *Google Drive Credentials
-(OAuth 2.0)* card, folded away at the bottom since it is a once-ever step. It writes through the
-`security` tool rather than the Keychain API on purpose — an entry created by
-`SecItemAdd` gets an ACL limited to the program that made it, and reading it
-from a different binary raises an authorisation dialog. The launchd agent has
-nobody to show that dialog to, so it would read nothing and quietly fall back to
-the shared `client_id`.
-
-Your own credentials are not optional polish: rclone's shared `client_id` is
-being retired during 2026, and Google rate-limits per `client_id`, so on the
-shared one you compete with every other rclone user. If the Keychain entries are
-missing, `configure-remote` still works — it falls back to the shared
-`client_id` and says so in the log rather than pretending otherwise.
-
-The remote is created with scope `drive.file`, which grants access only to files
-this application itself created. Full `drive` scope would hand out read, write
-and **delete** over the entire Google account, which is far more than a folder
-of disk-image bands needs — especially with `--drive-use-trash=false`, where a
+The connection uses scope `drive.file`, which grants access only to files this
+application itself created. Full `drive` scope would hand out read, write and
+**delete** over the entire Google account, which is far more than a folder of
+disk-image bands needs — especially with `--drive-use-trash=false`, where a
 delete has no bin to recover from.
-
-`configure-remote` refuses to touch a remote that already exists. Overwriting it
-replaces the token and the scope, and credentials scoped `drive.file` cannot see
-files created by the previous credentials — the backup stays intact but becomes
-unreachable, which amounts to the same thing. Back up `~/.config/rclone/rclone.conf`
-first and pass `--replace-existing` if you really mean it.
 
 ---
 
 ## Running it
+
+Day to day, the menu-bar icon is the whole interface. Its menu shows whether a
+backup is running and what is still waiting to upload, with **Back up now** and
+**Stop backup**. The window answers one question — is the backup reaching Google
+Drive, and if not, why: the time of the last *completed* backup, the state of
+the local buffer and the upload, and a red line naming the problem when there is
+one. Problems also arrive as macOS notifications, so nothing depends on someone
+opening the window.
+
+Everything the window shows is also available in Terminal, for scripts and for
+checking over SSH:
 
 ```sh
 cloudmachine-agent drive-status
@@ -262,6 +225,7 @@ cloudmachine-agent drive-status
 ```
 Tools:            OK
 Drive mount:      OK
+Drive folder:     gdrive:CloudMachine/mac-studio
 Image attached:   OK  (/Volumes/CloudMachine)
 Cache on disk:    103 GB of 100G
 To upload:        ~14 GB (462 items)
@@ -362,7 +326,7 @@ hours old.
 
 ```sh
 # Did anything fail today?
-grep "^\[$(date +%Y-%m-%d)" ~/Library/Logs/CloudMachine/cloudmachine.log | grep -i awaria
+grep "^\[$(date +%Y-%m-%d)" ~/Library/Logs/CloudMachine/cloudmachine.log | grep -i "backup failure"
 
 # Is the upload actually moving, or only erroring? Successes vs refusals per minute.
 grep "^$(date +%Y/%m/%d)" ~/.cloudmachine/rclone.log \
@@ -573,16 +537,6 @@ Running it against the *attached* image saturates the mount badly enough that
 `mount(8)` itself blocks and `backupd` cannot mount the destination, so the
 hourly backups fail while it runs. Detach first, as the command requires, and
 do it when you can leave the Mac alone.
-
----
-
-## Measurement harnesses
-
-The measurements behind these decisions — write amplification per band size, and
-what survives the cloud layer dying mid-write — are written up in
-[gdrive/README.md](gdrive/README.md). The shell harnesses that produced them are
-gone; that work now lives as subcommands of `cloudmachine-agent`, which is why
-`gdrive/` holds nothing but the write-up.
 
 ---
 

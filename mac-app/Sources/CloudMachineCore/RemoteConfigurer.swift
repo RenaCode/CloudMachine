@@ -67,10 +67,10 @@ public enum RemoteConfigurer {
   /// constant that builds the mount command. One source of truth or none.
   @discardableResult
   public static func connect(
-    config: MachinesConfig, machineKey: String, replaceExisting: Bool = false
+    config: MachinesConfig, machineKey: String, replaceExisting: Bool = false,
+    folder: String? = nil
   ) async -> CMActionResult {
     let remoteName = DriveBufferService.remoteName
-    let remotePath = "\(remoteName):\(DriveBufferService.remotePath)"
 
     // We ABORT rather than warn. `rclone config create` overwrites an entry
     // with the same name without asking, and with it the token, `client_id`
@@ -86,6 +86,18 @@ public enum RemoteConfigurer {
           "Remote '%@' already exists and was NOT touched.\nOverwriting it replaces the token and the permission scope; a credential with the 'drive.file' scope does not see files created by the previous one, so the existing backup becomes unreachable.\nIf you really want to replace it, first back up ~/.config/rclone/rclone.conf and run again with --replace-existing.",
           remoteName))
     }
+
+    // The folder is decided BEFORE the remote is created: an existing remote
+    // is how `DriveFolder` recognises an installation whose backup already
+    // lives under the legacy name. Asked after `config create`, every new Mac
+    // would look like an old one and land in `mac-studio`.
+    switch await DriveFolder.resolve(requested: folder) {
+    case .failure(let refused):
+      return CMActionResult(succeeded: false, message: refused.message)
+    case .success:
+      break
+    }
+    let remotePath = "\(remoteName):\(DriveBufferService.remotePath)"
 
     // Own OAuth credentials from the Keychain. On rclone's shared `client_id`
     // we compete for the rate limit with all rclone users, and that
