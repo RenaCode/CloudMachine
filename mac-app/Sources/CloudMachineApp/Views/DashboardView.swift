@@ -9,6 +9,8 @@ struct DashboardView: View {
   @State private var clientSecret = ""
   @State private var credentialsMessage: String?
   @State private var credentialsExpanded = false
+  /// Logical size of a new backup image. Sparse: Drive holds only what is written.
+  @State private var imageSizeGB = "4000"
 
   var body: some View {
     ZStack {
@@ -333,21 +335,58 @@ struct DashboardView: View {
 
   // MARK: - Setup Steps ("To Do")
 
-  private var setupSteps: [(String, String?)] {
-    var steps: [(String, String?)] = []
-    if case .missing(let what, let how) = controller.status.dependencyState {
-      for (miss, remedy) in zip(what, how) { steps.append((L10n.tr("Missing: %@", miss), remedy)) }
+  private var setupSteps: [SetupStep] { controller.setupPlan }
+
+  /// One button per step the app can do itself. Disabled while anything runs:
+  /// image operations share one lock, and a second click would only report
+  /// "another operation is in progress".
+  @ViewBuilder
+  private func setupActionButton(_ action: SetupStep.Action) -> some View {
+    HStack(spacing: 8) {
+      if action == .createImage {
+        Text(L10n.tr("Size (GB)"))
+          .font(.system(size: 12))
+          .foregroundStyle(RenaCodeTheme.textMain)
+        TextField("", text: $imageSizeGB)
+          .textFieldStyle(.roundedBorder)
+          .frame(width: 80)
+      }
+      Button(action: { Task { await perform(action) } }) {
+        Text(setupActionTitle(action))
+          .font(.system(size: 12, weight: .semibold))
+      }
+      .buttonStyle(SecondaryGlassButtonStyle())
+      .disabled(controller.status.isBusy || (action == .createImage && parsedImageSize == nil))
     }
-    if !controller.status.remoteConfigured {
-      steps.append((L10n.tr("Google Drive not connected"), controller.connectDriveCommand))
+  }
+
+  private var parsedImageSize: Int? {
+    guard let value = Int(imageSizeGB.trimmingCharacters(in: .whitespaces)), value >= 100
+    else { return nil }
+    return value
+  }
+
+  private func setupActionTitle(_ action: SetupStep.Action) -> String {
+    switch action {
+    case .installRclone: return L10n.tr("Install rclone")
+    case .installFuse: return L10n.tr("Install FUSE-T")
+    case .grantFullDiskAccess: return L10n.tr("Open System Settings")
+    case .installAgents: return L10n.tr("Install agents")
+    case .createImage: return L10n.tr("Create image")
+    case .attachImage: return L10n.tr("Attach image")
     }
-    if case .notRegistered = controller.status.timeMachineState,
-      controller.status.buffer.imageAttached
-    {
-      steps.append(
-        (L10n.tr("Time Machine does not point to CloudMachine"), controller.setDestinationCommand))
+  }
+
+  private func perform(_ action: SetupStep.Action) async {
+    switch action {
+    case .installRclone: await controller.installRclone()
+    case .installFuse: await controller.installFuse()
+    case .grantFullDiskAccess: controller.openFullDiskAccessSettings()
+    case .installAgents: await controller.installAgents()
+    case .createImage:
+      if let size = parsedImageSize { await controller.createImage(sizeGB: size) }
+    case .attachImage: await controller.attachImage()
     }
-    return steps
   }
 
   private var setupCard: some View {
@@ -372,12 +411,16 @@ struct DashboardView: View {
                 .background(RenaCodeTheme.colorWarning)
                 .clipShape(Circle())
 
-              Text(step.0)
+              Text(step.title)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(RenaCodeTheme.textMain)
             }
 
-            if let command = step.1 {
+            if let action = step.action {
+              setupActionButton(action)
+            }
+
+            if let command = step.command {
               HStack {
                 Text(command)
                   .font(.system(size: 12, design: .monospaced))

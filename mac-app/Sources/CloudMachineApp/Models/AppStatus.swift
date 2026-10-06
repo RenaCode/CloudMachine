@@ -188,6 +188,11 @@ final class AppStatus: ObservableObject {
   @Published var backupProgress: BackupProgressInfo?
   @Published var lastAction: LastRunResult?
   @Published var hasFullDiskAccess: Bool = false
+  /// Whether the mount agent is loaded in launchd; `nil` until asked.
+  @Published var agentsInstalled: Bool?
+  /// Whether this Mac's image exists on the mounted Drive; `nil` while the
+  /// Drive is not mounted, because then nobody can know.
+  @Published var imageExists: Bool?
   @Published var isBusy: Bool = false
   @Published var busyLabel: String = ""
   @Published var errorMessage: String?
