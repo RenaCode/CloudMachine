@@ -154,13 +154,19 @@ final class L10nTests: XCTestCase {
 
   // MARK: - Polish left in the code
 
-  /// Diacritics, plus common Polish words that have no English homograph.
-  /// Written as escapes so this file does not trip its own check.
+  /// Diacritics (as ICU `\uXXXX` escapes), plus common Polish words that have
+  /// no English homograph. The word lines carry the allow marker, because a
+  /// list of Polish words is necessarily Polish.
   private static let polishPattern =
-    #"[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]"#
-    + #"|\b(?i:nie|sie|jest|oraz|jesli|gdy|zeby|wiec|juz|moze|tylko|przez|dla|ktory|ktora|ktore|"#
-    + #"ktorych|blad|bledu|brak|kopia|kopii|obraz|obrazu|dysku|zapis|teraz|wszystko|gotowe|uwaga|"#
-    + #"przerwano|czujka|dozorca|wysylka|wyslane|zaleglosc|montowanie|podpiecie|odpiecie|wolne)\b"#
+    #"[\u0105\u0107\u0119\u0142\u0144\u00F3\u015B\u017A\u017C\u0104\u0106\u0118\u0141\u0143\u00D3\u015A\u0179\u017B]"#
+    + #"|\b(?i:"#
+    + #"nie|sie|jest|oraz|jesli|gdy|zeby|"#  // l10n-polish-ok
+    + #"wiec|juz|moze|tylko|przez|dla|ktory|"#  // l10n-polish-ok
+    + #"ktora|ktore|ktorych|blad|bledu|brak|kopia|"#  // l10n-polish-ok
+    + #"kopii|obraz|obrazu|dysku|zapis|teraz|wszystko|"#  // l10n-polish-ok
+    + #"gotowe|uwaga|przerwano|czujka|dozorca|wysylka|wyslane|"#  // l10n-polish-ok
+    + #"zaleglosc|montowanie|podpiecie|odpiecie|wolne"#  // l10n-polish-ok
+    + #")\b"#
 
   /// A line that must stay Polish (a test of the Polish translation, say)
   /// carries this marker, so every exception is visible in review.

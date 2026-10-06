@@ -685,8 +685,7 @@ final class BufferGuardDecisionTests: XCTestCase {
       problems.count, 1, "A failed statfs is a failure of the disk protection, not silence.")
     // `first`, not `[0]`: if this assertion failed, the index would abort the
     // WHOLE run with a fatal error instead of reporting one failed test.
-    // The exact wording belongs to `BackupHealth`, so only its presence is checked here.
-    XCTAssertFalse(problems.first?.summary.isEmpty ?? true)  // TODO(merge): exact BackupHealth text
+    XCTAssertEqual(problems.first?.summary, "Cannot measure free space on the Mac's disk")
 
     XCTAssertTrue(
       BackupHealth.unmeasuredLocalDiskProblems(localFreeGB: 400).isEmpty,
