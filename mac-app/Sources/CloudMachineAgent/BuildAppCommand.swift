@@ -20,6 +20,12 @@ struct BuildApp: AsyncParsableCommand {
       "Buduje CloudMachine.app (Release) - GUI + cloudmachine-agent w Contents/MacOS/, plus launchd/config jako Resources."
   )
 
+  @Flag(
+    name: .long,
+    help:
+      "Binarki dla Apple Silicon i Intela naraz (tak buduje wydanie w CI; lokalnie zbedne).")
+  var universal = false
+
   func run() async throws {
     let macAppRoot = BuildPaths.macAppRoot
     let projectRoot = BuildPaths.projectRoot
@@ -41,15 +47,31 @@ struct BuildApp: AsyncParsableCommand {
     // swift.org installer, TOOLCHAINS env var) moga miec inny `swift` niz
     // ten domyslny z Xcode. Oryginalny bash robil to samo (`swift build`
     // bez sciezki, resolved przez PATH powloki).
-    let buildStatus = try await InteractiveProcess.run(
-      "/usr/bin/env", ["swift", "build", "-c", "release", "--package-path", macAppRoot.path])
+    let swiftArgs =
+      ["build", "-c", "release", "--package-path", macAppRoot.path]
+      + (universal ? ["--arch", "arm64", "--arch", "x86_64"] : [])
+    let buildStatus = try await InteractiveProcess.run("/usr/bin/env", ["swift"] + swiftArgs)
     guard buildStatus == 0 else {
       print("BLAD: swift build zakonczyl sie kodem \(buildStatus).")
       throw ExitCode.failure
     }
 
-    let appBinPath = macAppRoot.appendingPathComponent(".build/release/\(appName)App")
-    let agentBinPath = macAppRoot.appendingPathComponent(".build/release/cloudmachine-agent")
+    // Katalog z binarkami podaje sam SwiftPM: przy kilku architekturach to
+    // nie `.build/release`, tylko katalog zalezny od wersji narzedzi
+    // (`.build/apple/...` albo `.build/out/...`) - zgadywanie go zepsuloby
+    // sie przy pierwszej aktualizacji Xcode.
+    guard
+      let binPathResult = try? await ProcessRunner.run(
+        "/usr/bin/env", ["swift"] + swiftArgs + ["--show-bin-path"]),
+      binPathResult.succeeded
+    else {
+      print("BLAD: swift build --show-bin-path nie podal katalogu z binarkami.")
+      throw ExitCode.failure
+    }
+    let binDir = URL(
+      fileURLWithPath: binPathResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+    let appBinPath = binDir.appendingPathComponent("\(appName)App")
+    let agentBinPath = binDir.appendingPathComponent("cloudmachine-agent")
     for path in [appBinPath, agentBinPath] {
       guard fm.fileExists(atPath: path.path) else {
         print("BLAD: nie znaleziono zbudowanej binarki pod \(path.path)")
