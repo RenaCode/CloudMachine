@@ -100,8 +100,11 @@ keep `mac-studio`, which is where their backup already is.
 
 ### Upgrading and uninstalling
 
-`brew upgrade` replaces the app without restarting the Google Drive mount; the
-agents pick up the new version on their next run. Neither `brew uninstall` nor
+`brew upgrade` replaces the app without restarting the Google Drive mount.
+When Homebrew reopens the app, it reloads the background agents so they run
+the new version; `cloudmachine-agent drive-status` shows `Agents: OK`. If a
+new version does not show up, run `brew update` first - Homebrew refreshes the
+tap only now and then. Neither `brew uninstall` nor
 `--zap` touches the launchd agents or the upload buffer in `~/.cloudmachine`,
 which may hold backups that have not reached Google Drive yet. Run
 `cloudmachine-agent prepare-shutdown` before uninstalling.

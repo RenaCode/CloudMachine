@@ -98,10 +98,12 @@ prints the cask, so a missing tap update cannot go unnoticed.
 - **Does not stop launchd agents** on uninstall. Homebrew runs `uninstall`
   directives on `brew upgrade` too, and stopping `gdrive-buffer` kills the
   rclone process that holds the mount.
-- **Does not reload agents** after an upgrade. Cask install steps run in a
-  sandbox without access to `~/Library/LaunchAgents`, and an upgrade replaces
-  the bundle with new files, after which the agents start normally.
-  `drive-status` reports a watchdog that stopped running.
+- **Does not reload agents itself** - but they must be reloaded: after the
+  bundle is replaced, launchd refuses to start them (`spawn failed`,
+  `OS_REASON_CODESIGNING`). Cask steps run in a sandbox without
+  `~/Library/LaunchAgents`, so the app does it when Homebrew reopens it after
+  the upgrade, and the backup watchdog repairs any agent that cannot start.
+  `drive-status` shows the agents' state.
 - **`zap` leaves `~/.cloudmachine` alone.** It holds the upload buffer, which
   may contain backups that have not reached Google Drive yet.
 

@@ -24,12 +24,12 @@ cask "cloudmachine" do
   # would block the downloaded copy. The cask comes from the author's tap, and
   # the file matches the sha256 above.
   #
-  # The cask does NOT reload the launchd agents: the steps run in the Homebrew
-  # sandbox without access to ~/Library/LaunchAgents. It is not needed -
-  # the upgrade replaces the bundle with new files (new inodes), and that is
-  # exactly the procedure after which the agents start correctly. Should the
-  # watchdog stop anyway, `drive-status` and the app window will show a
-  # "THE WATCHDOG MAY NOT BE RUNNING" warning.
+  # The agents DO need a reload after an upgrade: launchd refuses to start
+  # them from the replaced bundle (spawn failed, OS_REASON_CODESIGNING) - seen
+  # on the 1.3.0 -> 1.3.1 upgrade. The cask cannot do it (its steps run in the
+  # Homebrew sandbox, without ~/Library/LaunchAgents), so the app does: Homebrew
+  # quits it for the upgrade and reopens it, and on launch it reloads the
+  # agents (`AgentRepair`). The backup watchdog repairs them too, every 30 min.
   postflight_steps do
     run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/CloudMachine.app"]
   end
@@ -55,8 +55,9 @@ cask "cloudmachine" do
     remaining setup steps for this Mac, with a button for each.
     See https://github.com/RenaCode/CloudMachine#getting-started
 
-    `brew upgrade` keeps the Google Drive mount running. Afterwards, check
-    that the backup watchdog still runs: `cloudmachine-agent drive-status`.
+    `brew upgrade` keeps the Google Drive mount running; the app reloads the
+    background agents when it reopens. `cloudmachine-agent drive-status`
+    shows "Agents: OK" once they run the new version.
 
     Uninstalling does NOT stop the launchd agents or delete the upload buffer
     in ~/.cloudmachine (it may hold backups not yet sent to Google Drive).

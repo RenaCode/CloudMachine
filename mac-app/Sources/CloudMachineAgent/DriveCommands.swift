@@ -262,6 +262,15 @@ struct BackupHealthCommand: AsyncParsableCommand {
     // `WatchdogHeartbeat`).
     WatchdogHeartbeat.record()
 
+    // The watchdog runs every 30 minutes whether or not anyone opened the app,
+    // so it is also what brings back an agent launchd stopped being able to
+    // start (see `AgentRepair`) - most importantly the mount.
+    let repaired = await AgentRepair.repairBroken()
+    if !repaired.isEmpty {
+      print(
+        L10n.tr("Reloaded agents that could not start: %@", repaired.joined(separator: ", ")))
+    }
+
     if let lastSuccess = report.lastSuccess {
       print(L10n.tr("Last successful backup: %@", BackupHealth.stamp(lastSuccess)))
     } else {
@@ -442,6 +451,15 @@ struct DriveStatus: AsyncParsableCommand {
     // Who watches the watchdog. Without this line "no alarm" meant both
     // "the backup works" and "nobody checked" at once - see `WatchdogHeartbeat`.
     print(L10n.tr("Backup watchdog:  %@", StatusLines.watchdogRun(WatchdogHeartbeat.current())))
+    let broken = await AgentRepair.brokenAgents()
+    print(
+      L10n.tr(
+        "Agents:           %@",
+        broken.isEmpty
+          ? "OK"
+          : L10n.tr(
+            "CANNOT START: %@ - open CloudMachine or run backup-health to reload them",
+            broken.joined(separator: ", "))))
 
     // At the very end and not aligned to the column - this is not another
     // status line but something meant to interrupt the reading. Since recently

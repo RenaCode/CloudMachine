@@ -207,13 +207,23 @@ struct BuildApp: AsyncParsableCommand {
   }
 
   private func resolveBuildNumber(projectRoot: URL) async -> String {
-    if let result = try? await ProcessRunner.run(
-      "/usr/bin/git", ["-C", projectRoot.path, "rev-list", "--count", "HEAD"]),
-      result.succeeded
+    // The release workflow computes it itself: v1.3.1 came out with a date
+    // here instead of the commit count, and nothing said why git failed.
+    if let given = ProcessInfo.processInfo.environment["CM_BUILD_NUMBER"]?
+      .trimmingCharacters(in: .whitespacesAndNewlines), !given.isEmpty
     {
+      return given
+    }
+    let result = try? await ProcessRunner.run(
+      "/usr/bin/git", ["-C", projectRoot.path, "rev-list", "--count", "HEAD"])
+    if let result, result.succeeded {
       let count = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
       if !count.isEmpty { return count }
     }
+    print(
+      L10n.tr(
+        "==> WARNING: git rev-list failed (%@) - using the date as the build number.",
+        result?.stderr.trimmingCharacters(in: .whitespacesAndNewlines) ?? "no answer"))
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyyMMddHHmm"
     return formatter.string(from: Date())
