@@ -32,8 +32,17 @@ final class CloudMachineController: ObservableObject {
   func startAutoRefresh(interval: TimeInterval = 10) {
     refreshTask?.cancel()
     refreshTask = Task { [weak self] in
+      // Homebrew quits the app for an upgrade and reopens it afterwards, so
+      // this is the first code that runs after the bundle was replaced - see
+      // `AgentRepair` for what breaks if nobody reloads the agents.
+      await AgentRepair.afterLaunch()
+      var cycles = 0
       while !Task.isCancelled {
         await self?.refreshAll()
+        // An agent can stop being startable later too (gdrive-buffer only
+        // notices when its rclone exits), so check every few minutes.
+        cycles += 1
+        if cycles % 30 == 0 { await AgentRepair.repairBroken() }
         try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
       }
     }

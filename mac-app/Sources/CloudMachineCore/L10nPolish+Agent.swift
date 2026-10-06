@@ -161,6 +161,14 @@ extension L10nPolish {
       "brakuje: %@",
     "Drive mount:      %@":
       "Montowanie Drive: %@",
+    "==> WARNING: git rev-list failed (%@) - using the date as the build number.":
+      "==> UWAGA: git rev-list nie powiódł się (%@) - jako numer budowy idzie data.",
+    "Agents:           %@":
+      "Agenci:           %@",
+    "CANNOT START: %@ - open CloudMachine or run backup-health to reload them":
+      "NIE STARTUJĄ: %@ - otwórz CloudMachine albo uruchom backup-health, żeby je przeładować",
+    "Reloaded agents that could not start: %@":
+      "Przeładowano agentów, którzy nie mogli wystartować: %@",
     "Drive folder:     %@":
       "Folder na Drive:  %@",
     "Name of this Mac's folder on Google Drive (default: derived from the computer name). Set once; it cannot be changed later.":

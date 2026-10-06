@@ -171,7 +171,15 @@ jobs:
 
       - name: Build CloudMachine.app (universal)
         working-directory: mac-app
-        run: swift run cloudmachine-agent build-app --universal
+        run: |
+          # Commit count as the build number, computed here so a failing git
+          # call inside build-app cannot quietly turn it into a date (v1.3.1).
+          CM_BUILD_NUMBER="$(git rev-list --count HEAD)"
+          if [ -z "$CM_BUILD_NUMBER" ]; then
+            echo "::error::git rev-list --count HEAD returned nothing."; exit 1
+          fi
+          export CM_BUILD_NUMBER
+          swift run cloudmachine-agent build-app --universal
 
       - name: Verify architectures and signature
         working-directory: mac-app

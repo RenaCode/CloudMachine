@@ -88,8 +88,10 @@ final class HealthAlertTests: XCTestCase {
       "the test must not append a single line to \(CMPaths.combinedLogFile.path)")
   }
 
-  /// The other side of the same fix - and the only test in this class that
-  /// DELIBERATELY writes to the production log (one line, marked as a canary).
+  /// The other side of the same fix: a report with the default `log:` must
+  /// reach the file `CMLogger` writes. During tests that file is in a
+  /// temporary directory (see `CMPaths.logDir`), so the canary no longer
+  /// lands in the real `cloudmachine.log`, where it read like an alarm.
   ///
   /// Without this test the fix could have silenced REAL alarms and nobody
   /// would have noticed: a backup failure does not get in the way of daily

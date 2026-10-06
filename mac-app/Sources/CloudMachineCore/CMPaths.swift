@@ -77,9 +77,18 @@ public enum CMPaths {
 
   public static var configPath: URL { appSupportDir.appendingPathComponent("machines.json") }
 
+  /// Under XCTest, a temporary directory of this test process. `swift test`
+  /// used to append to the real `cloudmachine.log`: lock messages from image
+  /// tests and a "BACKUP FAILURE: ... test canary" line from HealthAlertTests,
+  /// which in the production log reads exactly like an alarm.
   public static var logDir: URL {
-    let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-    let dir = base.appendingPathComponent("Logs/CloudMachine")
+    let base =
+      NSClassFromString("XCTestCase") != nil
+      ? FileManager.default.temporaryDirectory
+        .appendingPathComponent("CloudMachineTestLogs-\(ProcessInfo.processInfo.processIdentifier)")
+      : FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Logs")
+    let dir = base.appendingPathComponent("CloudMachine")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
   }
