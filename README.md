@@ -113,7 +113,11 @@ It works two ways:
 
 `brew upgrade` replaces the app without restarting the Google Drive mount.
 When Homebrew reopens the app, it reloads the background agents so they run
-the new version; `cloudmachine-agent drive-status` shows `Agents: OK`. If a
+the new version; `cloudmachine-agent drive-status` shows `Agents: OK`. Changes
+to the mount itself wait for its next start - a restart of the Mac, with
+`prepare-shutdown` before it. One such change is rclone's control interface
+moving to a private socket: until the restart `drive-status` reports
+`Remote control: OPEN on 127.0.0.1:5572`. If a
 new version does not show up, run `brew update` first - Homebrew refreshes the
 tap only now and then. Neither `brew uninstall` nor
 `--zap` touches the launchd agents or the upload buffer in `~/.cloudmachine`,

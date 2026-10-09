@@ -23,6 +23,7 @@ cloudmachine-agent drive-status
 ```
 Tools:            OK
 Drive mount:      OK
+Remote control:   private socket
 Drive folder:     gdrive:CloudMachine/mac-studio
 Image attached:   OK  (/Volumes/CloudMachine)
 Cache on disk:    103 GB of 100G

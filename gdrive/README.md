@@ -157,5 +157,3 @@ swift run cloudmachine-poc pullplug --clean
 - Whether `tmutil setdestination` accepts a destination outside `/Volumes`. That
   determines whether the need for manual intervention after an unclean detach
   can be removed.
-- Whether `--rc-no-auth` on the loopback interface is acceptable. Any local
-  process can control the mount through that interface.

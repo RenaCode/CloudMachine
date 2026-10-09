@@ -98,6 +98,146 @@ final class DriveLayerTests: XCTestCase {
     XCTAssertTrue(args.contains("--rc"))
   }
 
+  // MARK: - Remote control interface
+
+  /// REGRESSION 09.10.2026: the interface listened on 127.0.0.1:5572 with no
+  /// password, so any web page could POST `operations/purge` on the backup
+  /// folder. It must listen on the private socket and nowhere else.
+  func testRemoteControlListensOnlyOnThePrivateSocket() {
+    let args = DriveBufferService.mountArguments()
+    func value(_ flag: String) -> String? {
+      args.firstIndex(of: flag).map { args[$0 + 1] }
+    }
+    XCTAssertEqual(value("--rc-addr"), "unix://\(DriveBufferService.rcSocket.path)")
+    XCTAssertEqual(
+      DriveBufferService.rcSocket.deletingLastPathComponent().path, DriveBufferService.runDir.path)
+    XCTAssertFalse(
+      args.contains {
+        $0.contains("127.0.0.1") || $0.contains(":5572") || $0.contains("localhost")
+      },
+      "the mount still listens on TCP: \(args)")
+    XCTAssertEqual(args.filter { $0 == "--rc-addr" }.count, 1)
+  }
+
+  /// The clients must go where the server listens; the old address only while
+  /// a mount from before the socket is still running.
+  func testClientsFollowTheMount() {
+    XCTAssertEqual(
+      DriveBufferService.rcClientArguments(.socket),
+      ["--unix-socket", DriveBufferService.rcSocket.path])
+    XCTAssertEqual(DriveBufferService.rcClientArguments(.legacyTCP), ["--url", "127.0.0.1:5572"])
+  }
+
+  /// rclone cannot bind a longer path - the mount would never start.
+  func testSocketPathFitsMacOS() {
+    XCTAssertLessThanOrEqual(
+      DriveBufferService.rcSocket.path.utf8.count, DriveBufferService.socketPathLimit)
+  }
+
+  /// The source has one way to the interface. A call built by hand would keep
+  /// talking to the old address, i.e. a watchdog blind after the next restart.
+  func testNoCallerBuildsItsOwnRCAddress() throws {
+    let sources = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("Sources")
+    let files = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)!
+      .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+    XCTAssertFalse(files.isEmpty)
+    for file in files {
+      let text = try String(contentsOf: file, encoding: .utf8)
+      for line in text.split(separator: "\n")
+      where !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
+        XCTAssertFalse(
+          line.contains("[\"rc\", "),
+          "\(file.lastPathComponent): rclone rc called directly: \(line)")
+      }
+    }
+  }
+
+  private func shortTempDir() throws -> URL {
+    // A socket path must stay under 104 bytes, so not the long scratch paths.
+    let dir = URL(fileURLWithPath: "/tmp/cm-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+  }
+
+  private func bindSocket(_ path: String, listening: Bool) -> Int32 {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let bytes = Array(path.utf8)
+    withUnsafeMutableBytes(of: &address.sun_path) { raw in
+      raw.copyBytes(from: bytes)
+      raw[bytes.count] = 0
+    }
+    let bound = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+      }
+    }
+    XCTAssertEqual(bound, 0)
+    if listening { XCTAssertEqual(Darwin.listen(fd, 1), 0) }
+    return fd
+  }
+
+  /// A socket left by an rclone that crashed makes the next start fail with
+  /// "address already in use" - under KeepAlive, a mount that never returns.
+  func testStaleSocketIsRemovedBeforeStart() throws {
+    let base = try shortTempDir()
+    defer { try? FileManager.default.removeItem(at: base) }
+    let run = base.appendingPathComponent("run")
+    let sock = run.appendingPathComponent("rc.sock")
+    try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+    close(bindSocket(sock.path, listening: false))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: sock.path))
+
+    try DriveBufferService.prepareRCSocketDirectory(run, socket: sock)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: sock.path))
+  }
+
+  /// A socket someone listens on belongs to a running rclone - not ours to take.
+  func testLiveSocketIsLeftAlone() throws {
+    let base = try shortTempDir()
+    defer { try? FileManager.default.removeItem(at: base) }
+    let run = base.appendingPathComponent("run")
+    let sock = run.appendingPathComponent("rc.sock")
+    try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+    let fd = bindSocket(sock.path, listening: true)
+    defer { close(fd) }
+
+    try DriveBufferService.prepareRCSocketDirectory(run, socket: sock)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: sock.path))
+  }
+
+  /// Other users must not reach the socket - also when the directory existed
+  /// with looser permissions.
+  func testSocketDirectoryIsPrivate() throws {
+    let base = try shortTempDir()
+    defer { try? FileManager.default.removeItem(at: base) }
+    let run = base.appendingPathComponent("run")
+    try FileManager.default.createDirectory(
+      at: run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+
+    try DriveBufferService.prepareRCSocketDirectory(
+      run, socket: run.appendingPathComponent("rc.sock"))
+    let mode = try FileManager.default.attributesOfItem(atPath: run.path)[.posixPermissions] as? Int
+    XCTAssertEqual(mode, 0o700)
+  }
+
+  func testTooLongSocketPathStopsTheStart() {
+    let run = URL(fileURLWithPath: "/tmp/" + String(repeating: "x", count: 120))
+    XCTAssertThrowsError(
+      try DriveBufferService.prepareRCSocketDirectory(
+        run, socket: run.appendingPathComponent("rc.sock")))
+  }
+
+  func testStatusNamesTheOldOpenInterface() {
+    XCTAssertTrue(
+      StatusLines.remoteControl(.legacyTCP, mounted: true).contains("OPEN"))
+    XCTAssertFalse(StatusLines.remoteControl(.socket, mounted: true).contains("OPEN"))
+    XCTAssertFalse(StatusLines.remoteControl(.legacyTCP, mounted: false).contains("OPEN"))
+  }
+
   /// 02.10.2026: change notifications from Drive (every minute by default)
   /// invalidated the `bands` directory after every upload of our own, and
   /// reloading it held the lock for ~42 s - the whole mount stood still every

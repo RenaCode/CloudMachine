@@ -26,6 +26,8 @@ final class CloudMachineController: ObservableObject {
   /// good as one from five seconds ago.
   private static let backupCycleInterval: TimeInterval = 300
   private var backupCycleCheckedAt: Date?
+  /// One failed read of the Time Machine preferences is not "no Full Disk Access".
+  private var preferencesReads = BackupHealth.ReadConfirmation()
 
   // MARK: - Refresh cycle
 
@@ -101,14 +103,20 @@ final class CloudMachineController: ObservableObject {
     let readiness = CMTooling.checkReadiness()
     status.dependencyState =
       readiness.ready ? .ready : .missing(readiness.missing, readiness.remedies)
-    status.remoteConfigured = await RemoteConfigurer.isConfigured(
+    // No answer keeps what we knew: flipping to "not connected" would offer
+    // the "Connect Google Drive" card on a working installation.
+    if let configured = await RemoteConfigurer.isConfigured(
       remoteName: DriveBufferService.remoteName)
+    {
+      status.remoteConfigured = configured
+    }
     // A REAL read of the file that actually matters - see
     // `BackupHealth.preferencesReadable`. Previously this was
     // `isReadableFile` (that is, `access(R_OK)`) on the DIRECTORY
     // `~/Library/Application Support/com.apple.TCC`: the wrong path and a check
     // that proves nothing under TCC.
-    status.hasFullDiskAccess = BackupHealth.preferencesReadable()
+    status.hasFullDiskAccess = preferencesReads.readable(
+      after: BackupHealth.preferencesReadable(), shown: status.hasFullDiskAccess)
     status.driveFolderPath = "\(DriveBufferService.remoteName):\(DriveBufferService.remotePath)"
     if !status.remoteConfigured, status.suggestedDriveFolder.isEmpty {
       let key = await MachineIdentity.currentKey()

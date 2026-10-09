@@ -358,6 +358,10 @@ struct DriveStatus: AsyncParsableCommand {
     print(L10n.tr("Drive mount:      %@", StatusLines.mounted(mounted)))
     print(
       L10n.tr(
+        "Remote control:   %@",
+        StatusLines.remoteControl(DriveBufferService.rcTransport, mounted: mounted)))
+    print(
+      L10n.tr(
         "Drive folder:     %@",
         "\(DriveBufferService.remoteName):\(DriveBufferService.remotePath)"))
     // Since 26.09.2026 the readability probe has a time limit - which is why

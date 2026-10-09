@@ -47,7 +47,9 @@ public enum DriveFolder {
   /// backup lives under the legacy name. Weaker traces were rejected: the
   /// buffer directory appears after any mount attempt, and the old
   /// `mount-desired.state` is no longer written by anything.
-  static func hasLegacyInstallation() async -> Bool {
+  ///
+  /// `nil` = rclone did not answer; `decide` then refuses rather than guess.
+  static func hasLegacyInstallation() async -> Bool? {
     await RemoteConfigurer.isConfigured(remoteName: DriveBufferService.remoteName)
   }
 
@@ -65,10 +67,11 @@ public enum DriveFolder {
   /// - `existing`: the name already stored, if any.
   /// - `requested`: a name passed with `--folder`, if any.
   /// - `legacyEvidence`: `hasLegacyInstallation()`, asked before the remote
-  ///   is created.
+  ///   is created. `nil` = not known; that refuses whenever the answer would
+  ///   decide the name.
   /// - `machineKey`: `MachineIdentity` key, the default for a new Mac.
   public static func decide(
-    existing: String?, requested: String?, legacyEvidence: Bool, machineKey: String
+    existing: String?, requested: String?, legacyEvidence: Bool?, machineKey: String
   ) -> Decision {
     if let requested, !isValid(requested) {
       return .refuse(
@@ -81,6 +84,15 @@ public enum DriveFolder {
         L10n.tr(
           "This Mac already backs up to folder '%@'. Switching to '%@' would start a new, empty backup and orphan the existing one, so nothing was changed.",
           existing, requested))
+    }
+    // Not knowing whether this is an old installation is not "it is a new
+    // one": a wrong guess gives a backup that lives in `mac-studio` a new,
+    // empty folder - the very loss this file exists to prevent.
+    guard let legacyEvidence else {
+      return .refuse(
+        L10n.tr(
+          "Could not check whether this Mac already has a CloudMachine installation (rclone did not answer), so no folder was chosen. Try again in a moment."
+        ))
     }
     if legacyEvidence {
       guard let requested, requested != legacyName else { return .assign(legacyName) }
