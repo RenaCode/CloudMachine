@@ -450,6 +450,62 @@ public enum BackupHealth {
     (try? Data(contentsOf: URL(fileURLWithPath: preferencesFile))) != nil
   }
 
+  /// How many times the Time Machine preferences are read before "cannot read"
+  /// counts, and how long to wait between the reads.
+  ///
+  /// One failed read is not evidence: on 08.10.2026 at 19:52, two minutes into
+  /// a backup, the watchdog could not read the file and reported "most often
+  /// Full Disk Access is missing" - while the runs 30 minutes before and after
+  /// read it fine. backupd rewrites this file during a backup, and a read can
+  /// land in the middle. Missing Full Disk Access fails EVERY read, so asking
+  /// again costs a real alarm only these seconds, never the alarm itself.
+  public static let preferencesReadAttempts = 3
+  public static let preferencesRetryPause: TimeInterval = 5
+
+  /// The file read and parsed; `nil` for either failure.
+  static func loadPreferences(_ path: String) -> [String: Any]? {
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+    return (try? PropertyListSerialization.propertyList(from: data, format: nil))
+      as? [String: Any]
+  }
+
+  /// Reads until one read works, at most `attempts` times. `nil` only when
+  /// every read failed. Pure in its inputs, so the confirmation can be tested.
+  static func readPreferences(
+    _ read: () -> [String: Any]?, attempts: Int = preferencesReadAttempts,
+    pause: () async -> Void
+  ) async -> [String: Any]? {
+    for attempt in 1...max(1, attempts) {
+      if let plist = read() { return plist }
+      if attempt < attempts { await pause() }
+    }
+    return nil
+  }
+
+  /// The panel's "Full Disk Access" answer, which reads the file every 10 s:
+  /// it says "missing" only after `required` failed reads in a row, and
+  /// "granted" again at the first good one. Without it a read landing in a
+  /// backupd rewrite brought back the "Grant Full Disk Access" setup step for
+  /// one refresh. Until the first failure is confirmed the earlier answer
+  /// stands - and at launch that is `false`, so a missing permission still
+  /// shows from the start.
+  public struct ReadConfirmation: Equatable, Sendable {
+    public let required: Int
+    public private(set) var failuresInARow = 0
+
+    public init(required: Int = 2) { self.required = required }
+
+    /// The answer to show after this read, given the one shown so far.
+    public mutating func readable(after readSucceeded: Bool, shown: Bool) -> Bool {
+      if readSucceeded {
+        failuresInARow = 0
+        return true
+      }
+      failuresInARow += 1
+      return failuresInARow >= required ? false : shown
+    }
+  }
+
   /// `preferencesFile` can be replaced so that the WHOLE watchdog path can be
   /// run on a known bad sample - reading the file, parsing, choosing the
   /// destination, assessment, reporting, exit code - without breaking the
@@ -458,14 +514,14 @@ public enum BackupHealth {
   /// failures in this project were.
   public static func currentReport(
     now: Date = Date(), maxAgeHours: Double = BackupHealth.maxAgeHours,
-    preferencesFile: String = BackupHealth.preferencesPath
+    preferencesFile: String = BackupHealth.preferencesPath,
+    preferencesRetryPause: TimeInterval = BackupHealth.preferencesRetryPause
   ) async -> Report {
-    let plist =
-      (try? Data(contentsOf: URL(fileURLWithPath: preferencesFile)))
-      .flatMap {
-        try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any]
-      }
-      ?? nil
+    let plist = await readPreferences(
+      { loadPreferences(preferencesFile) },
+      pause: {
+        try? await Task.sleep(nanoseconds: UInt64(preferencesRetryPause * 1_000_000_000))
+      })
 
     guard let plist else {
       return Report(

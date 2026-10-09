@@ -76,7 +76,7 @@ jobs:
       skip: ${{ steps.decide.outputs.skip }}
       version: ${{ steps.decide.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - id: decide
         run: |
           base="$(tr -d '[:space:]' < mac-app/VERSION)"
@@ -127,7 +127,7 @@ jobs:
       # written into mac-app/VERSION, which would mark every release dirty.
       CM_RELEASE_VERSION: ${{ needs.decide.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -257,7 +257,7 @@ jobs:
 
       - name: Upload artifacts (dry run)
         if: env.IS_RELEASE != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cloudmachine-${{ env.VERSION }}-dry-run
           path: |
@@ -267,7 +267,7 @@ jobs:
 
       - name: Publish GitHub Release
         if: env.IS_RELEASE == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           # Creates the tag on this commit when the run did not start from one.
           tag_name: v${{ env.VERSION }}
@@ -290,7 +290,7 @@ jobs:
 
       - name: Check out tap
         if: env.IS_RELEASE == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: RenaCode/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}

@@ -131,6 +131,7 @@ extension L10nPolish {
     "not read": "nie odczytano",
     "%@ in progress, %@ queued": "%@ w toku, %@ w kolejce",
     "Everything uploaded": "Wszystko wysłane",
+    "%@ fragments abandoned - only on this Mac": "%@ fragmentów porzuconych - tylko na tym Macu",
     "File upload errors": "Błędy wysyłki plików",
     "Space on Google Drive": "Miejsce na Google Drive",
     "Out of space": "Brak miejsca",

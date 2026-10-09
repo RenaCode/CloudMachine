@@ -250,10 +250,60 @@ final class BackupHealthTests: XCTestCase {
   /// An unreadable file must NOT look like a healthy cycle.
   func testUnreadableFileDoesNotPassForSuccess() async {
     let report = await BackupHealth.currentReport(
-      preferencesFile: "/no/such/file.plist")
+      preferencesFile: "/no/such/file.plist", preferencesRetryPause: 0)
     XCTAssertFalse(report.healthy)
     XCTAssertTrue(
       report.problems.contains { $0.summary.contains("Time Machine preferences") })
+  }
+
+  // MARK: - Confirming an unreadable file
+
+  /// REGRESSION 08.10.2026 19:52: one failed read during a backup gave "most
+  /// often Full Disk Access is missing", with the permission in place.
+  func testOneFailedReadIsNotAnAlarm() async {
+    var reads = 0
+    var pauses = 0
+    let plist = await BackupHealth.readPreferences(
+      {
+        reads += 1
+        return reads == 1 ? nil : ["ok": true]
+      }, pause: { pauses += 1 })
+    XCTAssertNotNil(plist)
+    XCTAssertEqual(reads, 2)
+    XCTAssertEqual(pauses, 1)
+  }
+
+  /// A missing permission fails every read - the alarm still comes, after the
+  /// same number of attempts every time.
+  func testEveryReadFailingIsStillAnAlarm() async {
+    var reads = 0
+    let plist = await BackupHealth.readPreferences(
+      {
+        reads += 1
+        return nil
+      }, pause: {})
+    XCTAssertNil(plist)
+    XCTAssertEqual(reads, BackupHealth.preferencesReadAttempts)
+    XCTAssertGreaterThan(BackupHealth.preferencesReadAttempts, 1)
+  }
+
+  func testPanelNeedsTwoFailedReadsInARow() {
+    var confirmation = BackupHealth.ReadConfirmation()
+    var shown = confirmation.readable(after: true, shown: false)
+    XCTAssertTrue(shown)
+    shown = confirmation.readable(after: false, shown: shown)
+    XCTAssertTrue(shown, "one failed read flipped the panel to 'no Full Disk Access'")
+    shown = confirmation.readable(after: true, shown: shown)
+    shown = confirmation.readable(after: false, shown: shown)
+    XCTAssertTrue(shown, "failures that are not in a row must not add up")
+    shown = confirmation.readable(after: false, shown: shown)
+    XCTAssertFalse(shown)
+  }
+
+  /// At launch nothing has been read yet - a missing permission must show at once.
+  func testPanelStartsFromMissing() {
+    var confirmation = BackupHealth.ReadConfirmation()
+    XCTAssertFalse(confirmation.readable(after: false, shown: false))
   }
 
   // MARK: - Reporting

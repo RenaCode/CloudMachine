@@ -192,7 +192,7 @@ private struct DashboardContent: View {
     case .storage:
       let tone = uploadTone(status.buffer.uploadState)
         .worst(freeSpaceTone)
-        .worst(status.budgetLimitGB == nil || budgetOK ? .success : .warning)
+        .worst(budgetTone == .neutral ? .success : budgetTone)
       return tone == .success ? nil : tone
     }
   }
@@ -539,7 +539,7 @@ private struct DashboardContent: View {
         }
       }
       .buttonStyle(PrimaryGradientButtonStyle())
-      .disabled(!status.healthy || status.isBusy)
+      .disabled(!status.canStartBackup)
     } else {
       Button(action: { Task { await controller.stopBackup() } }) {
         HStack(spacing: 6) {
@@ -912,7 +912,7 @@ private struct DashboardContent: View {
       row(
         L10n.tr("Used on Google Drive"),
         MachineBudget.summary(limitGB: status.budgetLimitGB, usage: status.budgetUsage),
-        tone: budgetOK ? .success : .danger)
+        tone: budgetTone)
 
       if let usage = status.budgetUsage {
         Text(
@@ -970,13 +970,21 @@ private struct DashboardContent: View {
         commandBox(command)
       }
     }
-    .toneCard(budgetOK ? .neutral : .warning)
+    .toneCard(budgetTone == .success || budgetTone == .neutral ? .neutral : .warning)
   }
 
-  private var budgetOK: Bool {
-    guard let limit = status.budgetLimitGB, let usage = status.budgetUsage
-    else { return status.budgetLimitGB != nil }
-    return MachineBudget.level(usageBytes: usage.bytes, limitGB: limit) == .ok
+  /// Green only for a measurement that is recent and within the limit. Until
+  /// 09.10.2026 "no measurement" was green as well, with the text "usage not
+  /// measured yet" next to it, and a measurement from days ago passed as
+  /// current. No limit is a choice, not a fault - neutral, as the sidebar
+  /// already treated it.
+  private var budgetTone: StatusTone {
+    switch MachineBudget.standing(limitGB: status.budgetLimitGB, usage: status.budgetUsage) {
+    case .notSet: return .neutral
+    case .unmeasured, .near: return .warning
+    case .ok: return .success
+    case .over: return .danger
+    }
   }
 
   // MARK: - Buffer and Upload Details
@@ -1019,20 +1027,15 @@ private struct DashboardContent: View {
       row(
         L10n.tr("Free space on the local volume"),
         status.buffer.freeDiskGB.map { L10n.tr("%@ GB", "\($0)") } ?? L10n.tr("not measured"),
-        tone: (status.buffer.freeDiskGB ?? 0) > 80 ? .success : .danger)
+        tone: freeSpaceTone)
 
       Divider().background(RenaCodeTheme.borderGlass)
 
+      // The tone of the upload verdict, not its own: a queue at zero with the
+      // daily limit used up is not green - nothing is going out.
       row(
-        L10n.tr("Cloud sync queue"),
-        !status.buffer.queueKnown
-          ? L10n.tr("not read")
-          : (status.buffer.draining
-            ? L10n.tr(
-              "%@ in progress, %@ queued", "\(status.buffer.uploadsInProgress)",
-              "\(status.buffer.uploadsQueued)")
-            : L10n.tr("Everything uploaded")),
-        tone: status.buffer.queueKnown && status.buffer.erroredFiles == 0 ? .success : .danger)
+        L10n.tr("Cloud sync queue"), status.buffer.queueSummary,
+        tone: uploadTone(status.buffer.uploadState))
 
       if status.buffer.erroredFiles > 0 {
         Divider().background(RenaCodeTheme.borderGlass)

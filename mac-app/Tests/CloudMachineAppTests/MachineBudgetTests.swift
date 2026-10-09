@@ -82,4 +82,69 @@ final class MachineBudgetTests: XCTestCase {
       MachineBudget.summary(limitGB: 1000, usage: .init(bytes: 589 * gib, measuredAt: Date())),
       "589 of 1000 GB used (59%)")
   }
+
+  // MARK: - Entries from before the folder was the key
+
+  private func productionLikeConfig() -> MachinesConfig {
+    var config = MachinesConfig.empty
+    config.machines = [
+      MachineEntry(key: "marcin-mac-studio-3", displayName: "Marcin Mac Studio 3", limitGB: 3500)
+    ]
+    return config
+  }
+
+  /// REGRESSION 09.10.2026: the limit stood in machines.json under the machine
+  /// key and was looked up only under the folder - so it did nothing.
+  func testLimitUnderTheMachineKeyCounts() {
+    XCTAssertEqual(
+      MachineBudget.limitGB(
+        in: productionLikeConfig(), folder: "mac-studio", machineKey: "marcin-mac-studio-3"),
+      3500)
+  }
+
+  func testFolderEntryWinsOverTheMachineKey() {
+    var config = productionLikeConfig()
+    config.machines.append(MachineEntry(key: "mac-studio", displayName: "x", limitGB: 1000))
+    XCTAssertEqual(
+      MachineBudget.limitGB(in: config, folder: "mac-studio", machineKey: "marcin-mac-studio-3"),
+      1000)
+  }
+
+  func testAnotherMacsEntryIsNotThisMacsLimit() {
+    XCTAssertNil(
+      MachineBudget.limitGB(in: productionLikeConfig(), folder: "imac", machineKey: "imac"))
+    XCTAssertNil(MachineBudget.limitGB(in: productionLikeConfig(), folder: "imac", machineKey: nil))
+  }
+
+  /// Setting the limit moves the old entry, so one Mac is not counted twice.
+  func testSettingTheLimitMovesTheOldEntry() {
+    let config = MachineBudget.withLimit(
+      3000, folder: "mac-studio", machineKey: "marcin-mac-studio-3", in: productionLikeConfig())
+    XCTAssertEqual(config.machines.map(\.key), ["mac-studio"])
+    XCTAssertEqual(config.machines.first?.limitGB, 3000)
+    XCTAssertEqual(config.machines.first?.displayName, "Marcin Mac Studio 3")
+    XCTAssertEqual(config.allocatedGB, 3000)
+  }
+
+  // MARK: - Standing for the panel
+
+  /// REGRESSION 09.10.2026: "usage not measured yet" was shown green, and a
+  /// measurement from three days before passed for a current one.
+  func testNoOrOldMeasurementIsNotGreen() {
+    let now = Date()
+    XCTAssertEqual(MachineBudget.standing(limitGB: 3500, usage: nil, now: now), .unmeasured)
+    let old = MachineBudget.Usage(bytes: 10 * gib, measuredAt: now.addingTimeInterval(-3 * 86400))
+    XCTAssertEqual(MachineBudget.standing(limitGB: 3500, usage: old, now: now), .unmeasured)
+  }
+
+  func testRecentMeasurementIsJudged() {
+    let now = Date()
+    func usage(_ gb: UInt64) -> MachineBudget.Usage {
+      .init(bytes: gb * gib, measuredAt: now.addingTimeInterval(-3600))
+    }
+    XCTAssertEqual(MachineBudget.standing(limitGB: 1000, usage: usage(500), now: now), .ok)
+    XCTAssertEqual(MachineBudget.standing(limitGB: 1000, usage: usage(950), now: now), .near)
+    XCTAssertEqual(MachineBudget.standing(limitGB: 1000, usage: usage(1100), now: now), .over)
+    XCTAssertEqual(MachineBudget.standing(limitGB: nil, usage: usage(1100), now: now), .notSet)
+  }
 }
