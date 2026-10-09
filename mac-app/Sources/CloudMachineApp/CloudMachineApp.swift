@@ -16,8 +16,11 @@ struct CloudMachineApp: App {
       DashboardView()
         .environmentObject(controller)
         .preferredColorScheme(.dark)
-        .frame(minWidth: 780, minHeight: 560)
+        .frame(minWidth: 820, minHeight: 600)
     }
-    .defaultSize(width: 920, height: 680)
+    // No title bar: the sidebar runs up under the traffic lights, as in the
+    // RenaCode window design.
+    .windowStyle(.hiddenTitleBar)
+    .defaultSize(width: 980, height: 760)
   }
 }
