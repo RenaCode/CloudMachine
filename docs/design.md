@@ -11,7 +11,7 @@ Measured on a Mac Studio, 332 Mbit/s uplink:
 | Full backup | 210 GiB, about two hours |
 | Incremental backup | ~370 MB of new data, a few minutes |
 | Google Drive used | 589 GiB (29 Sep 2026) — of which only 417 GiB is live data |
-| Actually uploaded per day | **327–595 GB** — see below |
+| Actually uploaded per day | **327–793 GB** — see below |
 
 That last row is not a typo, and it is the number that surprises people. What
 Time Machine *writes* and what rclone *sends* are different quantities, because
@@ -24,6 +24,16 @@ apart**, giving 7.6× to 24× more traffic than the underlying change. On 14–1
 September 2026 that put 823 GB on the wire in 24 hours for roughly 45 GB of real
 change — past Google's 750 GB/day write ceiling, which blocked *all* uploads for
 several hours.
+
+It is not history either. Counted from `rclone.log` on 9 October 2026, with
+`--vfs-write-back 10m` in place: 630 GB went out in the last 24 hours, and the
+highest rolling 24-hour window over eight days reached **793 GB**; 36 of the
+193 hourly windows were above 750 GB. Not a single upload-limit error followed,
+so Google is not enforcing the ceiling on this account right now — but nothing
+here warns before it starts to: the app only notices the limit once uploads
+have stalled on it (`logShowsUploadStalled`). The count is `Copied` lines × 32
+MiB, so a share of smaller-than-a-band uploads may put the true figure
+somewhat lower.
 
 So the daily cap is not just a first-backup concern, and it does not require a
 source larger than 750 GB. A 265 GiB backup reached it. `--vfs-write-back` is
@@ -103,6 +113,26 @@ block for the full ten minutes and time out. `expireQueuedUploads()` pulls those
 expiries forward through rclone's `vfs/queue-set-expiry`, so detach still drains
 in seconds. Attach does the same before waiting, since `hdiutil` on FUSE-T
 rejects mounts more often while rclone is busy.
+
+**Remote control on a private socket.** The queue, the expiries and the buffer
+guard all go through rclone's remote control interface, which can also delete
+anything in the backup folder (`operations/purge`) — with the trash off, for
+good. Until 9 October 2026 it listened on `127.0.0.1:5572` without a password,
+and loopback is not private: a web page can POST a form there without a CORS
+preflight, and rclone does not check `Origin`. It now listens only on
+`~/.cloudmachine/run/rc.sock`, in a directory only the owner can enter, which a
+browser cannot reach at all. A mount started by an older version keeps the TCP
+address until it restarts; `drive-status` says so on its "Remote control" line.
+
+The Drive trash stays off, after weighing it as a second line. Bands are
+rewritten in place, so uploads would not fill it; deletions would — and the big
+ones are deliberate: re-creating the image, clearing an old folder. Each would
+keep hundreds of GB counted against the account for 30 days, where running out
+of space stops the mount (`storageQuotaExceeded`), and the free-space alarm
+(`operations/about` counts the trash) would report space no folder shows. What
+the trash would still catch after the socket is a process of this same user
+deleting through the mount — and such a process can just as well run its own
+`rclone purge --drive-use-trash=false` with the same `rclone.conf`.
 
 **Its own rclone.** The Homebrew build is compiled without FUSE and refuses to
 mount outright. CloudMachine installs the official binary beside it, verified by

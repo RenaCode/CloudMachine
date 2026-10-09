@@ -121,4 +121,40 @@ final class TimeMachineStatusTests: XCTestCase {
       TimeMachineStatus.allDestinationIDs(destinationInfoOutput: twoDestinationsInfo),
       ["DEAD2007-8BC5-4D7B-BCF3-A5646B636CCD", "C4B0056F-6CE8-486E-8726-75B45E2E7A56"])
   }
+
+  // MARK: - What counts as an answer
+
+  /// REGRESSION 09.10.2026: an empty stdout (lost by `ProcessRunner`, or from a
+  /// failed tmutil) was parsed as "no destination" and raised the "destination
+  /// changed" alarm.
+  func testEmptyOutputIsNoAnswer() {
+    XCTAssertNil(TimeMachineStatus.answer(from: ProcessResult(stdout: "", stderr: "", exitCode: 0)))
+    XCTAssertNil(
+      TimeMachineStatus.answer(from: ProcessResult(stdout: "\n", stderr: "", exitCode: 0)))
+  }
+
+  func testFailedTmutilIsNoAnswerEvenWithOutput() {
+    XCTAssertNil(
+      TimeMachineStatus.answer(
+        from: ProcessResult(stdout: idleStatus, stderr: "tmutil: error", exitCode: 1)))
+  }
+
+  func testWorkingTmutilIsAnAnswer() {
+    XCTAssertEqual(
+      TimeMachineStatus.answer(
+        from: ProcessResult(stdout: twoDestinationsInfo, stderr: "", exitCode: 0)),
+      twoDestinationsInfo)
+  }
+
+  /// "No destination" is an answer whatever exit code tmutil pairs it with -
+  /// otherwise a Mac without a destination would read as "tmutil is silent".
+  func testNoDestinationsSentenceIsAnAnswer() {
+    for code: Int32 in [0, 1] {
+      let answer = TimeMachineStatus.answer(
+        from: ProcessResult(
+          stdout: "tmutil: No destinations configured.\n", stderr: "", exitCode: code))
+      XCTAssertNotNil(answer)
+      XCTAssertNil(TimeMachineStatus.currentDestinationMountPoint(destinationInfoOutput: answer!))
+    }
+  }
 }

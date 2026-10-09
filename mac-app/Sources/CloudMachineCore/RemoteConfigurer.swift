@@ -12,11 +12,26 @@ public enum RemoteConfigurer {
   /// read the same configuration file, but the rest of the system runs on ours
   /// - and the state shown to the user must describe what we really use, not
   /// an incidental second installation that may one day not be there.
-  public static func isConfigured(remoteName: String) async -> Bool {
-    guard let result = try? await CMTooling.runRclone(["listremotes"], timeout: 30) else {
-      return false
+  ///
+  /// `nil` = rclone DID NOT ANSWER (time limit, a failed start, an unreadable
+  /// or broken `rclone.conf` - which rclone reports with exit code 1). Until
+  /// 09.10.2026 all of that came out as `false`, i.e. "there is no remote",
+  /// and the two guards built on this answer opened on it: `connect` went on
+  /// to overwrite the working token, and `DriveFolder` took an installation
+  /// whose backup lives in `mac-studio` for a new Mac and gave it a new, empty
+  /// folder.
+  public static func isConfigured(remoteName: String) async -> Bool? {
+    remoteListed(remoteName, in: try? await CMTooling.runRclone(["listremotes"], timeout: 30))
+  }
+
+  /// Pure reading of `rclone listremotes`, so the "no answer" cases can be
+  /// tested. One remote per line, as `name:`; a whole line must match, so that
+  /// `mygdrive:` is not taken for `gdrive:`.
+  static func remoteListed(_ remoteName: String, in result: ProcessResult?) -> Bool? {
+    guard let result, result.succeeded else { return nil }
+    return result.stdout.split(whereSeparator: \.isNewline).contains {
+      $0.trimmingCharacters(in: .whitespaces) == "\(remoteName):"
     }
-    return result.stdout.contains("\(remoteName):")
   }
 
   /// Keychain service under which the own OAuth credentials are stored.
@@ -79,7 +94,18 @@ public enum RemoteConfigurer {
     // backup image, created by the previous credential, then becomes
     // invisible and the mount stops finding it. The backup is intact, but
     // inaccessible, which in practice means the same thing.
-    if !replaceExisting, await isConfigured(remoteName: remoteName) {
+    let configured = await isConfigured(remoteName: remoteName)
+    // "Could not check" stops here as firmly as "it exists": both mean we do
+    // not know that there is nothing to overwrite. Even with
+    // `--replace-existing` - the folder decision below needs this answer too.
+    guard let configured else {
+      return CMActionResult(
+        succeeded: false,
+        message: L10n.tr(
+          "Could not check whether remote '%@' already exists (rclone listremotes did not answer or failed), so nothing was changed. Run `%@ listremotes` to see the error, then try again.",
+          remoteName, CMTooling.managedRclonePath.path))
+    }
+    if !replaceExisting, configured {
       return CMActionResult(
         succeeded: false,
         message: L10n.tr(

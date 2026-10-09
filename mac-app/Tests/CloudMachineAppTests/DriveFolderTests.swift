@@ -35,6 +35,28 @@ final class DriveFolderTests: XCTestCase {
     else { return XCTFail("a legacy installation was moved to a new, empty folder") }
   }
 
+  /// REGRESSION 09.10.2026: `rclone listremotes` timing out or failing used to
+  /// read as "no remote", i.e. "a new Mac" - and this Mac, whose backup lives
+  /// in `mac-studio`, would have been given its machine key as a new, empty
+  /// folder.
+  func testUnknownLegacyEvidenceRefusesInsteadOfGuessing() {
+    for requested in [nil, "mac-studio", "marcin-mac-studio-3"] {
+      guard
+        case .refuse = DriveFolder.decide(
+          existing: nil, requested: requested, legacyEvidence: nil,
+          machineKey: "marcin-mac-studio-3")
+      else { return XCTFail("chose a folder without knowing whether a backup already exists") }
+    }
+  }
+
+  /// A stored name does not need the answer at all.
+  func testUnknownLegacyEvidenceDoesNotMatterOnceStored() {
+    XCTAssertEqual(
+      DriveFolder.decide(
+        existing: "macbook-pro", requested: nil, legacyEvidence: nil, machineKey: "x"),
+      .keep("macbook-pro"))
+  }
+
   func testStoredFolderIsKept() {
     XCTAssertEqual(
       DriveFolder.decide(

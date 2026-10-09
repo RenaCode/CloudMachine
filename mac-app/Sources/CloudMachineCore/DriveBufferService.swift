@@ -52,10 +52,67 @@ public enum DriveBufferService {
   /// otherwise a detach would wait as long as this delay.
   public static let writeBackSeconds = 600
 
-  /// Address of rclone's remote control interface. It listens on loopback only,
-  /// but any local process can control the mount through it - if we ever decide
-  /// that is too loose, `--rc-user`/`--rc-pass` have to be added.
-  public static let rcAddress = "127.0.0.1:5572"
+  /// rclone's remote control interface: a unix socket in a directory only this
+  /// user can enter.
+  ///
+  /// Until 09.10.2026 it was `127.0.0.1:5572` with `--rc-no-auth`. "Loopback
+  /// only" did not mean "only us": any web page open in a browser can send a
+  /// form POST there (a "simple request" goes out without a CORS preflight,
+  /// and rclone does not check `Origin`). The answer stays unreadable to the
+  /// page, but the command runs - and the interface offers `operations/purge`
+  /// on the backup folder, with `--drive-use-trash=false`, so nothing to undo.
+  /// Checked on the running mount: `config/listremotes` answered a form POST
+  /// with `Origin: https://evil.example`.
+  ///
+  /// A browser cannot reach a unix socket at all, and other users cannot enter
+  /// `runDir` (0700). `--rc-no-auth` stays: `vfs/queue-set-expiry`, which every
+  /// detach needs, requires it or a password. A password would add nothing
+  /// against the one remaining caller, a process of this same user - it can
+  /// read `rclone.conf`, token included, directly - and every restart that
+  /// rotated it would be a new way for the readers to lose the queue.
+  public static var runDir: URL { root.appendingPathComponent("run") }
+  public static var rcSocket: URL { runDir.appendingPathComponent("rc.sock") }
+
+  /// Where a mount started by CloudMachine 1.3.7 or older still listens. Such a
+  /// mount survives an upgrade (`gdrive-buffer` is deliberately not
+  /// restarted - see `AgentRepair`), and until it is restarted it is the only
+  /// interface there is. Without this fallback the upgrade would leave the
+  /// buffer watchdog and every detach without a queue until the next restart.
+  public static let legacyRCAddress = "127.0.0.1:5572"
+
+  /// Longest path a unix socket address can hold on macOS (`sun_path`, with the
+  /// terminating zero). rclone fails to start with `bind: invalid argument`
+  /// above it.
+  static let socketPathLimit = 103
+
+  public enum RCTransport: Equatable, Sendable {
+    /// The private socket - a mount started by this version.
+    case socket
+    /// The old TCP address - a mount from before the socket, still running.
+    case legacyTCP
+  }
+
+  /// Which interface the running mount listens on. The socket file is there
+  /// exactly as long as a mount of this version has it (`prepare` removes a
+  /// stale one before every start).
+  public static var rcTransport: RCTransport {
+    FileManager.default.fileExists(atPath: rcSocket.path) ? .socket : .legacyTCP
+  }
+
+  /// Arguments that point `rclone rc` at the running mount.
+  static func rcClientArguments(_ transport: RCTransport) -> [String] {
+    switch transport {
+    case .socket: return ["--unix-socket", rcSocket.path]
+    case .legacyTCP: return ["--url", legacyRCAddress]
+    }
+  }
+
+  /// Calls the running mount's remote control interface. The ONLY way to it -
+  /// so that no caller is left on the old address.
+  static func rc(_ method: [String], timeout: TimeInterval) async throws -> ProcessResult {
+    try await CMTooling.runRclone(
+      ["rc"] + rcClientArguments(rcTransport) + method, timeout: timeout)
+  }
 
   /// Above this size the rclone log is trimmed at start-up. rclone does not
   /// rotate its own log, and this project has already lost 3.3 GiB once to a log
@@ -148,13 +205,18 @@ public enum DriveBufferService {
       // Chunk size matched to the image's band size.
       "--drive-chunk-size", "32M",
       // Without this, deleted bands go to Drive's trash and keep counting
-      // towards the storage limit.
+      // towards the storage limit. Kept after 09.10.2026, when the trash was
+      // weighed as a second line against a stray `operations/purge`: a
+      // deliberate deletion (re-creating the image) would then hold hundreds
+      // of GB for 30 days on an account where running out of space stops the
+      // mount. The private socket (see `rcSocket`) keeps such calls out; a
+      // process of this user can bypass the trash with its own rclone anyway.
       "--drive-use-trash=false",
       // After exceeding the daily 750 GB limit rclone is to stop, not spin in
       // 403s until the end of the world.
       "--drive-stop-on-upload-limit",
       "--volname", remoteName,
-      "--rc", "--rc-addr", rcAddress, "--rc-no-auth",
+      "--rc", "--rc-addr", "unix://\(rcSocket.path)", "--rc-no-auth",
       "--log-file", logFile.path,
       "--log-level", "INFO",
     ]
@@ -166,8 +228,65 @@ public enum DriveBufferService {
   public static func prepare() throws -> [String] {
     try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+    try prepareRCSocketDirectory()
     rotateLogIfLarge()
     return mountArguments()
+  }
+
+  public enum PrepareError: LocalizedError {
+    case socketPathTooLong(String)
+
+    public var errorDescription: String? {
+      switch self {
+      case .socketPathTooLong(let path):
+        return L10n.tr(
+          "The remote control socket path is too long for macOS (%@ characters, at most %@): %@",
+          "\(path.utf8.count)", "\(socketPathLimit)", path)
+      }
+    }
+  }
+
+  /// The socket's directory, private, and no stale socket in it.
+  ///
+  /// A socket file outlives an rclone that crashed or was killed, and rclone
+  /// does not remove it: the next start ends with `bind: address already in
+  /// use` (checked on rclone 1.75.1). Under launchd's KeepAlive that is a
+  /// mount that never comes back. So a socket nobody answers on is removed;
+  /// one that answers belongs to an rclone that is still running, and is left
+  /// alone - the new start then fails exactly as a second mount on the same
+  /// TCP port used to.
+  static func prepareRCSocketDirectory(
+    _ directory: URL = runDir, socket: URL = rcSocket
+  ) throws {
+    let path = socket.path
+    guard path.utf8.count <= socketPathLimit else { throw PrepareError.socketPathTooLong(path) }
+    let fm = FileManager.default
+    try fm.createDirectory(
+      at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    // `createDirectory` leaves an existing directory's permissions as they are.
+    try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+    if fm.fileExists(atPath: path), !socketAnswers(path) {
+      try? fm.removeItem(atPath: path)
+    }
+  }
+
+  /// Whether a process is listening on the unix socket at `path`.
+  static func socketAnswers(_ path: String) -> Bool {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let bytes = Array(path.utf8)
+    guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else { return false }
+    withUnsafeMutableBytes(of: &address.sun_path) { raw in
+      raw.copyBytes(from: bytes)
+      raw[bytes.count] = 0
+    }
+    let length = socklen_t(MemoryLayout<sockaddr_un>.size)
+    return withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, length) == 0 }
+    }
   }
 
   private static func rotateLogIfLarge() {
@@ -247,7 +366,7 @@ public enum DriveBufferService {
   ///
   /// NOTE: `--rc-no-auth` is a SERVER flag. The `rclone rc` client does not
   /// accept it and ends with an "unknown flag" error - this has already cost one
-  /// silent breakage of the status view.
+  /// silent breakage of the status view. Hence one way to the interface: `rc`.
   ///
   /// Time limit 60 s, not 30 s: on 23.09.2026 the same call took **36.7 s** with
   /// a clogged buffer (the next one 0.03 s - so sporadic, under load). With 30 s
@@ -262,8 +381,7 @@ public enum DriveBufferService {
   /// second of a frozen window, and the answer will not come anyway.
   public static func queueStats() async -> QueueStats? {
     guard
-      let result = try? await CMTooling.runRclone(
-        ["rc", "--url", rcAddress, "vfs/stats"], timeout: 60),
+      let result = try? await rc(["vfs/stats"], timeout: 60),
       result.succeeded
     else { return nil }
     return parseQueueStats(result.stdout)
@@ -441,8 +559,7 @@ public enum DriveBufferService {
   @discardableResult
   public static func expireQueuedUploads() async -> ExpiryOutcome? {
     guard
-      let result = try? await CMTooling.runRclone(
-        ["rc", "--url", rcAddress, "vfs/queue"], timeout: 60),
+      let result = try? await rc(["vfs/queue"], timeout: 60),
       result.succeeded,
       let ids = parseQueueIDs(result.stdout)
     else { return nil }
@@ -450,9 +567,8 @@ public enum DriveBufferService {
     var moved = 0
     for id in ids {
       // A large negative number instead of zero - that is how rclone itself describes it.
-      let response = try? await CMTooling.runRclone(
-        ["rc", "--url", rcAddress, "vfs/queue-set-expiry", "id=\(id)", "expiry=-1000000000"],
-        timeout: 30)
+      let response = try? await rc(
+        ["vfs/queue-set-expiry", "id=\(id)", "expiry=-1000000000"], timeout: 30)
       if response?.succeeded == true { moved += 1 }
     }
     return ExpiryOutcome(queued: ids.count, moved: moved)

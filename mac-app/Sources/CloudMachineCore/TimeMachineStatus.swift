@@ -59,13 +59,41 @@ public enum TimeMachineStatus {
     do {
       let result = try await ProcessRunner.run(
         "/usr/bin/tmutil", arguments, timeout: commandTimeout)
-      return result.stdout
+      guard let answer = answer(from: result) else {
+        CMLogger.log(
+          "tmutil \(arguments.joined(separator: " ")): NO ANSWER - exit code \(result.exitCode), \(result.stdout.isEmpty ? "empty output" : "\(result.stdout.utf8.count) B of output")"
+        )
+        return nil
+      }
+      return answer
     } catch {
       CMLogger.log(
         "tmutil \(arguments.joined(separator: " ")): NO ANSWER - \(error.localizedDescription)"
       )
       return nil
     }
+  }
+
+  /// Which `tmutil` results count as an answer. Pure, so it can be tested.
+  ///
+  /// Until 09.10.2026 the exit code was not looked at at all, and an EMPTY
+  /// stdout was parsed like any other: `destinationinfo` -> `.none`, i.e. the
+  /// "destination not registered" alarm; `status` -> "no backup in progress".
+  /// Both are answers about Time Machine that tmutil never gave. Every
+  /// subcommand used here prints something when it works - even with no
+  /// destination there is the sentence below - so "nothing" is not an answer.
+  ///
+  /// The one failure that IS an answer: with no destination registered,
+  /// `destinationinfo` says so in words, and we do not rely on which exit
+  /// code it pairs that with across macOS versions.
+  static func answer(from result: ProcessResult) -> String? {
+    if (result.stdout + result.stderr).contains("No destinations configured") {
+      return result.stdout + result.stderr
+    }
+    guard result.succeeded,
+      !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else { return nil }
+    return result.stdout
   }
 
   /// Whether a backup is in progress. `nil` = tmutil did not answer, i.e.

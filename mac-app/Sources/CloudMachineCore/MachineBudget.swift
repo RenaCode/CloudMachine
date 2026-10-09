@@ -28,9 +28,22 @@ public enum MachineBudget {
   // MARK: - The limit
 
   /// The limit of the Mac whose folder is `folder`, if one is set.
-  public static func limitGB(in config: MachinesConfig, folder: String = DriveFolder.name) -> Int? {
-    guard let limit = config.limitGB(forMachineKey: folder), limit > 0 else { return nil }
-    return limit
+  ///
+  /// Also under `machineKey`, the way `machines.json` was keyed before the
+  /// folder became the key. On a Mac set up then, the two differ: on this
+  /// project's own Mac the entry is `marcin-mac-studio-3` with 3500 GB, while
+  /// the folder is `mac-studio`. Until 09.10.2026 only the folder was looked
+  /// up, so the limit was there in the file and nowhere in effect: no usage
+  /// measurement, no 90% / 100% alarm. The folder's own entry wins - it is the
+  /// one `set-limit` writes.
+  public static func limitGB(
+    in config: MachinesConfig, folder: String = DriveFolder.name,
+    machineKey: String? = MachineIdentity.storedKey
+  ) -> Int? {
+    for key in [folder, machineKey].compactMap({ $0 }) {
+      if let limit = config.limitGB(forMachineKey: key), limit > 0 { return limit }
+    }
+    return nil
   }
 
   public static func limitGB() -> Int? { limitGB(in: ConfigStore.load()) }
@@ -45,13 +58,27 @@ public enum MachineBudget {
     case .missing: config = .empty
     case .corrupt: throw BudgetError.configUnreadable
     }
-    config = withLimit(gb, folder: folder, in: config)
+    config = withLimit(gb, folder: folder, machineKey: MachineIdentity.storedKey, in: config)
     try ConfigStore.save(config)
     CMLogger.log("Space limit for Drive folder '\(folder)' set to \(gb) GB")
   }
 
-  static func withLimit(_ gb: Int, folder: String, in config: MachinesConfig) -> MachinesConfig {
+  /// Stores the limit under the folder. An old entry under the machine key is
+  /// moved, not left behind: two entries for one Mac would count twice in
+  /// `allocatedGB` and could disagree.
+  static func withLimit(
+    _ gb: Int, folder: String, machineKey: String? = nil, in config: MachinesConfig
+  ) -> MachinesConfig {
     var config = config
+    if let machineKey, machineKey != folder,
+      let legacy = config.machines.firstIndex(where: { $0.key == machineKey })
+    {
+      let entry = config.machines.remove(at: legacy)
+      if !config.machines.contains(where: { $0.key == folder }) {
+        config.machines.append(
+          MachineEntry(key: folder, displayName: entry.displayName, limitGB: gb))
+      }
+    }
     if let index = config.machines.firstIndex(where: { $0.key == folder }) {
       config.machines[index].limitGB = gb
     } else {
@@ -179,6 +206,33 @@ public enum MachineBudget {
             used, "\(limitGB)"),
           code: "drive-budget-exceeded")
       ]
+    }
+  }
+
+  /// After this long a measurement no longer describes the folder: the
+  /// watchdog measures every `measurementMaxAge`, so twice that means the
+  /// measuring itself has stopped.
+  public static let usageStaleAfter: TimeInterval = 2 * measurementMaxAge
+
+  /// Where this Mac stands against its limit, for the panel.
+  public enum Standing: Equatable {
+    case notSet
+    /// No measurement, or one too old to say anything about now.
+    case unmeasured
+    case ok
+    case near
+    case over
+  }
+
+  public static func standing(limitGB: Int?, usage: Usage?, now: Date = Date()) -> Standing {
+    guard let limitGB else { return .notSet }
+    guard let usage, now.timeIntervalSince(usage.measuredAt) <= usageStaleAfter else {
+      return .unmeasured
+    }
+    switch level(usageBytes: usage.bytes, limitGB: limitGB) {
+    case .ok: return .ok
+    case .near: return .near
+    case .over: return .over
     }
   }
 

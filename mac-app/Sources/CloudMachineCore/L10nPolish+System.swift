@@ -86,6 +86,12 @@ extension L10nPolish {
       "Nie można uruchomić %@: %@",
     "Remote '%@' already exists and was NOT touched.\nOverwriting it replaces the token and the permission scope; a credential with the 'drive.file' scope does not see files created by the previous one, so the existing backup becomes unreachable.\nIf you really want to replace it, first back up ~/.config/rclone/rclone.conf and run again with --replace-existing.":
       "Remote '%@' już istnieje i NIE został ruszony.\nNadpisanie go podmienia token i zakres uprawnień; poświadczenie z zakresem 'drive.file' nie widzi plików założonych przez poprzednie, więc istniejący backup staje się nieosiągalny.\nJeśli naprawdę chcesz go zastąpić, zrób najpierw kopię ~/.config/rclone/rclone.conf i uruchom ponownie z --replace-existing.",
+    "Could not check whether remote '%@' already exists (rclone listremotes did not answer or failed), so nothing was changed. Run `%@ listremotes` to see the error, then try again.":
+      "Nie udało się sprawdzić, czy remote '%@' już istnieje (rclone listremotes nie odpowiedział albo zgłosił błąd), więc nic nie zostało zmienione. Uruchom `%@ listremotes`, żeby zobaczyć błąd, i spróbuj ponownie.",
+    "Could not check whether this Mac already has a CloudMachine installation (rclone did not answer), so no folder was chosen. Try again in a moment.":
+      "Nie udało się sprawdzić, czy ten Mac ma już instalację CloudMachine (rclone nie odpowiedział), więc folder nie został wybrany. Spróbuj ponownie za chwilę.",
+    "The remote control socket path is too long for macOS (%@ characters, at most %@): %@":
+      "Ścieżka gniazda zdalnego sterowania jest za długa dla macOS (%@ znaków, najwyżej %@): %@",
     "rclone authorize failed (%@). If that binary is missing, start with: cloudmachine-agent install-rclone.":
       "rclone authorize nie powiodło się (%@). Jeśli tej binarki nie ma, zacznij od: cloudmachine-agent install-rclone.",
     "Could not read the token from the output of rclone authorize.":

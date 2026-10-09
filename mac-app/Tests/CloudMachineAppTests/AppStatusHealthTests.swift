@@ -55,6 +55,60 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertEqual(status.buffer.uploadState, .queueUnknown)
   }
 
+  // MARK: - "Back up now"
+
+  /// REGRESSION 09.10.2026: the button followed `healthy`, so an OLD backup -
+  /// the very thing it fixes - greyed it out.
+  func testStaleBackupStillAllowsBackingUp() {
+    let status = healthy()
+    status.backupCycle = BackupCycleStatus(
+      known: true, lastSuccess: Date().addingTimeInterval(-2 * 86400), problems: [],
+      checkedAt: Date())
+    XCTAssertFalse(status.healthy)
+    XCTAssertTrue(status.canStartBackup)
+  }
+
+  func testUnreadQueueStillAllowsBackingUp() {
+    let status = healthy()
+    status.buffer.queueKnown = false
+    XCTAssertTrue(status.canStartBackup)
+  }
+
+  func testNowhereToBackUpToBlocksTheButton() {
+    for breakIt in [
+      { (s: AppStatus) in s.buffer.mounted = false },
+      { (s: AppStatus) in s.buffer.imageAttached = false },
+      { (s: AppStatus) in s.timeMachineState = .notRegistered },
+      { (s: AppStatus) in s.timeMachineState = .noAnswer },
+      { (s: AppStatus) in s.remoteConfigured = false },
+      { (s: AppStatus) in s.isBusy = true },
+    ] {
+      let status = healthy()
+      breakIt(status)
+      XCTAssertFalse(status.canStartBackup)
+    }
+  }
+
+  // MARK: - "Cloud sync queue" row
+
+  /// REGRESSION 09.10.2026: an empty queue with abandoned bands read
+  /// "Everything uploaded" - for data that exists only on this Mac.
+  func testAbandonedBandsAreNotEverythingUploaded() {
+    var buffer = healthy().buffer
+    buffer.erroredFiles = 3
+    XCTAssertNotEqual(buffer.queueSummary, L10n.tr("Everything uploaded"))
+    XCTAssertTrue(buffer.queueSummary.contains("3"))
+  }
+
+  func testQueueRowStates() {
+    var buffer = healthy().buffer
+    XCTAssertEqual(buffer.queueSummary, L10n.tr("Everything uploaded"))
+    buffer.uploadsQueued = 5
+    XCTAssertEqual(buffer.queueSummary, L10n.tr("%@ in progress, %@ queued", "0", "5"))
+    buffer.queueKnown = false
+    XCTAssertEqual(buffer.queueSummary, L10n.tr("not read"))
+  }
+
   func testHealthyStateIsHealthy() {
     let status = healthy()
     XCTAssertTrue(status.healthy)

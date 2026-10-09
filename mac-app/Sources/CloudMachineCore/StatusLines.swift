@@ -26,6 +26,27 @@ public enum StatusLines {
     }
   }
 
+  /// The "Remote control" line.
+  ///
+  /// A mount started before 09.10.2026 keeps listening on TCP with no password
+  /// until it is restarted, and an upgrade deliberately does not restart it.
+  /// Until then any web page can delete the backup through it - which is why
+  /// that state is named, with the way out, instead of quietly working.
+  public static func remoteControl(_ transport: DriveBufferService.RCTransport, mounted: Bool?)
+    -> String
+  {
+    switch transport {
+    case .socket:
+      return L10n.tr("private socket")
+    case .legacyTCP where mounted == true:
+      return L10n.tr(
+        "OPEN on %@ - the mount was started by an older version, and any web page can send it commands. It switches to the private socket on its next start: run prepare-shutdown, then restart the Mac.",
+        DriveBufferService.legacyRCAddress)
+    case .legacyTCP:
+      return L10n.tr("no socket - the mount is not running")
+    }
+  }
+
   /// The "Free on disk" line.
   ///
   /// `nil` MUST be named. Not `Optional(427)` (because that looks like a

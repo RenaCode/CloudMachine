@@ -83,6 +83,25 @@ struct BufferStatus: Equatable {
 
   var draining: Bool { uploadsInProgress > 0 || uploadsQueued > 0 }
 
+  /// The "Cloud sync queue" row.
+  ///
+  /// An empty queue is "everything uploaded" only when rclone abandoned
+  /// nothing on the way: an abandoned band drops out of the queue exactly like
+  /// an uploaded one (see `DriveBufferService.QueueStats.isQuiet`). Until
+  /// 09.10.2026 the row then said "Everything uploaded" - in red, above a row
+  /// counting the errors.
+  var queueSummary: String {
+    guard queueKnown else { return L10n.tr("not read") }
+    if draining {
+      return L10n.tr(
+        "%@ in progress, %@ queued", "\(uploadsInProgress)", "\(uploadsQueued)")
+    }
+    if erroredFiles > 0 {
+      return L10n.tr("%@ fragments abandoned - only on this Mac", "\(erroredFiles)")
+    }
+    return L10n.tr("Everything uploaded")
+  }
+
   /// The single source of truth on whether the backup reaches the Drive - and why not.
   var uploadState: UploadState {
     UploadState.from(
@@ -275,6 +294,20 @@ final class AppStatus: ObservableObject {
     guard case .ready = dependencyState, remoteConfigured, buffer.mounted, buffer.imageAttached,
       case .registered = timeMachineState, buffer.uploadState.isNominal,
       backupCycle.isFresh()
+    else { return false }
+    return true
+  }
+
+  /// Whether "Back up now" can do anything: the backup has somewhere to go.
+  ///
+  /// NOT `healthy`, which until 09.10.2026 decided this too. `healthy` also
+  /// asks for a fresh backup - so after two days without one, with every
+  /// device in place, the only button that fixes that was grey. Likewise with
+  /// an unread queue or the Google daily limit: Time Machine still writes into
+  /// the buffer then. Only what makes `tmutil startbackup` pointless blocks it.
+  var canStartBackup: Bool {
+    guard case .ready = dependencyState, remoteConfigured, buffer.mounted, buffer.imageAttached,
+      case .registered = timeMachineState, !isBusy
     else { return false }
     return true
   }

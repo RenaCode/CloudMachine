@@ -59,6 +59,85 @@ final class ContinuationGuard: @unchecked Sendable {
   }
 }
 
+/// Reads one pipe of a child process. Lives on the serial queue it is given -
+/// every method must be called on that queue, which is what makes the final
+/// `finish()` see every byte read before it.
+///
+/// A dispatch read source instead of `FileHandle.readabilityHandler`: the
+/// handler runs on a Foundation queue of its own, so "read, then hand over"
+/// could not be ordered against the process exit.
+final class PipeReader: @unchecked Sendable {
+  private let pipe: Pipe
+  private let fd: Int32
+  private let source: DispatchSourceRead
+  private var data = Data()
+  private var discarding = false
+  private var finished = false
+  private var closed = false
+
+  init(_ pipe: Pipe, queue: DispatchQueue) {
+    self.pipe = pipe
+    fd = pipe.fileHandleForReading.fileDescriptor
+    // Non-blocking, so that reading "everything there is" stops at an empty
+    // pipe instead of waiting for EOF - see `terminationHandler`.
+    _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+    source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+    // A strong reference on purpose: the reader has to outlive the call while
+    // a `--daemon` child still writes into the pipe, and an uncancelled source
+    // whose handler did nothing would fire on the unread data without end.
+    // The cycle ends at `cancel()` (EOF), when dispatch drops the handler.
+    source.setEventHandler { self.drain() }
+    // The pipe (and with it the descriptor) stays alive until the source is
+    // cancelled - closing it earlier would leave the source watching a number
+    // that the next `open` may reuse.
+    source.setCancelHandler { [pipe] in _ = pipe }
+    source.resume()
+  }
+
+  /// Reads whatever is in the pipe right now.
+  private func drain() {
+    var buffer = [UInt8](repeating: 0, count: 65536)
+    while !closed {
+      let count = read(fd, &buffer, buffer.count)
+      if count > 0 {
+        if !discarding { data.append(buffer, count: count) }
+      } else if count == 0 {
+        // EOF: every holder of the write end has closed it.
+        closed = true
+        source.cancel()
+      } else if errno == EINTR {
+        continue
+      } else {
+        // EAGAIN - nothing more for now; anything else - nothing more ever.
+        if errno != EAGAIN {
+          closed = true
+          source.cancel()
+        }
+        return
+      }
+    }
+  }
+
+  /// The final read after the process has exited, and everything collected.
+  /// Stops reading only when EOF came: otherwise a child that inherited the
+  /// pipe (`--daemon`) still writes into it, and with nobody reading, a full
+  /// pipe would block it on `write()`. What it writes from now on is dropped.
+  func finish() -> Data {
+    if !finished {
+      finished = true
+      drain()
+      discarding = true
+    }
+    return data
+  }
+
+  /// The result will not be read (timed out) - keep the pipe empty only.
+  func discardFromNowOn() {
+    discarding = true
+    data = Data()
+  }
+}
+
 /// A thin layer over `Process` for running external tools (rclone, tmutil,
 /// hdiutil, diskutil...) - shared by the GUI and the CLI. Previously it lived
 /// only in the GUI as `Shell.run`; moved here so that the CLI watchdogs have
@@ -86,28 +165,21 @@ public enum ProcessRunner {
       process.standardError = stderrPipe
       process.standardInput = FileHandle.nullDevice
 
+      // Everything that touches the collected output runs on this ONE serial
+      // queue: the reads as data arrives, the final drain and building the
+      // result. Until 09.10.2026 the reads ran in `readabilityHandler` on a
+      // queue of their own and only the append came here; `terminationHandler`
+      // removed the handlers and built the result at once. What was still in
+      // the pipe, or read but not yet appended, was lost - an EMPTY stdout with
+      // exit code 0 (measured: 2 in 5000 calls at rest, 970 in 4000 with eight
+      // at a time). Callers took "" for an answer: `destinationinfo` -> "the
+      // destination is not registered", `listremotes` -> "there is no remote".
       let queue = DispatchQueue(label: "com.renacode.cloudmachine.process-pipe")
-      var stdoutData = Data()
-      var stderrData = Data()
+      let stdoutReader = PipeReader(stdoutPipe, queue: queue)
+      let stderrReader = PipeReader(stderrPipe, queue: queue)
       let resumeGuard = ContinuationGuard()
 
-      stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
-        let data = handle.availableData
-        if !data.isEmpty {
-          queue.async { stdoutData.append(data) }
-        }
-      }
-      stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-        let data = handle.availableData
-        if !data.isEmpty {
-          queue.async { stderrData.append(data) }
-        }
-      }
-
       process.terminationHandler = { proc in
-        stdoutPipe.fileHandleForReading.readabilityHandler = nil
-        stderrPipe.fileHandleForReading.readabilityHandler = nil
-
         // IMPORTANT: readDataToEndOfFile() must NOT be called here - it blocks
         // until the write end of the pipe is closed by ALL of its holders.
         // Processes started with "--daemon" (e.g. `rclone nfsmount --daemon`)
@@ -115,13 +187,15 @@ public enum ProcessRunner {
         // closes them - the terminationHandler of the immediate parent process
         // fires normally, but readDataToEndOfFile() then hangs forever,
         // because EOF never arrives (observed for real: a watchdog stuck for
-        // >10 min after every fresh rclone start). `readabilityHandler` already
-        // collects everything as the data arrives - no extra, blocking final
-        // read is needed.
+        // >10 min after every fresh rclone start).
+        //
+        // The final drain is a NON-BLOCKING read instead: the process has
+        // exited, so everything it wrote is already in the pipe, and the read
+        // stops at "nothing more right now" rather than at EOF.
         queue.async {
           let result = ProcessResult(
-            stdout: String(data: stdoutData, encoding: .utf8) ?? "",
-            stderr: String(data: stderrData, encoding: .utf8) ?? "",
+            stdout: String(data: stdoutReader.finish(), encoding: .utf8) ?? "",
+            stderr: String(data: stderrReader.finish(), encoding: .utf8) ?? "",
             exitCode: proc.terminationStatus
           )
           if resumeGuard.claim() {
@@ -168,22 +242,19 @@ public enum ProcessRunner {
         // double resume if `terminationHandler` fires later).
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 10) {
           if resumeGuard.claim() {
-            // IMPORTANT: we do NOT reset the handler to `nil` - that leaves the
-            // pipe with NO reader at all. If the process survived even SIGKILL
-            // (stuck in the kernel in uninterruptible I/O - see the comment
-            // above) and does resume some day, it may still write to
-            // stdout/stderr; without a reader, a full pipe buffer would block
-            // it on `write()` FOREVER, turning "a harmless orphaned process"
-            // into a permanently stuck zombie that never gets cleaned up. So we
-            // replace the handler with one that keeps draining and discarding
-            // the data - the result will not be read anyway (the continuation
-            // below resumes with the timeout error), but the orphaned process
-            // can freely finish writing and exit on its own.
-            stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
-              _ = handle.availableData
-            }
-            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-              _ = handle.availableData
+            // IMPORTANT: we do NOT stop reading - that leaves the pipe with NO
+            // reader at all. If the process survived even SIGKILL (stuck in the
+            // kernel in uninterruptible I/O - see the comment above) and does
+            // resume some day, it may still write to stdout/stderr; without a
+            // reader, a full pipe buffer would block it on `write()` FOREVER,
+            // turning "a harmless orphaned process" into a permanently stuck
+            // zombie that never gets cleaned up. So the readers keep draining
+            // and discard the data - the result will not be read anyway (the
+            // continuation below resumes with the timeout error), but the
+            // orphaned process can freely finish writing and exit on its own.
+            queue.async {
+              stdoutReader.discardFromNowOn()
+              stderrReader.discardFromNowOn()
             }
             continuation.resume(throwing: ProcessRunnerError.timedOut(executable))
           }

@@ -150,7 +150,7 @@ private struct MenuBarPanel: View {
             }
           }
           .buttonStyle(PrimaryGradientButtonStyle())
-          .disabled(!status.healthy)
+          .disabled(!status.canStartBackup)
         } else {
           Button(action: { Task { await controller.stopBackup() } }) {
             HStack {

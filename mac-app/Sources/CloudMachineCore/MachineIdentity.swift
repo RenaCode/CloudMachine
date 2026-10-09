@@ -16,6 +16,15 @@ public enum MachineIdentity {
   /// machines.json, and the whole existing backup under the old key is left
   /// orphaned (and still counts against the quota). Once written, the key
   /// survives every later rename of the Mac.
+  /// The key already written to disk, without deriving one. `nil` = none
+  /// stored yet. For synchronous readers that only LOOK FOR existing data
+  /// under the key (see `MachineBudget.limitGB`).
+  public static var storedKey: String? {
+    guard let saved = try? String(contentsOf: identityFilePath, encoding: .utf8) else { return nil }
+    let trimmed = saved.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
   public static func currentKey() async -> String {
     if let saved = try? String(contentsOf: identityFilePath, encoding: .utf8) {
       let trimmed = saved.trimmingCharacters(in: .whitespacesAndNewlines)
