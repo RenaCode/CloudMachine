@@ -169,8 +169,19 @@ struct MenuBarContentView: View {
       }
     }
     .padding(14)
-    .frame(width: 270)
-    .background(RenaCodeTheme.bgDark)
+    .frame(width: 280)
+    .background(
+      ZStack {
+        RenaCodeTheme.bgDark
+        RenaCodeTheme.cardGradient
+      }
+    )
+    .clipShape(RoundedRectangle(cornerRadius: 14))
+    .overlay(
+      RoundedRectangle(cornerRadius: 14)
+        .stroke(RenaCodeTheme.borderGlassStrong, lineWidth: 1)
+    )
+    .shadow(color: Color.black.opacity(0.45), radius: 16, x: 0, y: 8)
     .task { controller.startAutoRefresh(interval: 15) }
   }
 }
