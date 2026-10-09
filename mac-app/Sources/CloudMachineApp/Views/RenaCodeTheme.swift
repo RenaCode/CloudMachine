@@ -123,9 +123,16 @@ public struct GlassCardModifier: ViewModifier {
       )
       .overlay(
         RoundedRectangle(cornerRadius: cornerRadius)
-          .stroke(borderColor, lineWidth: 1)
+          .stroke(
+            LinearGradient(
+              colors: [borderColor, borderColor.opacity(0.3)],
+              startPoint: .topLeading,
+              endPoint: .bottomTrailing
+            ),
+            lineWidth: 1
+          )
       )
-      .shadow(color: Color.black.opacity(0.35), radius: 16, x: 0, y: 8)
+      .shadow(color: Color.black.opacity(0.4), radius: 18, x: 0, y: 8)
   }
 }
 
