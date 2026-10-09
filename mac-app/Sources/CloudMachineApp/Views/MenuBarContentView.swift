@@ -3,8 +3,20 @@ import SwiftUI
 
 /// Contents of the menu bar (MenuBar Extra), kept in the modern
 /// RenaCode visual style.
+///
+/// Observes `AppStatus` directly for the same reason as `DashboardView`.
 struct MenuBarContentView: View {
   @EnvironmentObject private var controller: CloudMachineController
+
+  var body: some View {
+    MenuBarPanel(status: controller.status)
+      .task { controller.startAutoRefresh(interval: 15) }
+  }
+}
+
+private struct MenuBarPanel: View {
+  @EnvironmentObject private var controller: CloudMachineController
+  @ObservedObject var status: AppStatus
   @Environment(\.openWindow) private var openWindow
 
   /// Opens the panel and brings it TO THE FRONT.
@@ -25,110 +37,111 @@ struct MenuBarContentView: View {
     }
   }
 
+  /// Green only for a really good state - the same rule as the window's
+  /// health card.
+  private var tone: StatusTone {
+    if status.healthy { return .success }
+    if case .missing = status.dependencyState { return .danger }
+    if !status.remoteConfigured || !status.buffer.mounted || !status.buffer.imageAttached {
+      return .danger
+    }
+    if case .notRegistered = status.timeMachineState { return .danger }
+    if status.buffer.uploadState.needsAttention { return .danger }
+    if status.backupCycle.known && !status.backupCycle.isFresh() { return .danger }
+    return .warning
+  }
+
+  private var cycleTone: StatusTone {
+    if status.backupCycle.isFresh() { return .success }
+    return status.backupCycle.known ? .danger : .warning
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      // Header with the logo and the health indicator
+      // Header with the logo and the health verdict
       HStack(spacing: 10) {
-        ZStack {
-          RoundedRectangle(cornerRadius: 8)
-            .fill(RenaCodeTheme.aiGradient)
-            .frame(width: 28, height: 28)
-          Image(systemName: "icloud.and.arrow.up.fill")
-            .font(.system(size: 13, weight: .bold))
-            .foregroundStyle(.white)
-        }
+        IconTile(systemImage: "icloud.and.arrow.up.fill", gradient: RenaCodeTheme.frameGradient)
 
-        VStack(alignment: .leading, spacing: 1) {
-          Text("CloudMachine")
-            .font(.system(size: 13, weight: .bold, design: .rounded))
-            .foregroundStyle(RenaCodeTheme.textMain)
-
-          Text(controller.status.headline)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(
-              controller.status.healthy
-                ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning)
-        }
+        Text(verbatim: "CloudMachine")
+          .font(.system(size: 15, weight: .bold))
+          .foregroundStyle(RenaCodeTheme.textMain)
+          .lineLimit(1)
+          .fixedSize()
 
         Spacer()
 
-        Circle()
-          .fill(
-            controller.status.healthy ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning
-          )
-          .frame(width: 8, height: 8)
-          .shadow(
-            color: (controller.status.healthy
-              ? RenaCodeTheme.colorSuccess : RenaCodeTheme.colorWarning).opacity(0.6), radius: 4
-          )
+        StatusPill(
+          tone == .success
+            ? L10n.tr("Healthy")
+            : (tone == .danger ? L10n.tr("Action needed") : L10n.tr("Attention")),
+          tone: tone)
       }
 
-      Divider().background(RenaCodeTheme.borderGlass)
+      // The one-sentence answer to "is my data safe", in the verdict's color.
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        StatusDot(tone, live: status.buffer.uploadState.isMovingData)
+        Text(status.headline)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(tone == .success ? RenaCodeTheme.textMain : tone.color)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .accessibilityElement(children: .combine)
 
       // Progress of the running backup
-      if let progress = controller.status.backupProgress, let percent = progress.percent {
-        VStack(alignment: .leading, spacing: 4) {
+      if let progress = status.backupProgress, let percent = progress.percent {
+        VStack(alignment: .leading, spacing: 6) {
           HStack {
-            Text(L10n.tr("Backup in progress"))
-              .font(.system(size: 12, weight: .medium))
-              .foregroundStyle(RenaCodeTheme.textMuted)
+            // Not repeated when the headline above already says it.
+            if status.headline != L10n.tr("Backup in progress") {
+              Text(L10n.tr("Backup in progress"))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(RenaCodeTheme.textMuted)
+            }
             Spacer()
             Text(String(format: "%.1f%%", percent * 100))
-              .font(.system(size: 12, weight: .bold, design: .monospaced))
-              .foregroundStyle(RenaCodeTheme.colorCyan)
+              .font(.system(size: 12, weight: .bold).monospacedDigit())
+              .foregroundStyle(RenaCodeTheme.textMain)
           }
-
-          GeometryReader { geo in
-            ZStack(alignment: .leading) {
-              RoundedRectangle(cornerRadius: 3)
-                .fill(RenaCodeTheme.bgInset)
-
-              RoundedRectangle(cornerRadius: 3)
-                .fill(RenaCodeTheme.cyanGradient)
-                .frame(
-                  width: max(0, min(geo.size.width * CGFloat(percent), geo.size.width)), height: 5)
-            }
-          }
-          .frame(height: 5)
+          GradientProgressBar(fraction: percent, height: 6)
         }
+        .accessibilityElement(children: .combine)
       }
 
-      // Queue and buffer state
-      VStack(spacing: 6) {
-        HStack {
-          Text(L10n.tr("Waiting to upload"))
-            .font(.system(size: 12))
-            .foregroundStyle(RenaCodeTheme.textMuted)
-          Spacer()
-          Text(
-            !controller.status.buffer.queueKnown
-              ? "?"
-              : (controller.status.buffer.draining
-                ? L10n.tr("%@ files", "\(controller.status.buffer.uploadsQueued)")
-                : L10n.tr("nothing"))
-          )
-          .font(.system(size: 12, weight: .semibold, design: .monospaced))
-          .foregroundStyle(
-            !controller.status.buffer.queueKnown || controller.status.buffer.draining
-              ? RenaCodeTheme.colorWarning : RenaCodeTheme.textMain)
-        }
-
-        HStack {
-          Text(L10n.tr("SSD buffer"))
-            .font(.system(size: 12))
-            .foregroundStyle(RenaCodeTheme.textMuted)
-          Spacer()
-          Text("\(controller.status.buffer.sizeGB) GB")
-            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-            .foregroundStyle(RenaCodeTheme.textMain)
-        }
+      // Queue and buffer state, as two tiles like the window's cards
+      HStack(spacing: 8) {
+        tile(
+          L10n.tr("Waiting to upload"),
+          !status.buffer.queueKnown
+            ? "?"
+            : (status.buffer.draining
+              ? L10n.tr("%@ files", "\(status.buffer.uploadsQueued)") : L10n.tr("nothing")),
+          // Cyan while draining - the normal state during a backup; amber only
+          // when the queue could not be read.
+          valueColor: !status.buffer.queueKnown
+            ? RenaCodeTheme.colorWarning
+            : (status.buffer.draining ? RenaCodeTheme.colorCyan : RenaCodeTheme.textMain))
+        tile(
+          L10n.tr("SSD buffer"), L10n.tr("%@ GB", "\(status.buffer.sizeGB)"),
+          valueColor: RenaCodeTheme.textMain)
       }
+
+      HStack(spacing: 8) {
+        StatusDot(cycleTone, size: 6)
+        Text(L10n.tr("Last completed backup"))
+          .foregroundStyle(RenaCodeTheme.textMuted)
+        Spacer(minLength: 4)
+        Text(status.backupCycle.ageText())
+          .fontWeight(.semibold)
+          .foregroundStyle(cycleTone == .success ? RenaCodeTheme.textMain : cycleTone.color)
+      }
+      .font(.system(size: 12).monospacedDigit())
+      .accessibilityElement(children: .combine)
 
       Divider().background(RenaCodeTheme.borderGlass)
 
       // Action buttons
       VStack(spacing: 6) {
-        if controller.status.backupProgress == nil {
+        if status.backupProgress == nil {
           Button(action: { Task { await controller.startBackup() } }) {
             HStack {
               Image(systemName: "play.fill")
@@ -137,7 +150,7 @@ struct MenuBarContentView: View {
             }
           }
           .buttonStyle(PrimaryGradientButtonStyle())
-          .disabled(!controller.status.healthy)
+          .disabled(!status.healthy)
         } else {
           Button(action: { Task { await controller.stopBackup() } }) {
             HStack {
@@ -149,39 +162,51 @@ struct MenuBarContentView: View {
           .buttonStyle(SecondaryGlassButtonStyle())
         }
 
-        Button(action: showDashboard) {
-          HStack {
-            Image(systemName: "macwindow")
-            Text(L10n.tr("Open CloudMachine"))
-            Spacer()
+        HStack(spacing: 6) {
+          Button(action: showDashboard) {
+            HStack {
+              Image(systemName: "macwindow")
+              Text(L10n.tr("Open CloudMachine"))
+              Spacer()
+            }
           }
-        }
-        .buttonStyle(SecondaryGlassButtonStyle())
+          .buttonStyle(SecondaryGlassButtonStyle())
 
-        Button(action: { NSApplication.shared.terminate(nil) }) {
-          HStack {
+          Button(action: { NSApplication.shared.terminate(nil) }) {
             Image(systemName: "power")
-            Text(L10n.tr("Quit"))
-            Spacer()
           }
+          .buttonStyle(SecondaryGlassButtonStyle())
+          .help(L10n.tr("Quit"))
+          .accessibilityLabel(L10n.tr("Quit"))
         }
-        .buttonStyle(SecondaryGlassButtonStyle())
       }
     }
     .padding(14)
-    .frame(width: 280)
+    .frame(width: 300)
     .background(
       ZStack {
         RenaCodeTheme.bgDark
         RenaCodeTheme.cardGradient
       }
     )
+    .overlay(GradientWindowFrame(cornerRadius: 14, lineWidth: 1))
     .clipShape(RoundedRectangle(cornerRadius: 14))
-    .overlay(
-      RoundedRectangle(cornerRadius: 14)
-        .stroke(RenaCodeTheme.borderGlassStrong, lineWidth: 1)
-    )
-    .shadow(color: Color.black.opacity(0.45), radius: 16, x: 0, y: 8)
-    .task { controller.startAutoRefresh(interval: 15) }
+  }
+
+  private func tile(_ label: String, _ value: String, valueColor: Color) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(label)
+        .font(.system(size: 11))
+        .foregroundStyle(RenaCodeTheme.textMuted)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+      Text(value)
+        .font(.system(size: 17, weight: .bold).monospacedDigit())
+        .foregroundStyle(valueColor)
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+    }
+    .accessibilityElement(children: .combine)
+    .toneCard(.brand, cornerRadius: 10, padding: 10)
   }
 }
