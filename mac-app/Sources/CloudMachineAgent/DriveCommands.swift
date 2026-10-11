@@ -217,6 +217,9 @@ struct BufferGuard: AsyncParsableCommand {
 
     // Forever: the guard has to outlive every backup, not just the first one.
     while true {
+      // The mount runs for days and rclone never trims its own log; the
+      // guard is the one process that runs as long. A `stat` per tick.
+      DriveBufferService.trimLogIfLarge()
       await guardService.step()
       try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
     }
