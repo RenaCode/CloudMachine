@@ -99,6 +99,51 @@ public enum DriveBufferService {
     FileManager.default.fileExists(atPath: rcSocket.path) ? .socket : .legacyTCP
   }
 
+  /// Whether the running mount still takes commands on the open TCP port -
+  /// a mount started by 1.3.7 or older that survived the upgrade.
+  ///
+  /// Until 11.10.2026 only `drive-status` said so, in one line; the panel and
+  /// the watchdog stayed silent, and such a mount runs until the next restart
+  /// of the Mac - on this project's own Mac, for days. All three now ask here.
+  ///
+  /// Three conditions, each needed: no socket (a mount of this version has
+  /// one), a mount (no mount, nothing listens), and an answer on the port.
+  /// The last one tells the old mount apart from a socket removed under a new
+  /// one, where nothing listens on TCP and nothing is exposed.
+  public static func legacyPortOpen(
+    transport: RCTransport, mounted: Bool?, portAnswers: () -> Bool
+  ) -> Bool {
+    guard transport == .legacyTCP, mounted == true else { return false }
+    return portAnswers()
+  }
+
+  /// `legacyPortOpen` for this Mac, now.
+  public static func legacyPortOpenNow() -> Bool {
+    legacyPortOpen(
+      transport: rcTransport, mounted: mountedState(),
+      portAnswers: { tcpPortAnswers(port: legacyRCPort) })
+  }
+
+  static let legacyRCPort: UInt16 = 5572
+
+  /// Whether something accepts a connection on `127.0.0.1:port`. Connects
+  /// and closes - nothing is sent, so a listener gets no request.
+  static func tcpPortAnswers(port: UInt16) -> Bool {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = port.bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    return withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+      }
+    }
+  }
+
   /// Arguments that point `rclone rc` at the running mount.
   static func rcClientArguments(_ transport: RCTransport) -> [String] {
     switch transport {
@@ -117,7 +162,7 @@ public enum DriveBufferService {
   /// Above this size the rclone log is trimmed at start-up. rclone does not
   /// rotate its own log, and this project has already lost 3.3 GiB once to a log
   /// that grew without limit.
-  private static let logSizeLimit: UInt64 = 100 * 1024 * 1024
+  public static let logSizeLimit: UInt64 = 100 * 1024 * 1024
 
   // MARK: - State
 
@@ -294,9 +339,69 @@ public enum DriveBufferService {
       let attrs = try? FileManager.default.attributesOfItem(atPath: logFile.path),
       let size = attrs[.size] as? UInt64, size > logSizeLimit
     else { return }
-    let rotated = logFile.appendingPathExtension("1")
+    let rotated = previousLog(of: logFile)
     try? FileManager.default.removeItem(at: rotated)
     try? FileManager.default.moveItem(at: logFile, to: rotated)
+  }
+
+  /// Where the older part of a log goes - at start-up and in `trimLogIfLarge`.
+  static func previousLog(of file: URL) -> URL { file.appendingPathExtension("1") }
+
+  /// How much of the log `trimLogIfLarge` keeps in `.1`. Above the 4 MB the
+  /// stall detection reads (`uploadStalledState`), with room to spare.
+  public static let logKeepBytes: UInt64 = 32 * 1024 * 1024
+
+  /// Trims the log of a RUNNING mount: its last `keep` bytes go to `.1`, and
+  /// the log itself is truncated to zero. Returns whether it trimmed.
+  ///
+  /// `rotateLogIfLarge` only runs when the mount starts, and the mount runs
+  /// for days: on 10.10.2026 the log stood at 257 MB, growing ~60 MB a day.
+  ///
+  /// WHY COPY-AND-TRUNCATE, AND WHY THE TAIL GOES TO `.1`
+  ///
+  /// rclone keeps the file open, so renaming it would only move rclone's
+  /// writes to `.1`. It opens it with `O_APPEND` (checked live: `lsof +fg`
+  /// shows `W,AP` on both descriptors), so after a truncation its next line
+  /// lands at offset 0 - no hole, no garbage. Putting the kept tail back into
+  /// the live file instead was rejected: rclone appends at the same time, its
+  /// new lines could land before the old ones, and the detection reading
+  /// newest-to-oldest stops at the first line older than its window - an
+  /// out-of-order file reads as "no jam". The reader (`recentLog`) joins the
+  /// tail of `.1` and the live file in order instead, so a trim in the middle
+  /// of a jam does not hide it.
+  ///
+  /// rclone's own `--log-file-max-size` was rejected too: it applies only to
+  /// a mount started with it, so not to one that survives an upgrade, and its
+  /// backups get time-stamped names the reader would have to look for.
+  ///
+  /// Lines rclone writes between the last read and the truncation (micro-
+  /// seconds) are lost. A log, not a record - the price is accepted.
+  @discardableResult
+  public static func trimLogIfLarge(
+    _ file: URL = logFile, limit: UInt64 = logSizeLimit, keep: UInt64 = logKeepBytes
+  ) -> Bool {
+    guard
+      let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
+      let size = attrs[.size] as? UInt64, size > limit,
+      let handle = try? FileHandle(forUpdating: file)
+    else { return false }
+    defer { try? handle.close() }
+    do {
+      let end = try handle.seekToEnd()
+      try handle.seek(toOffset: end > keep ? end - keep : 0)
+      var tail = try handle.readToEnd() ?? Data()
+      // Start at a whole line, so the first line of `.1` has its timestamp.
+      if end > keep, let newline = tail.firstIndex(of: UInt8(ascii: "\n")) {
+        tail = tail[tail.index(after: newline)...]
+      }
+      try tail.write(to: previousLog(of: file), options: .atomic)
+      try handle.truncate(atOffset: 0)
+    } catch {
+      CMLogger.log("Could not trim \(file.path): \(error.localizedDescription)")
+      return false
+    }
+    CMLogger.log("Trimmed \(file.path) (\(size / 1_048_576) MB); its last part is in .1")
+    return true
   }
 
   /// Excludes the buffer directory from Time Machine. The buffer holds a copy of
@@ -733,15 +838,33 @@ public enum DriveBufferService {
   /// problem". The file is taken from a parameter so that both questions asked of
   /// this log can be tested on our own file - without `~/.cloudmachine` and
   /// without guessing permissions.
+  ///
+  /// When the live file holds less than `bytes` - it was just trimmed or
+  /// rotated - the rest is taken from the end of `.1`, which holds what came
+  /// before it. Without that, a trim in the middle of a jam left the detection
+  /// a few lines to count and it answered "no jam" for the next half hour.
+  /// `.1` is only an addition: when it cannot be read, the live file alone is
+  /// still an answer.
   private static func recentLog(bytes: UInt64, from file: URL) -> String? {
+    guard let current = tail(of: file, bytes: bytes) else { return nil }
+    var data = current
+    if UInt64(current.count) < bytes,
+      let older = tail(of: previousLog(of: file), bytes: bytes - UInt64(current.count))
+    {
+      // A line cut in half at the boundary has no timestamp and is skipped.
+      data = older + Data("\n".utf8) + current
+    }
+    // The tail almost always starts in the middle of a multi-byte character, so
+    // we decode lossily - otherwise the whole read would be lost to one byte.
+    return String(decoding: data, as: UTF8.self)
+  }
+
+  private static func tail(of file: URL, bytes: UInt64) -> Data? {
     guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
     defer { try? handle.close() }
     let size = (try? handle.seekToEnd()) ?? 0
     try? handle.seek(toOffset: size > bytes ? size - bytes : 0)
-    guard let data = try? handle.readToEnd() else { return nil }
-    // The tail almost always starts in the middle of a multi-byte character, so
-    // we decode lossily - otherwise the whole read would be lost to one byte.
-    return String(decoding: data, as: UTF8.self)
+    return try? handle.readToEnd() ?? Data()
   }
 
   /// The locale we read rclone log timestamps with.

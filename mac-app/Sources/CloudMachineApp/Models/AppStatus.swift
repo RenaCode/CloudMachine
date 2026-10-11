@@ -222,6 +222,11 @@ final class AppStatus: ObservableObject {
   /// Whether this Mac's image exists on the mounted Drive; `nil` while the
   /// Drive is not mounted, because then nobody can know.
   @Published var imageExists: Bool?
+  /// The Drive mount still takes commands on the open TCP port - a mount from
+  /// before the private socket that survived the upgrade (see
+  /// `DriveBufferService.legacyPortOpen`). Until 11.10.2026 only one line of
+  /// `drive-status` said so; the window was green.
+  @Published var remoteControlOpen: Bool = false
   @Published var isBusy: Bool = false
   @Published var busyLabel: String = ""
   @Published var errorMessage: String?
@@ -263,6 +268,11 @@ final class AppStatus: ObservableObject {
     // copy; that is precisely why `UploadState` puts them ahead of the daily limit.
     let upload = buffer.uploadState
     if !upload.isNominal { return upload.headline }
+    // Backups work in this state, but any web page can delete them - so it
+    // comes before every sentence that sounds like "all is well".
+    if remoteControlOpen {
+      return L10n.tr("Drive remote control is open - restart the mount")
+    }
     if backupProgress != nil { return L10n.tr("Backup in progress") }
     // The state of the devices can be flawless while there has been no backup for two days.
     // This sentence must come BEFORE "Ready", otherwise the headline contradicts the
@@ -290,12 +300,22 @@ final class AppStatus: ObservableObject {
   /// and each of them can be met when no backup has been made for two days.
   /// The green badge is meant to say "the data is safe", and that follows
   /// solely from a backup having BEEN MADE - not from the disk being attached.
+  ///
+  /// THIRD, from 11.10.2026: `remoteControlOpen`. A backup that any web page
+  /// can delete is not safe, however fresh it is.
   var healthy: Bool {
     guard case .ready = dependencyState, remoteConfigured, buffer.mounted, buffer.imageAttached,
       case .registered = timeMachineState, buffer.uploadState.isNominal,
-      backupCycle.isFresh()
+      backupCycle.isFresh(), !remoteControlOpen
     else { return false }
     return true
+  }
+
+  /// Whether "Restart the mount" may be offered: the port is open, nothing
+  /// else is running, and Time Machine is not backing up. `MountRestart`
+  /// checks the backup itself again - this only keeps the button honest.
+  var canRestartMount: Bool {
+    remoteControlOpen && !isBusy && backupProgress == nil
   }
 
   /// Whether "Back up now" can do anything: the backup has somewhere to go.

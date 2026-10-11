@@ -55,6 +55,33 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertEqual(status.buffer.uploadState, .queueUnknown)
   }
 
+  // MARK: - Open remote control
+
+  /// REGRESSION 11.10.2026 (N-K1): the old mount kept listening on the open
+  /// TCP port after the upgrade, and the window stayed green - only one line
+  /// of `drive-status` said so.
+  func testOpenRemoteControlTakesAwayGreenAndSaysSo() {
+    let status = healthy()
+    XCTAssertTrue(status.healthy)
+    status.remoteControlOpen = true
+    XCTAssertFalse(status.healthy)
+    XCTAssertEqual(status.headline, "Drive remote control is open - restart the mount")
+    XCTAssertTrue(status.canRestartMount)
+    // Backups still work in this state.
+    XCTAssertTrue(status.canStartBackup)
+  }
+
+  func testMountRestartIsNotOfferedDuringABackupOrAnotherAction() {
+    let status = healthy()
+    XCTAssertFalse(status.canRestartMount, "Nothing to restart while the port is closed.")
+    status.remoteControlOpen = true
+    status.backupProgress = BackupProgressInfo()
+    XCTAssertFalse(status.canRestartMount)
+    status.backupProgress = nil
+    status.isBusy = true
+    XCTAssertFalse(status.canRestartMount)
+  }
+
   // MARK: - "Back up now"
 
   /// REGRESSION 09.10.2026: the button followed `healthy`, so an OLD backup -

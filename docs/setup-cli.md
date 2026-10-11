@@ -75,5 +75,13 @@ pretending otherwise.
 replaces the token and the scope, and credentials scoped `drive.file` cannot see
 files created by the previous credentials — the backup stays intact but becomes
 unreachable, which amounts to the same thing. Back up `~/.config/rclone/rclone.conf`
-first and pass `--replace-existing` if you really mean it. The Drive folder of
+first and pass `--replace-existing --accept-scope-change` if you really mean
+it. Even then nothing is written until the new token has been checked: if the
+current connection sees this Mac's image and the new one does not, the
+replacement is abandoned and `rclone.conf` stays as it was. The Drive folder of
 this Mac does not change with it.
+
+`create-image` refuses in the same spirit: when Google Drive shows no image but
+this Mac remembers one (`~/Library/Application Support/CloudMachine/known-image`,
+or the image in the upload cache), it says so instead of starting a second,
+empty backup next to the invisible one.

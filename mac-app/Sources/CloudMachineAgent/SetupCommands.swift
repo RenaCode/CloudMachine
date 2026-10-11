@@ -33,6 +33,16 @@ struct ConfigureRemote: AsyncParsableCommand {
   )
   var replaceExisting = false
 
+  @Flag(
+    name: .long,
+    help:
+      ArgumentHelp(
+        L10n.tr(
+          "With --replace-existing: confirms that the new sign-in (scope 'drive.file') may not see the existing backup. The new token is still checked against the image first."
+        ))
+  )
+  var acceptScopeChange = false
+
   @Option(
     name: .long,
     help: ArgumentHelp(
@@ -44,7 +54,8 @@ struct ConfigureRemote: AsyncParsableCommand {
   func run() async throws {
     let (config, key) = await CLIContext.load()
     let result = await RemoteConfigurer.connect(
-      config: config, machineKey: key, replaceExisting: replaceExisting, folder: folder)
+      config: config, machineKey: key, replaceExisting: replaceExisting,
+      acceptScopeChange: acceptScopeChange, folder: folder)
     print(result.message)
     if !result.succeeded { throw ExitCode.failure }
   }

@@ -217,6 +217,9 @@ struct BufferGuard: AsyncParsableCommand {
 
     // Forever: the guard has to outlive every backup, not just the first one.
     while true {
+      // The mount runs for days and rclone never trims its own log; the
+      // guard is the one process that runs as long. A `stat` per tick.
+      DriveBufferService.trimLogIfLarge()
       await guardService.step()
       try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
     }
@@ -285,6 +288,17 @@ struct BackupHealthCommand: AsyncParsableCommand {
       print(L10n.tr("WAITING (system startup): %@", problem.summary))
     }
 
+    // Not a backup failure, so not in `report` and not in the exit code -
+    // but a notification of its own, see `OpenPortAlert`.
+    let portOpen = DriveBufferService.legacyPortOpenNow()
+    if portOpen {
+      print(
+        L10n.tr(
+          "WARNING: remote control is OPEN on %@ - run restart-mount (or prepare-shutdown, then restart the Mac).",
+          DriveBufferService.legacyRCAddress))
+    }
+    if !quiet { await OpenPortAlert.report(open: portOpen) }
+
     guard !report.healthy else {
       print(L10n.tr("Backup cycle: OK"))
       if !quiet { await HealthAlert.report(report) }
@@ -337,6 +351,26 @@ struct PrepareShutdown: AsyncParsableCommand {
       L10n.tr(
         "Safe to restart. After startup the agents will bring up the buffer and attach the image themselves."
       ))
+  }
+}
+
+// MARK: - Restarting the mount
+
+struct RestartMount: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "restart-mount",
+    abstract: L10n.tr(
+      "Restarts the Google Drive mount on the private socket: detaches the image, waits for the upload, restarts the mount and attaches the image again."
+    ))
+
+  func run() async throws {
+    print(
+      L10n.tr(
+        "Detaching the image and waiting for the upload, then restarting the mount. This can take several minutes; Time Machine has no destination meanwhile."
+      ))
+    let result = await MountRestart.perform()
+    print(result.message)
+    if !result.succeeded { throw ExitCode(1) }
   }
 }
 

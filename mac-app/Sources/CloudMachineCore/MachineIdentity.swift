@@ -8,14 +8,6 @@ public enum MachineIdentity {
     CMPaths.appSupportDir.appendingPathComponent("machine-id")
   }
 
-  /// Persistent key of this machine - determined ONCE and written to disk, NOT
-  /// recomputed live from `scutil --get ComputerName` on every call. Without
-  /// this, a computer rename (manual, or automatic, e.g. Migration Assistant
-  /// appending "(2)" on a duplicate) would silently fragment the backup
-  /// identity: new key = new folder on Google Drive, new entry in
-  /// machines.json, and the whole existing backup under the old key is left
-  /// orphaned (and still counts against the quota). Once written, the key
-  /// survives every later rename of the Mac.
   /// The key already written to disk, without deriving one. `nil` = none
   /// stored yet. For synchronous readers that only LOOK FOR existing data
   /// under the key (see `MachineBudget.limitGB`).
@@ -25,6 +17,14 @@ public enum MachineIdentity {
     return trimmed.isEmpty ? nil : trimmed
   }
 
+  /// Persistent key of this machine - determined ONCE and written to disk, NOT
+  /// recomputed live from `scutil --get ComputerName` on every call. Without
+  /// this, a computer rename (manual, or automatic, e.g. Migration Assistant
+  /// appending "(2)" on a duplicate) would silently fragment the backup
+  /// identity: new key = new folder on Google Drive, new entry in
+  /// machines.json, and the whole existing backup under the old key is left
+  /// orphaned (and still counts against the quota). Once written, the key
+  /// survives every later rename of the Mac.
   public static func currentKey() async -> String {
     if let saved = try? String(contentsOf: identityFilePath, encoding: .utf8) {
       let trimmed = saved.trimmingCharacters(in: .whitespacesAndNewlines)

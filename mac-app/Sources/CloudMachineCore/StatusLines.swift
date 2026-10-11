@@ -40,10 +40,14 @@ public enum StatusLines {
       return L10n.tr("private socket")
     case .legacyTCP where mounted == true:
       return L10n.tr(
-        "OPEN on %@ - the mount was started by an older version, and any web page can send it commands. It switches to the private socket on its next start: run prepare-shutdown, then restart the Mac.",
+        "OPEN on %@ - the mount was started by an older version, and any web page can send it commands. It switches to the private socket on its next start: run restart-mount (or prepare-shutdown, then restart the Mac).",
         DriveBufferService.legacyRCAddress)
-    case .legacyTCP:
+    case .legacyTCP where mounted == false:
       return L10n.tr("no socket - the mount is not running")
+    case .legacyTCP:
+      // Not "the mount is not running": the mount table could not be read,
+      // and the mount may be up - on the open port, for all we know.
+      return L10n.tr("no socket - UNKNOWN whether the mount is running")
     }
   }
 

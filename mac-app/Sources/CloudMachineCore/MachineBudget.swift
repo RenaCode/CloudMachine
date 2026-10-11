@@ -182,8 +182,19 @@ public enum MachineBudget {
     return .ok
   }
 
-  static func problems(usage: Usage?, limitGB: Int?) -> [BackupHealth.Problem] {
-    guard let limitGB, let usage else { return [] }
+  /// `now` decides whether `usage` still describes the folder.
+  ///
+  /// Until 11.10.2026 a failed measurement was silent here: `currentUsage`
+  /// hands back the last stored reading when `rclone size` fails, and this
+  /// compared that reading with the limit whatever its age - or returned
+  /// nothing at all when there was none. Only the panel turned amber
+  /// (`standing`). A limit whose usage nobody can measure watches nothing,
+  /// so the watchdog says so, from the same `usageStaleAfter` as the panel.
+  static func problems(usage: Usage?, limitGB: Int?, now: Date = Date()) -> [BackupHealth.Problem] {
+    guard let limitGB else { return [] }
+    guard let usage, now.timeIntervalSince(usage.measuredAt) <= usageStaleAfter else {
+      return [unmeasuredProblem(usage: usage, limitGB: limitGB, now: now)]
+    }
     let used = String(format: "%.0f", usage.gb)
     switch level(usageBytes: usage.bytes, limitGB: limitGB) {
     case .ok:
@@ -207,6 +218,23 @@ public enum MachineBudget {
           code: "drive-budget-exceeded")
       ]
     }
+  }
+
+  static func unmeasuredProblem(usage: Usage?, limitGB: Int, now: Date) -> BackupHealth.Problem {
+    let detail: String
+    if let usage {
+      detail = L10n.tr(
+        "The last measurement (%@ GB) is from %@, %@ ago - rclone size has not answered since. Until it does, nothing watches the %@ GB limit: the 90%% and 100%% alarms stay silent. Check drive-status, or press Measure now in the window.",
+        String(format: "%.0f", usage.gb), BackupHealth.stamp(usage.measuredAt),
+        BackupHealth.formatAge(now.timeIntervalSince(usage.measuredAt)), "\(limitGB)")
+    } else {
+      detail = L10n.tr(
+        "rclone size has not answered even once. Until it does, nothing watches the %@ GB limit: the 90%% and 100%% alarms stay silent. Check drive-status, or press Measure now in the window.",
+        "\(limitGB)")
+    }
+    return BackupHealth.Problem(
+      summary: L10n.tr("Usage on Google Drive is not being measured"), detail: detail,
+      code: "drive-usage-unmeasured")
   }
 
   /// After this long a measurement no longer describes the folder: the

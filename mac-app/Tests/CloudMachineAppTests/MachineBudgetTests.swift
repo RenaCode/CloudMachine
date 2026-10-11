@@ -45,11 +45,37 @@ final class MachineBudgetTests: XCTestCase {
         .isEmpty)
   }
 
-  func testNoLimitOrNoMeasurementRaisesNothing() {
-    XCTAssertTrue(MachineBudget.problems(usage: nil, limitGB: 1000).isEmpty)
+  func testNoLimitRaisesNothing() {
+    XCTAssertTrue(MachineBudget.problems(usage: nil, limitGB: nil).isEmpty)
     XCTAssertTrue(
       MachineBudget.problems(usage: .init(bytes: 5000 * gib, measuredAt: Date()), limitGB: nil)
         .isEmpty)
+  }
+
+  /// REGRESSION 11.10.2026: with a limit set, a measurement that never came
+  /// or stopped coming was silent - an old reading below 90% raised nothing,
+  /// and no reading at all raised nothing either. The watchdog must say that
+  /// the limit is not being watched.
+  func testUnmeasuredUsageIsAProblemOnceStale() {
+    let now = Date()
+    XCTAssertEqual(
+      MachineBudget.problems(usage: nil, limitGB: 1000, now: now).map(\.code),
+      ["drive-usage-unmeasured"])
+    let stale = MachineBudget.Usage(
+      bytes: 10 * gib, measuredAt: now.addingTimeInterval(-MachineBudget.usageStaleAfter - 60))
+    XCTAssertEqual(
+      MachineBudget.problems(usage: stale, limitGB: 1000, now: now).map(\.code),
+      ["drive-usage-unmeasured"])
+    // Even a stale reading that was over the limit: what it says is no
+    // longer known, and the one problem to fix is the measuring.
+    let staleOver = MachineBudget.Usage(bytes: 1200 * gib, measuredAt: stale.measuredAt)
+    XCTAssertEqual(
+      MachineBudget.problems(usage: staleOver, limitGB: 1000, now: now).map(\.code),
+      ["drive-usage-unmeasured"])
+    // Within the window an old-but-valid reading is still an answer.
+    let recent = MachineBudget.Usage(
+      bytes: 10 * gib, measuredAt: now.addingTimeInterval(-MachineBudget.usageStaleAfter + 60))
+    XCTAssertTrue(MachineBudget.problems(usage: recent, limitGB: 1000, now: now).isEmpty)
   }
 
   func testLimitIsStoredUnderThisMacsFolderAndKeepsOtherMacs() {
