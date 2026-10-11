@@ -40,11 +40,11 @@ final class DriveFolderTests: XCTestCase {
   /// in `mac-studio`, would have been given its machine key as a new, empty
   /// folder.
   func testUnknownLegacyEvidenceRefusesInsteadOfGuessing() {
-    for requested in [nil, "mac-studio", "marcin-mac-studio-3"] {
+    for requested in [nil, "mac-studio", "home-mac-studio-3"] {
       guard
         case .refuse = DriveFolder.decide(
           existing: nil, requested: requested, legacyEvidence: nil,
-          machineKey: "marcin-mac-studio-3")
+          machineKey: "home-mac-studio-3")
       else { return XCTFail("chose a folder without knowing whether a backup already exists") }
     }
   }

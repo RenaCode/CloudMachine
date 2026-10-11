@@ -49,7 +49,7 @@ final class BackupVisibilityTests: XCTestCase {
       "mac-studio.sparsebundle")
     XCTAssertNil(
       InstallationTraces.cachedImage(
-        folder: "marcin-mac-studio-3", imageName: "marcin-mac-studio-3", cacheDir: directory))
+        folder: "home-mac-studio-3", imageName: "home-mac-studio-3", cacheDir: directory))
   }
 
   func testNoCacheMeansNoTraces() {
@@ -116,13 +116,13 @@ final class BackupVisibilityTests: XCTestCase {
       XCTAssertEqual(
         DriveFolder.decide(
           existing: nil, requested: nil, legacyEvidence: evidence,
-          machineKey: "marcin-mac-studio-3"),
+          machineKey: "home-mac-studio-3"),
         .assign("mac-studio"))
     }
     XCTAssertEqual(DriveFolder.legacyEvidence(remoteConfigured: false, cachedFolders: []), false)
     XCTAssertNil(DriveFolder.legacyEvidence(remoteConfigured: nil, cachedFolders: []))
     XCTAssertEqual(
-      DriveFolder.legacyEvidence(remoteConfigured: false, cachedFolders: ["marcin-mac-studio-3"]),
+      DriveFolder.legacyEvidence(remoteConfigured: false, cachedFolders: ["home-mac-studio-3"]),
       false)
   }
 

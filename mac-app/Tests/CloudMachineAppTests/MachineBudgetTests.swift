@@ -114,7 +114,7 @@ final class MachineBudgetTests: XCTestCase {
   private func productionLikeConfig() -> MachinesConfig {
     var config = MachinesConfig.empty
     config.machines = [
-      MachineEntry(key: "marcin-mac-studio-3", displayName: "Marcin Mac Studio 3", limitGB: 3500)
+      MachineEntry(key: "home-mac-studio-3", displayName: "Home Mac Studio 3", limitGB: 3500)
     ]
     return config
   }
@@ -124,7 +124,7 @@ final class MachineBudgetTests: XCTestCase {
   func testLimitUnderTheMachineKeyCounts() {
     XCTAssertEqual(
       MachineBudget.limitGB(
-        in: productionLikeConfig(), folder: "mac-studio", machineKey: "marcin-mac-studio-3"),
+        in: productionLikeConfig(), folder: "mac-studio", machineKey: "home-mac-studio-3"),
       3500)
   }
 
@@ -132,7 +132,7 @@ final class MachineBudgetTests: XCTestCase {
     var config = productionLikeConfig()
     config.machines.append(MachineEntry(key: "mac-studio", displayName: "x", limitGB: 1000))
     XCTAssertEqual(
-      MachineBudget.limitGB(in: config, folder: "mac-studio", machineKey: "marcin-mac-studio-3"),
+      MachineBudget.limitGB(in: config, folder: "mac-studio", machineKey: "home-mac-studio-3"),
       1000)
   }
 
@@ -145,10 +145,10 @@ final class MachineBudgetTests: XCTestCase {
   /// Setting the limit moves the old entry, so one Mac is not counted twice.
   func testSettingTheLimitMovesTheOldEntry() {
     let config = MachineBudget.withLimit(
-      3000, folder: "mac-studio", machineKey: "marcin-mac-studio-3", in: productionLikeConfig())
+      3000, folder: "mac-studio", machineKey: "home-mac-studio-3", in: productionLikeConfig())
     XCTAssertEqual(config.machines.map(\.key), ["mac-studio"])
     XCTAssertEqual(config.machines.first?.limitGB, 3000)
-    XCTAssertEqual(config.machines.first?.displayName, "Marcin Mac Studio 3")
+    XCTAssertEqual(config.machines.first?.displayName, "Home Mac Studio 3")
     XCTAssertEqual(config.allocatedGB, 3000)
   }
 
