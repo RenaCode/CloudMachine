@@ -31,7 +31,7 @@ public enum MachineBudget {
   ///
   /// Also under `machineKey`, the way `machines.json` was keyed before the
   /// folder became the key. On a Mac set up then, the two differ: on this
-  /// project's own Mac the entry is `marcin-mac-studio-3` with 3500 GB, while
+  /// project's own Mac the entry is `<user>-mac-studio-3` with 3500 GB, while
   /// the folder is `mac-studio`. Until 09.10.2026 only the folder was looked
   /// up, so the limit was there in the file and nowhere in effect: no usage
   /// measurement, no 90% / 100% alarm. The folder's own entry wins - it is the
