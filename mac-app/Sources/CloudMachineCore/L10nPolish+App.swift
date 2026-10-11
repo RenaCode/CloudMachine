@@ -68,8 +68,6 @@ extension L10nPolish {
     "Ready": "Gotowe",
 
     // CloudMachineController
-    "Saved in the Keychain. Note: the existing connection still uses the old client_id - to use the new one, run configure-remote --replace-existing.":
-      "Zapisane w Keychainie. Uwaga: istniejące połączenie nadal działa na starym client_id - żeby użyć nowego, przejdź configure-remote --replace-existing.",
     "Not saved: %@": "Nie zapisano: %@",
     "Installing rclone": "Instaluję rclone",
     "Creating the backup image": "Tworzę obraz backupu",

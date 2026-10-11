@@ -143,6 +143,12 @@ application itself created. Full `drive` scope would hand out read, write and
 disk-image bands needs — especially with `--drive-use-trash=false`, where a
 delete has no bin to recover from.
 
+On a Mac that is already connected, keep the connection it has. A new sign-in
+with different credentials sees only what it created itself, so the existing
+backup would vanish from view; `configure-remote` refuses to replace a working
+connection unless told twice, and checks the new token against the image first
+(see [setup-cli](docs/setup-cli.md#replacing-the-connection)).
+
 ---
 
 ## Documentation

@@ -46,11 +46,29 @@ public enum DriveFolder {
   /// there yet; on an installation that predates `drive-folder` it is, and its
   /// backup lives under the legacy name. Weaker traces were rejected: the
   /// buffer directory appears after any mount attempt, and the old
-  /// `mount-desired.state` is no longer written by anything.
+  /// `mount-desired.state` is no longer written by anything. The cached
+  /// legacy folder is not such a weak trace - rclone writes it only once the
+  /// remote was opened, i.e. after a mount that worked.
   ///
   /// `nil` = rclone did not answer; `decide` then refuses rather than guess.
+  ///
+  /// A cached `mac-studio` folder is evidence on its own (see
+  /// `InstallationTraces`): only an installation from before `drive-folder`
+  /// ever mounted that folder, because a new one gets its file before its
+  /// first mount. Until 11.10.2026 the remote was the only witness, and a Mac
+  /// whose `rclone.conf` was lost or replaced got a new, empty folder.
   static func hasLegacyInstallation() async -> Bool? {
-    await RemoteConfigurer.isConfigured(remoteName: DriveBufferService.remoteName)
+    legacyEvidence(
+      remoteConfigured: await RemoteConfigurer.isConfigured(
+        remoteName: DriveBufferService.remoteName),
+      cachedFolders: InstallationTraces.cachedFolders())
+  }
+
+  /// Pure: the cache trace of the legacy folder outweighs the remote's answer,
+  /// including "I do not know".
+  static func legacyEvidence(remoteConfigured: Bool?, cachedFolders: [String]) -> Bool? {
+    if cachedFolders.contains(legacyName) { return true }
+    return remoteConfigured
   }
 
   public enum Decision: Equatable {

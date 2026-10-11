@@ -136,16 +136,17 @@ final class CloudMachineController: ObservableObject {
   /// Saves the credentials and refreshes the state.
   ///
   /// Does not reconfigure the remote: a token issued for the old `client_id` keeps
-  /// working, so entering new values alone changes NOTHING until
-  /// `configure-remote --replace-existing` is run. We say so plainly.
+  /// working, so entering new values alone changes NOTHING on a connected Mac -
+  /// and must not lead to replacing the connection there (see
+  /// `RemoteConfigurer.credentialsSavedMessage`).
   func saveCredentials(clientID: String, clientSecret: String) async -> String {
     do {
       try await RemoteConfigurer.storeCredentials(
         clientID: clientID, clientSecret: clientSecret)
       await refreshCredentials()
-      return L10n.tr(
-        "Saved in the Keychain. Note: the existing connection still uses the old client_id - to use the new one, run configure-remote --replace-existing."
-      )
+      return RemoteConfigurer.credentialsSavedMessage(
+        remoteConfigured: await RemoteConfigurer.isConfigured(
+          remoteName: DriveBufferService.remoteName))
     } catch {
       return L10n.tr("Not saved: %@", error.localizedDescription)
     }

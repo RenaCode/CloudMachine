@@ -348,7 +348,9 @@ public enum BackupImageService {
     // confirming anyway.
     switch await remoteImagePresence() {
     case .absent:
-      break
+      if let refusal = absentImageVerdict(trace: InstallationTraces.knownImageTrace()) {
+        return refusal
+      }
     case .present:
       return CMActionResult(
         succeeded: false,
@@ -384,11 +386,33 @@ public enum BackupImageService {
         message: L10n.tr(
           "Could not create the image: %@", result?.stderr ?? L10n.tr("unknown error")))
     }
+    InstallationTraces.rememberImage()
     return CMActionResult(
       succeeded: true,
       message: L10n.tr(
         "Created a %@ GB image, band size %@ MB.", "\(sizeGB)",
         "\(bandSectors * 512 / 1024 / 1024)"))
+  }
+
+  /// What "Google Drive has no image" means when this Mac remembers one.
+  ///
+  /// The listing can be wrong without failing: a token with the `drive.file`
+  /// scope sees only what its own `client_id` created, so after the remote is
+  /// replaced (the panel used to suggest `configure-remote
+  /// --replace-existing` after every credential change) the existing image -
+  /// 632 GB on this project's own Mac - is simply not there. `create` then
+  /// made a second image next to it, Drive allowing duplicate names, and the
+  /// old backup sat orphaned, still using space. A remembered image that
+  /// cannot be seen is a question about the token, not a reason to start
+  /// over. `nil` = no trace, go ahead.
+  static func absentImageVerdict(trace: String?) -> CMActionResult? {
+    guard let trace else { return nil }
+    return CMActionResult(
+      succeeded: false,
+      message: L10n.tr(
+        "Google Drive does not show the image %@, but this Mac has already used it (trace: %@). NOT creating a new one - that would start an empty backup and orphan the existing one. Most likely the token cannot see it: a connection with the 'drive.file' scope sees only files created under its own client_id. Check the token's permissions (scope and client_id of the remote in rclone.conf). Only if the image really was deleted on purpose: remove %@ and run again.",
+        "\(DriveBufferService.remoteName):\(DriveBufferService.remotePath)/\(imageName).sparsebundle",
+        trace, trace))
   }
 
   // MARK: - Image on the remote
@@ -477,6 +501,7 @@ public enum BackupImageService {
     let reading = await attachmentReading()
     switch reading.attachment {
     case .attached:
+      InstallationTraces.rememberImage()
       return CMActionResult(
         succeeded: true, message: L10n.tr("Already attached: %@", targetPath.path))
     case .unknown:
@@ -585,6 +610,7 @@ public enum BackupImageService {
         message: L10n.tr(
           "Could not attach the image: %@", result?.stderr ?? L10n.tr("unknown error")))
     }
+    InstallationTraces.rememberImage()
     return CMActionResult(succeeded: true, message: L10n.tr("Attached: %@", targetPath.path))
   }
 
