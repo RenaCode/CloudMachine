@@ -478,7 +478,7 @@ public enum BackupImageService {
       ?? busyResult("Image attach", displayName: L10n.tr("Image attach"))
   }
 
-  private static func attachLocked() async -> CMActionResult {
+  static func attachLocked() async -> CMActionResult {
     switch DriveBufferService.mountedState() {
     case .some(true):
       break
@@ -631,7 +631,7 @@ public enum BackupImageService {
       ?? busyResult("Image detach", displayName: L10n.tr("Image detach"))
   }
 
-  private static func detachLocked(force: Bool = false, waitForUpload: Bool = true) async
+  static func detachLocked(force: Bool = false, waitForUpload: Bool = true) async
     -> CMActionResult
   {
     let stillMounted = await unmountBrowsedSnapshots()

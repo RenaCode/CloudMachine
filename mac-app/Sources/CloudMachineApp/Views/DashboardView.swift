@@ -70,6 +70,7 @@ private struct DashboardContent: View {
   @State private var driveFolder = ""
   /// The limit being typed; empty = show the stored one.
   @State private var limitText = ""
+  @State private var confirmingMountRestart = false
 
   var body: some View {
     HStack(spacing: 0) {
@@ -93,6 +94,12 @@ private struct DashboardContent: View {
             // An error is shown in every section: switching tabs must not hide it.
             if let error = status.errorMessage {
               errorBanner(error)
+            }
+
+            // Every section too: this is not a state of one card, but a door
+            // left open on the whole backup.
+            if status.remoteControlOpen {
+              openRemoteControlCard
             }
 
             switch section {
@@ -569,6 +576,70 @@ private struct DashboardContent: View {
       Spacer(minLength: 0)
     }
     .toneCard(.danger, cornerRadius: 12, padding: 14)
+  }
+
+  // MARK: - Open remote control
+
+  /// The mount still takes commands on the open TCP port. Says what that
+  /// means, and offers the one fix that does not need a restart of the Mac.
+  private var openRemoteControlCard: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      cardTitle(
+        L10n.tr("Remote control of the Drive mount is open"), systemImage: "lock.open.fill",
+        tone: .danger)
+
+      Text(
+        L10n.tr(
+          "The mount was started by an older version of CloudMachine and still takes commands on %@ without a password. Any web page open in a browser can send it one - including deleting the backup on Google Drive, with no trash to restore it from. It moves to a private socket the next time it starts.",
+          DriveBufferService.legacyRCAddress)
+      )
+      .font(.system(size: 13))
+      .foregroundStyle(RenaCodeTheme.textMain)
+      .fixedSize(horizontal: false, vertical: true)
+
+      Text(
+        L10n.tr(
+          "Restart the mount: the image is detached, everything waits until it has reached Google Drive, the mount starts again and the image is attached. It takes a few minutes, during which Time Machine has no destination. Or prepare the shutdown and restart the Mac:"
+        )
+      )
+      .font(.system(size: 13))
+      .foregroundStyle(RenaCodeTheme.textMuted)
+      .fixedSize(horizontal: false, vertical: true)
+
+      commandBox("\(CMPaths.agentBinaryPath?.path ?? "cloudmachine-agent") prepare-shutdown")
+
+      HStack(spacing: 12) {
+        Button(action: { confirmingMountRestart = true }) {
+          HStack(spacing: 6) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+            Text(L10n.tr("Restart the mount"))
+          }
+        }
+        .buttonStyle(PrimaryGradientButtonStyle())
+        .disabled(!status.canRestartMount)
+
+        if status.backupProgress != nil {
+          Text(L10n.tr("Wait until the backup has finished."))
+            .font(.system(size: 12))
+            .foregroundStyle(RenaCodeTheme.textMuted)
+        }
+        Spacer()
+      }
+    }
+    .toneCard(.danger)
+    .confirmationDialog(
+      L10n.tr("Restart the Google Drive mount now?"), isPresented: $confirmingMountRestart
+    ) {
+      Button(L10n.tr("Restart the mount"), role: .destructive) {
+        Task { await controller.restartMount() }
+      }
+      Button(L10n.tr("Cancel"), role: .cancel) {}
+    } message: {
+      Text(
+        L10n.tr(
+          "Time Machine loses its destination for a few minutes. Nothing is stopped until everything waiting has reached Google Drive; if that does not happen, the mount is left as it is."
+        ))
+    }
   }
 
   // MARK: - Backups

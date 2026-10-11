@@ -87,6 +87,21 @@ private struct MenuBarPanel: View {
       }
       .accessibilityElement(children: .combine)
 
+      // The headline says it only while nothing worse is going on; this row
+      // stays as long as the port is open.
+      if status.remoteControlOpen,
+        status.headline != L10n.tr("Drive remote control is open - restart the mount")
+      {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          StatusDot(.danger)
+          Text(L10n.tr("Drive remote control is open - restart the mount"))
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(StatusTone.danger.color)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+      }
+
       // Progress of the running backup
       if let progress = status.backupProgress, let percent = progress.percent {
         VStack(alignment: .leading, spacing: 6) {

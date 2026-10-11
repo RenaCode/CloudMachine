@@ -99,6 +99,51 @@ public enum DriveBufferService {
     FileManager.default.fileExists(atPath: rcSocket.path) ? .socket : .legacyTCP
   }
 
+  /// Whether the running mount still takes commands on the open TCP port -
+  /// a mount started by 1.3.7 or older that survived the upgrade.
+  ///
+  /// Until 11.10.2026 only `drive-status` said so, in one line; the panel and
+  /// the watchdog stayed silent, and such a mount runs until the next restart
+  /// of the Mac - on this project's own Mac, for days. All three now ask here.
+  ///
+  /// Three conditions, each needed: no socket (a mount of this version has
+  /// one), a mount (no mount, nothing listens), and an answer on the port.
+  /// The last one tells the old mount apart from a socket removed under a new
+  /// one, where nothing listens on TCP and nothing is exposed.
+  public static func legacyPortOpen(
+    transport: RCTransport, mounted: Bool?, portAnswers: () -> Bool
+  ) -> Bool {
+    guard transport == .legacyTCP, mounted == true else { return false }
+    return portAnswers()
+  }
+
+  /// `legacyPortOpen` for this Mac, now.
+  public static func legacyPortOpenNow() -> Bool {
+    legacyPortOpen(
+      transport: rcTransport, mounted: mountedState(),
+      portAnswers: { tcpPortAnswers(port: legacyRCPort) })
+  }
+
+  static let legacyRCPort: UInt16 = 5572
+
+  /// Whether something accepts a connection on `127.0.0.1:port`. Connects
+  /// and closes - nothing is sent, so a listener gets no request.
+  static func tcpPortAnswers(port: UInt16) -> Bool {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = port.bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    return withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+      }
+    }
+  }
+
   /// Arguments that point `rclone rc` at the running mount.
   static func rcClientArguments(_ transport: RCTransport) -> [String] {
     switch transport {

@@ -30,6 +30,7 @@ struct CloudMachineAgent: AsyncParsableCommand {
       BufferGuard.self,
       BackupHealthCommand.self,
       PrepareShutdown.self,
+      RestartMount.self,
       DriveStatus.self,
     ]
   )

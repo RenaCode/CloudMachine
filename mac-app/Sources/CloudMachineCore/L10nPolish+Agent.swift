@@ -191,8 +191,10 @@ extension L10nPolish {
       "Sterowanie rc:    %@",
     "private socket":
       "prywatne gniazdo",
-    "OPEN on %@ - the mount was started by an older version, and any web page can send it commands. It switches to the private socket on its next start: run prepare-shutdown, then restart the Mac.":
-      "OTWARTE na %@ - montowanie uruchomiła starsza wersja i każda strona WWW może wysyłać mu polecenia. Przejdzie na prywatne gniazdo przy następnym starcie: uruchom prepare-shutdown, potem zrestartuj Maca.",
+    "OPEN on %@ - the mount was started by an older version, and any web page can send it commands. It switches to the private socket on its next start: run restart-mount (or prepare-shutdown, then restart the Mac).":
+      "OTWARTE na %@ - montowanie uruchomiła starsza wersja i każda strona WWW może wysyłać mu polecenia. Przejdzie na prywatne gniazdo przy następnym starcie: uruchom restart-mount (albo prepare-shutdown, potem zrestartuj Maca).",
+    "no socket - UNKNOWN whether the mount is running":
+      "brak gniazda - NIE WIADOMO, czy montowanie działa",
     "no socket - the mount is not running":
       "brak gniazda - montowanie nie działa",
     "Cache on disk:    %@":

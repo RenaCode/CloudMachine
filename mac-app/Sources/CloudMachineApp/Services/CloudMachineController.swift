@@ -184,6 +184,7 @@ final class CloudMachineController: ObservableObject {
       buffer.outOfSpace = stats.outOfSpace
     }
     status.buffer = buffer
+    status.remoteControlOpen = DriveBufferService.legacyPortOpenNow()
     status.imageExists =
       buffer.mounted
       ? FileManager.default.fileExists(atPath: BackupImageService.imagePath.path) : nil
@@ -336,6 +337,15 @@ final class CloudMachineController: ObservableObject {
   func attachImage() async {
     await run(L10n.tr("Attaching the image"), log: "Attaching the image") {
       await BackupImageService.attach()
+    }
+  }
+
+  /// Restarts the Drive mount so it comes back on the private socket. The
+  /// view asks for confirmation first; `MountRestart` refuses by itself
+  /// while Time Machine is backing up.
+  func restartMount() async {
+    await run(L10n.tr("Restarting the Google Drive mount"), log: "Restarting the Drive mount") {
+      await MountRestart.perform()
     }
   }
 

@@ -122,7 +122,21 @@ and loopback is not private: a web page can POST a form there without a CORS
 preflight, and rclone does not check `Origin`. It now listens only on
 `~/.cloudmachine/run/rc.sock`, in a directory only the owner can enter, which a
 browser cannot reach at all. A mount started by an older version keeps the TCP
-address until it restarts; `drive-status` says so on its "Remote control" line.
+address until it restarts. The window, the menu bar, the watchdog's
+notification and `drive-status` all say so - the window, the watchdog and the
+CLI from one check: no socket, a mount, and something accepting connections on
+the port. `restart-mount` (or the button on that card) closes it without a
+restart of the Mac: it is `prepare-shutdown`'s detach-and-drain, then SIGTERM
+to the mount job so launchd's `KeepAlive` starts the new code, then the attach -
+holding the image lock throughout, and stopping before the mount is touched if
+anything has not reached Drive.
+
+**The rclone log is trimmed while the mount runs.** rclone never rotates it,
+and a mount runs for days (257 MB on 10 October 2026). Above 100 MB the buffer
+guard copies the last 32 MB to `rclone.log.1` and truncates the live file;
+rclone opens it with `O_APPEND`, so it carries on at the new end. The stall and
+quota checks read the end of `.1` together with the live file, so a trim in the
+middle of a jam does not hide it.
 
 The Drive trash stays off, after weighing it as a second line. Bands are
 rewritten in place, so uploads would not fill it; deletions would — and the big

@@ -111,15 +111,21 @@ It works two ways:
 
 ### Upgrading and uninstalling
 
-`brew upgrade` replaces the app without restarting the Google Drive mount.
+`brew upgrade --cask renacode/tap/cloudmachine` replaces the app without
+restarting the Google Drive mount. (Use the full name: a second tap with a
+`cloudmachine` cask, left over from testing, makes the short name ambiguous.)
 When Homebrew reopens the app, it reloads the background agents so they run
 the new version; `cloudmachine-agent drive-status` shows `Agents: OK`. Changes
-to the mount itself wait for its next start - a restart of the Mac, with
-`prepare-shutdown` before it. One such change is rclone's control interface
-moving to a private socket: until the restart `drive-status` reports
-`Remote control: OPEN on 127.0.0.1:5572`. If a
-new version does not show up, run `brew update` first - Homebrew refreshes the
-tap only now and then. Neither `brew uninstall` nor
+to the mount itself wait for its next start. One such change is rclone's
+control interface moving to a private socket: until then the old mount takes
+commands on `127.0.0.1:5572` without a password, and the app window shows a red
+card, the menu bar an alert, and the watchdog a notification (once, then after
+1, 2, 4 and every 7 days). **Restart the mount** on that card - or
+`cloudmachine-agent restart-mount` - detaches the image, waits until everything
+has reached Google Drive, restarts the mount and attaches the image again; it
+refuses while Time Machine is backing up. Restarting the Mac after
+`prepare-shutdown` does the same. If a new version does not show up, run
+`brew update` first - Homebrew refreshes the tap only now and then. Neither `brew uninstall` nor
 `--zap` touches the launchd agents or the upload buffer in `~/.cloudmachine`,
 which may hold backups that have not reached Google Drive yet. Run
 `cloudmachine-agent prepare-shutdown` before uninstalling.
