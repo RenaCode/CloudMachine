@@ -138,6 +138,51 @@ final class PipeReader: @unchecked Sendable {
   }
 }
 
+/// What the timeout timers need from one call: the process and its readers.
+/// Emptied the moment the process exits.
+///
+/// Until 11.10.2026 the three `asyncAfter` closures held `process` and the
+/// readers themselves, and a timer that has been scheduled keeps its closure
+/// until its deadline - cancelled or not. Every call with `timeout:` therefore
+/// held two pipe descriptors for `timeout + 10` seconds after the process had
+/// long finished: measured +100 descriptors for 50 calls of `/bin/echo` with
+/// `timeout: 30`, and 76-92 pipes in the running app, against a limit of 256.
+/// Past the limit `posix_spawn` fails and every tool answers "no answer" at
+/// once. The timers now hold only this box, and it lets go at exit.
+final class TimeoutTargets: @unchecked Sendable {
+  private let lock = NSLock()
+  private var process: Process?
+  private var readers: [PipeReader]
+
+  init(process: Process, readers: [PipeReader]) {
+    self.process = process
+    self.readers = readers
+  }
+
+  /// The process, while it has not exited.
+  var running: Process? {
+    lock.lock()
+    defer { lock.unlock() }
+    return process
+  }
+
+  /// The readers, taken out - for the one caller that gives up on the result.
+  func takeReaders() -> [PipeReader] {
+    lock.lock()
+    defer { lock.unlock() }
+    let taken = readers
+    readers = []
+    return taken
+  }
+
+  func release() {
+    lock.lock()
+    defer { lock.unlock() }
+    process = nil
+    readers = []
+  }
+}
+
 /// A thin layer over `Process` for running external tools (rclone, tmutil,
 /// hdiutil, diskutil...) - shared by the GUI and the CLI. Previously it lived
 /// only in the GUI as `Shell.run`; moved here so that the CLI watchdogs have
@@ -178,8 +223,11 @@ public enum ProcessRunner {
       let stdoutReader = PipeReader(stdoutPipe, queue: queue)
       let stderrReader = PipeReader(stderrPipe, queue: queue)
       let resumeGuard = ContinuationGuard()
+      let targets = TimeoutTargets(process: process, readers: [stdoutReader, stderrReader])
 
       process.terminationHandler = { proc in
+        // The timers must not keep the pipes open - see `TimeoutTargets`.
+        targets.release()
         // IMPORTANT: readDataToEndOfFile() must NOT be called here - it blocks
         // until the write end of the pipe is closed by ALL of its holders.
         // Processes started with "--daemon" (e.g. `rclone nfsmount --daemon`)
@@ -216,8 +264,10 @@ public enum ProcessRunner {
       }
 
       if let timeout {
+        // The closures below capture `targets` only - never `process` or a
+        // reader (see `TimeoutTargets`).
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-          if process.isRunning {
+          if let process = targets.running, process.isRunning {
             process.terminate()
           }
         }
@@ -225,7 +275,7 @@ public enum ProcessRunner {
         // rationale for the same mechanism in the old Shell.swift (a hung
         // child diskutil/umount ignores SIGTERM indefinitely).
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 5) {
-          if process.isRunning {
+          if let process = targets.running, process.isRunning {
             kill(process.processIdentifier, SIGKILL)
           }
         }
@@ -252,9 +302,9 @@ public enum ProcessRunner {
             // and discard the data - the result will not be read anyway (the
             // continuation below resumes with the timeout error), but the
             // orphaned process can freely finish writing and exit on its own.
+            let readers = targets.takeReaders()
             queue.async {
-              stdoutReader.discardFromNowOn()
-              stderrReader.discardFromNowOn()
+              for reader in readers { reader.discardFromNowOn() }
             }
             continuation.resume(throwing: ProcessRunnerError.timedOut(executable))
           }

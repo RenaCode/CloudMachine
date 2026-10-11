@@ -68,4 +68,29 @@ final class ProcessRunnerOutputTests: XCTestCase {
     XCTAssertEqual(result.stdout, "parent\n")
     XCTAssertLessThan(Date().timeIntervalSince(started), 5)
   }
+
+  /// REGRESSION 11.10.2026: every call with `timeout:` kept its two pipe
+  /// descriptors until `timeout + 10` s, long after the process had exited -
+  /// the timers held the process and the readers. The audit measured +100
+  /// descriptors for exactly this loop, and 76-92 pipes in the running app
+  /// against a limit of 256. They must be back within moments of the exit.
+  func testFinishedProcessesReleaseTheirDescriptors() async throws {
+    // Settle what earlier tests left behind first, so it cannot be counted.
+    try await Task.sleep(nanoseconds: 500_000_000)
+    let before = Self.openDescriptors()
+    for _ in 0..<50 {
+      let result = try await ProcessRunner.run("/bin/echo", ["hello"], timeout: 30)
+      XCTAssertEqual(result.stdout, "hello\n")
+    }
+    var leaked = Self.openDescriptors() - before
+    for _ in 0..<20 where leaked > 10 {
+      try await Task.sleep(nanoseconds: 100_000_000)
+      leaked = Self.openDescriptors() - before
+    }
+    XCTAssertLessThanOrEqual(leaked, 10, "\(leaked) descriptors still open after 50 finished calls")
+  }
+
+  private static func openDescriptors() -> Int {
+    (0..<min(Int32(getdtablesize()), 65536)).filter { fcntl($0, F_GETFD) != -1 }.count
+  }
 }
