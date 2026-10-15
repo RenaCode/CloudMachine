@@ -330,13 +330,18 @@ public struct StatusPill: View {
 
 // MARK: - Status Dot
 
-/// A colored dot; while `live`, a ring pulses around it (not with Reduce Motion).
+/// A colored dot; while `live`, the dot itself breathes (not with Reduce Motion).
+///
+/// The phase comes from a `TimelineView` clock instead of a `repeatForever`
+/// animation: a state-driven loop froze whenever the menu re-rendered, and the
+/// expanding ring it used to draw overlapped the next ring and looked messy.
 public struct StatusDot: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var pulsing = false
   let tone: StatusTone
   var live: Bool
   var size: CGFloat
+
+  private static let period: Double = 1.8
 
   public init(_ tone: StatusTone, live: Bool = false, size: CGFloat = 8) {
     self.tone = tone
@@ -345,24 +350,22 @@ public struct StatusDot: View {
   }
 
   public var body: some View {
-    Circle()
-      .fill(tone.color)
-      .frame(width: size, height: size)
-      .shadow(color: tone.color.opacity(0.7), radius: 4)
-      .background(
-        Circle()
-          .stroke(tone.color.opacity(pulsing ? 0 : 0.6), lineWidth: 1.5)
-          .scaleEffect(pulsing ? 2.4 : 1)
-          .opacity(live && !reduceMotion ? 1 : 0)
-      )
-      .task(id: live && !reduceMotion) {
-        pulsing = false
-        guard live, !reduceMotion else { return }
-        withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) {
-          pulsing = true
-        }
-      }
-      .accessibilityHidden(true)
+    let animating = live && !reduceMotion
+    TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animating)) { context in
+      let level = animating ? Self.level(at: context.date) : 1
+      Circle()
+        .fill(tone.color)
+        .frame(width: size, height: size)
+        .opacity(0.45 + 0.55 * level)
+        .shadow(color: tone.color.opacity(0.3 + 0.5 * level), radius: 2 + 3 * level)
+    }
+    .accessibilityHidden(true)
+  }
+
+  /// 0...1, smooth cosine wave starting at full brightness.
+  private static func level(at date: Date) -> Double {
+    let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+    return 0.5 + 0.5 * cos(phase * 2 * .pi)
   }
 }
 
