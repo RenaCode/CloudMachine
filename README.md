@@ -104,7 +104,7 @@ It works two ways:
 - **Time Machine quota.** The card gives a `sudo tmutil setquota` command to
   copy; Time Machine then deletes this Mac's oldest backups to stay under it.
   The quota is 70% of the limit, because the image on Drive grows larger than
-  the backup inside it (see [How it works](docs/design.md)).
+  the backup inside it (see `renacode-infra: docs/projekty/cloudmachine/design.md`).
 - **An alarm on the real usage.** The watchdog measures this Mac's folder on
   Drive every few hours and warns from 90% of the limit, and again above it.
   The card and `drive-status` show the usage.
@@ -153,24 +153,26 @@ On a Mac that is already connected, keep the connection it has. A new sign-in
 with different credentials sees only what it created itself, so the existing
 backup would vanish from view; `configure-remote` refuses to replace a working
 connection unless told twice, and checks the new token against the image first
-(see [setup-cli](docs/setup-cli.md#replacing-the-connection)).
+(see `renacode-infra: docs/projekty/cloudmachine/setup-cli.md`, "Replacing the connection").
 
 ---
 
 ## Documentation
 
-- [Running CloudMachine](docs/operations.md) — checking from Terminal,
+The full documentation is kept in the owner's private infrastructure
+repository (`renacode-infra: docs/projekty/cloudmachine/`):
+
+- Running CloudMachine (`operations.md`) — checking from Terminal,
   knowing when backups stop, reading the logs, before rebooting.
-- [Restoring](docs/restoring.md) — getting files back, and checking the image.
-- [How it works, and what it costs](docs/design.md) — measured traffic and
+- Restoring (`restoring.md`) — getting files back, and checking the image.
+- How it works, and what it costs (`design.md`) — measured traffic and
   storage, and why each piece is the way it is.
-- [Setting up from Terminal](docs/setup-cli.md) — the same setup without the app.
-- [Building from source](docs/building.md) — local builds, tests, releases,
+- Setting up from Terminal (`setup-cli.md`) — the same setup without the app.
+- Building from source (`building.md`) — local builds, tests, releases,
   measurement harnesses.
 
 ---
 
 ## Licence
 
-MIT. FUSE-T and rclone keep their own licences; see
-[How it works](docs/design.md#why-the-pieces-are-what-they-are).
+MIT. FUSE-T and rclone keep their own licences.
