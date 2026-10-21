@@ -66,6 +66,7 @@ final class CloudMachineController: ObservableObject {
     // run in it. See `WatchdogHeartbeat`: without this the only symptom of an
     // unloaded watchdog is silence, and silence is the normal state here.
     status.watchdog = WatchdogHeartbeat.current()
+    status.preparedForRestart = ShutdownPrep.holdsAttach()
     status.lastRefresh = Date()
   }
 
@@ -335,8 +336,19 @@ final class CloudMachineController: ObservableObject {
   }
 
   func attachImage() async {
+    // An explicit attach ends a preparation for restart that is no longer wanted.
+    ShutdownPrep.clear()
     await run(L10n.tr("Attaching the image"), log: "Attaching the image") {
       await BackupImageService.attach()
+    }
+  }
+
+  /// Pauses the backup, detaches the image and waits until everything has
+  /// reached Drive, then keeps the image detached until the restart
+  /// (`ShutdownPrep`). The menu asks for confirmation first.
+  func prepareForRestart() async {
+    await run(L10n.tr("Preparing for restart"), log: "Preparing for restart") {
+      await ShutdownPrep.perform()
     }
   }
 

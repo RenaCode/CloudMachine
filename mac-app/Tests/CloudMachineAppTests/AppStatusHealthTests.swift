@@ -266,4 +266,19 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertFalse(status.healthy)
     XCTAssertEqual(status.headline, "There is no completed backup at all")
   }
+
+  /// After "Prepare for restart" the image is detached on purpose: the headline
+  /// says so instead of reporting a failure, and the badge is still not green.
+  func testDetachedForRestartHasItsOwnHeadline() {
+    let status = healthy()
+    status.buffer.imageAttached = false
+    XCTAssertEqual(status.headline, L10n.tr("Backup image not attached"))
+    status.preparedForRestart = true
+    XCTAssertEqual(
+      status.headline, L10n.tr("Ready for restart - the image is detached on purpose"))
+    XCTAssertFalse(status.healthy)
+    // The preparation does not cover an image that is attached again.
+    status.buffer.imageAttached = true
+    XCTAssertFalse(status.detachedForRestart)
+  }
 }

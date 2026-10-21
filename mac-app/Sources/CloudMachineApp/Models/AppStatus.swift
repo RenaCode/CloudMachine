@@ -227,6 +227,9 @@ final class AppStatus: ObservableObject {
   /// `DriveBufferService.legacyPortOpen`). Until 11.10.2026 only one line of
   /// `drive-status` said so; the window was green.
   @Published var remoteControlOpen: Bool = false
+  /// The Mac was prepared for a restart (`ShutdownPrep`): the image is
+  /// detached ON PURPOSE until the restart.
+  @Published var preparedForRestart: Bool = false
   @Published var isBusy: Bool = false
   @Published var busyLabel: String = ""
   @Published var errorMessage: String?
@@ -250,7 +253,11 @@ final class AppStatus: ObservableObject {
     }
     if !remoteConfigured { return L10n.tr("Google Drive not connected") }
     if !buffer.mounted { return L10n.tr("Buffer is not working") }
-    if !buffer.imageAttached { return L10n.tr("Backup image not attached") }
+    if !buffer.imageAttached {
+      return detachedForRestart
+        ? L10n.tr("Ready for restart - the image is detached on purpose")
+        : L10n.tr("Backup image not attached")
+    }
     if case .notRegistered = timeMachineState {
       return L10n.tr("Time Machine does not point to CloudMachine")
     }
@@ -303,6 +310,10 @@ final class AppStatus: ObservableObject {
   ///
   /// THIRD, from 11.10.2026: `remoteControlOpen`. A backup that any web page
   /// can delete is not safe, however fresh it is.
+  /// A detached image that is not a failure: the preparation for a restart
+  /// detached it, and the agents attach it again after the restart.
+  var detachedForRestart: Bool { preparedForRestart && !buffer.imageAttached }
+
   var healthy: Bool {
     guard case .ready = dependencyState, remoteConfigured, buffer.mounted, buffer.imageAttached,
       case .registered = timeMachineState, buffer.uploadState.isNominal,

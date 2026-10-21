@@ -84,6 +84,15 @@ struct AttachImage: AsyncParsableCommand {
     abstract: L10n.tr("Attaches the backup image as the Time Machine destination."))
 
   func run() async throws {
+    // After `prepare-shutdown` the image stays detached until the restart
+    // (`ShutdownPrep`) - this agent runs every 900 s and would otherwise undo it.
+    if ShutdownPrep.holdsAttach() {
+      print(
+        L10n.tr(
+          "The Mac is prepared for a restart - not attaching the image. This is not an error: after the restart, or %@ min after the preparation, the image is attached again.",
+          "\(Int(ShutdownPrep.window / 60))"))
+      return
+    }
     // Time Machine must not see the destination before the buffer is ready -
     // otherwise it decides that the backup disk has disappeared. How long we
     // wait and for what exactly - see `BufferReadiness`.
@@ -326,31 +335,12 @@ struct PrepareShutdown: AsyncParsableCommand {
       "Prepares for a restart: pauses the backup, detaches the image and waits for the upload."))
 
   func run() async throws {
-    // The order is not arbitrary. First Time Machine stops adding new writes,
-    // only then do we detach the image - otherwise the detach would fight with
-    // the running backup.
-    if await TimeMachineStatus.isRunning() {
-      print(L10n.tr("Pausing the backup..."))
-      _ = try? await ProcessRunner.run("/usr/bin/tmutil", ["stopbackup"], timeout: 120)
-      try? await Task.sleep(nanoseconds: 3_000_000_000)
-    }
-
-    print(L10n.tr("Detaching the image and waiting for the upload..."))
-    let result = await BackupImageService.detach()
+    let result = await ShutdownPrep.perform(progress: { print($0) })
     print(result.message)
-
     guard result.succeeded else {
-      print("")
-      print(L10n.tr("Do NOT restart yet - the buffer holds data that has not reached Drive."))
       print(L10n.tr("Check the state:  %@", "cloudmachine-agent drive-status"))
       throw ExitCode(1)
     }
-
-    print("")
-    print(
-      L10n.tr(
-        "Safe to restart. After startup the agents will bring up the buffer and attach the image themselves."
-      ))
   }
 }
 

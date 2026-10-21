@@ -424,6 +424,10 @@ private struct DashboardContent: View {
   private var healthTone: StatusTone {
     if status.healthy { return .success }
     if case .missing = status.dependencyState { return .danger }
+    // Detached on purpose before a restart - amber, not "action needed".
+    if status.detachedForRestart && status.remoteConfigured && status.buffer.mounted {
+      return .warning
+    }
     if !status.remoteConfigured || !status.buffer.mounted || !status.buffer.imageAttached {
       return .danger
     }

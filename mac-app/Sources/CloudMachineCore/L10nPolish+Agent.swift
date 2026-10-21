@@ -163,8 +163,22 @@ extension L10nPolish {
       "NIE RESTARTUJ jeszcze - w buforze są dane, które nie doleciały na Dysk.",
     "Check the state:  %@":
       "Sprawdź stan:  %@",
-    "Safe to restart. After startup the agents will bring up the buffer and attach the image themselves.":
-      "Można restartować. Po starcie agenty podniosą bufor i podepną obraz same.",
+    "Safe to restart. The image stays detached for %@ min; after startup the agents will bring up the buffer and attach the image themselves.":
+      "Można restartować. Obraz zostaje odpięty przez %@ min; po starcie agenty podniosą bufor i podepną obraz same.",
+    "Safe to restart now - but the image could not be held detached, so the agent may attach it again within 15 min. Restart soon. After startup the agents will bring up the buffer and attach the image themselves.":
+      "Można restartować teraz - ale nie udało się zatrzymać obrazu odpiętego, więc agent może go podpiąć w ciągu 15 min. Zrestartuj wkrótce. Po starcie agenty podniosą bufor i podepną obraz same.",
+    "The Mac is prepared for a restart - not attaching the image. This is not an error: after the restart, or %@ min after the preparation, the image is attached again.":
+      "Mac jest przygotowany do restartu - obraz nie jest podpinany. To nie błąd: po restarcie albo %@ min po przygotowaniu obraz zostanie podpięty znowu.",
+    "Preparing for restart":
+      "Przygotowanie do restartu",
+    "Ready for restart - the image is detached on purpose":
+      "Gotowe do restartu - obraz odpięty celowo",
+    "Prepare for restart":
+      "Przygotuj do restartu",
+    "Prepare":
+      "Przygotuj",
+    "The backup is paused, the image is detached and everything waits until it has reached Google Drive. It can take several minutes.":
+      "Kopia zostanie wstrzymana, obraz odpięty, a wszystko poczeka, aż trafi na Google Drive. To może potrwać kilka minut.",
     "State of the buffer, the upload queue and Time Machine.":
       "Stan bufora, kolejki wysyłki i Time Machine.",
     "Tools:            %@":
