@@ -119,7 +119,10 @@ public enum MountRestart {
   static let newMountTimeout: TimeInterval = 300
 
   public static func perform() async -> CMActionResult {
-    await withCMLock(BackupImageService.lockName) { await run(live) }
+    // A restart of the mount ends with the image attached - a preparation for
+    // a Mac restart (`ShutdownPrep`) no longer applies.
+    ShutdownPrep.clear()
+    return await withCMLock(BackupImageService.lockName) { await run(live) }
       ?? CMActionResult(
         succeeded: false,
         message: L10n.tr(

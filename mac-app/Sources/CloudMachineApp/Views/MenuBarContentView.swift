@@ -18,6 +18,9 @@ private struct MenuBarPanel: View {
   @EnvironmentObject private var controller: CloudMachineController
   @ObservedObject var status: AppStatus
   @Environment(\.openWindow) private var openWindow
+  /// The restart preparation asks once more in place - a dialog from a menu
+  /// bar panel closes the panel along with it.
+  @State private var confirmingRestartPrep = false
 
   /// Opens the panel and brings it TO THE FRONT.
   ///
@@ -42,6 +45,10 @@ private struct MenuBarPanel: View {
   private var tone: StatusTone {
     if status.healthy { return .success }
     if case .missing = status.dependencyState { return .danger }
+    // Detached on purpose before a restart - amber, not "action needed".
+    if status.detachedForRestart && status.remoteConfigured && status.buffer.mounted {
+      return .warning
+    }
     if !status.remoteConfigured || !status.buffer.mounted || !status.buffer.imageAttached {
       return .danger
     }
@@ -154,6 +161,27 @@ private struct MenuBarPanel: View {
 
       Divider().background(RenaCodeTheme.borderGlass)
 
+      // What the app is doing right now, or how the last action ended - the
+      // panel used to show neither, so a click looked like nothing happened.
+      if status.isBusy {
+        HStack(spacing: 8) {
+          ProgressView().controlSize(.small)
+          Text(status.busyLabel)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(RenaCodeTheme.textMuted)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      } else if let last = status.lastAction, Date().timeIntervalSince(last.date) < 600 {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          StatusDot(last.succeeded ? .success : .danger, size: 6)
+          Text(last.message)
+            .font(.system(size: 11))
+            .foregroundStyle(last.succeeded ? RenaCodeTheme.textMain : StatusTone.danger.color)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+      }
+
       // Action buttons
       VStack(spacing: 6) {
         if status.backupProgress == nil {
@@ -175,6 +203,48 @@ private struct MenuBarPanel: View {
             }
           }
           .buttonStyle(SecondaryGlassButtonStyle())
+        }
+
+        if confirmingRestartPrep {
+          Text(
+            L10n.tr(
+              "The backup is paused, the image is detached and everything waits until it has reached Google Drive. It can take several minutes."
+            )
+          )
+          .font(.system(size: 11))
+          .foregroundStyle(RenaCodeTheme.textMuted)
+          .fixedSize(horizontal: false, vertical: true)
+          HStack(spacing: 6) {
+            Button(action: {
+              confirmingRestartPrep = false
+              Task { await controller.prepareForRestart() }
+            }) {
+              HStack {
+                Image(systemName: "checkmark")
+                Text(L10n.tr("Prepare"))
+                Spacer()
+              }
+            }
+            .buttonStyle(PrimaryGradientButtonStyle())
+            Button(action: { confirmingRestartPrep = false }) {
+              Text(L10n.tr("Cancel"))
+            }
+            .buttonStyle(SecondaryGlassButtonStyle())
+          }
+        } else {
+          Button(action: { confirmingRestartPrep = true }) {
+            HStack {
+              Image(systemName: "arrow.clockwise.circle")
+              Text(L10n.tr("Prepare for restart"))
+              Spacer()
+            }
+          }
+          .buttonStyle(SecondaryGlassButtonStyle())
+          .disabled(status.isBusy)
+          .help(
+            L10n.tr(
+              "Prepares for a restart: pauses the backup, detaches the image and waits for the upload."
+            ))
         }
 
         HStack(spacing: 6) {
