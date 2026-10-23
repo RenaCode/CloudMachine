@@ -80,15 +80,21 @@ rm -rf "$work"
 Do this **once**. A new certificate is a new identity: every Mac would have to
 grant Full Disk Access again.
 
-### 2. The tap repository and `HOMEBREW_TAP_TOKEN`
+### 2. The tap repository and the `renacode-tap` app
 
 1. Create the public repository `RenaCode/homebrew-tap` (empty is fine; the
    workflow creates `Casks/`).
-2. Create a fine-grained token limited to that repository with
-   *Contents: Read and write*, and store it:
-   `gh secret set HOMEBREW_TAP_TOKEN -R RenaCode/CloudMachine`
+2. Create a GitHub App in the RenaCode organization (no webhook, Repository
+   permissions *Contents: Read and write*), install it on `homebrew-tap` only,
+   and store its client ID and private key:
+   `gh variable set TAP_APP_CLIENT_ID -R RenaCode/CloudMachine --body <client id>`
+   `gh secret set TAP_APP_KEY -R RenaCode/CloudMachine < key.pem`
 
-Without the token the release is still published, but the job fails and
+   The release job turns the key into a one-hour token for `homebrew-tap`
+   (`actions/create-github-app-token`), so there is no token to renew. The app
+   is `renacode-tap` (since 2026-10-23; before that a fine-grained PAT).
+
+Without the app the release is still published, but the job fails and
 prints the cask, so a missing tap update cannot go unnoticed.
 
 ## What the cask does and deliberately does not do
