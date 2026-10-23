@@ -27,7 +27,9 @@ name: Release
 #     Without it the release does NOT build: an ad-hoc signature changes the
 #     app's identity on every release and macOS revokes Full Disk Access after
 #     every upgrade.
-#   HOMEBREW_TAP_TOKEN - token with write access to RenaCode/homebrew-tap.
+#   TAP_APP_KEY (secret) + TAP_APP_CLIENT_ID (variable) - GitHub App `renacode-tap`
+#     (Contents: write, installed on RenaCode/homebrew-tap). The job mints a
+#     1-hour token scoped to that one repository; nothing expires.
 #
 # Still no Developer ID and no notarization - Gatekeeper does not know the
 # publisher; the cask removes the quarantine attribute in postflight.
@@ -277,23 +279,41 @@ jobs:
             mac-app/build/*.sha256
           generate_release_notes: true
 
-      - name: Check tap token
+      - name: Check tap app
         if: env.IS_RELEASE == 'true'
         env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_APP_CLIENT_ID: ${{ vars.TAP_APP_CLIENT_ID }}
+          TAP_APP_KEY: ${{ secrets.TAP_APP_KEY }}
         run: |
-          if [ -z "$TAP_TOKEN" ]; then
-            echo "::error::Release published, but HOMEBREW_TAP_TOKEN is missing - the cask in the tap was NOT updated. Contents to insert manually:"
+          if [ -z "$TAP_APP_CLIENT_ID" ] || [ -z "$TAP_APP_KEY" ]; then
+            echo "::error::Release published, but TAP_APP_CLIENT_ID/TAP_APP_KEY is missing - the cask in the tap was NOT updated. Contents to insert manually:"
             cat mac-app/build/cloudmachine.rb
             exit 1
           fi
+
+      # Token and the access probe run on EVERY build, not only on release:
+      # an app that lost its installation (or a missing key) fails the PR,
+      # not the release after the DMG is already published.
+      - name: Tap token
+        id: tap-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.TAP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TAP_APP_KEY }}
+          owner: RenaCode
+          repositories: homebrew-tap
+
+      - name: Check tap access
+        env:
+          TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
+        run: git ls-remote "https://x-access-token:${TAP_TOKEN}@github.com/RenaCode/homebrew-tap.git" HEAD
 
       - name: Check out tap
         if: env.IS_RELEASE == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: RenaCode/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ steps.tap-token.outputs.token }}
           path: homebrew-tap
 
       - name: Push cask to tap
