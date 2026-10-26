@@ -608,10 +608,20 @@ public enum BackupImageService {
       return CMActionResult(
         succeeded: false,
         message: L10n.tr(
-          "Could not attach the image: %@", result?.stderr ?? L10n.tr("unknown error")))
+          "Could not attach the image: %@", result?.stderr ?? L10n.tr("unknown error")),
+        attachTemporarilyUnavailable: isTemporarilyUnavailable(stderr: result?.stderr ?? ""))
     }
     InstallationTraces.rememberImage()
     return CMActionResult(succeeded: true, message: L10n.tr("Attached: %@", targetPath.path))
+  }
+
+  /// `hdiutil attach` turned away with EAGAIN. On 25-26 Oct 2026 every attach
+  /// ended like this for 26 h, with rclone idle (queue 0) and answering; only
+  /// a fresh rclone - a restart of the Mac - let the image attach. The text is
+  /// `strerror(EAGAIN)`, which `hdiutil` prints in English whatever the system
+  /// language.
+  static func isTemporarilyUnavailable(stderr: String) -> Bool {
+    stderr.contains("Resource temporarily unavailable")
   }
 
   /// Detaches the image and WAITS until everything has reached Google Drive.

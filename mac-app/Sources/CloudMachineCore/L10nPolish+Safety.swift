@@ -79,6 +79,8 @@ extension L10nPolish {
       "Montowanie zostało zatrzymane, ale nie wróciło na czas na prywatnym gnieździe. Agenci dalej próbują (backup-health przeładowuje agenta, którego launchd nie potrafi uruchomić). Sprawdź: cloudmachine-agent drive-status; jeśli dalej nie działa, zrestartuj Maca.",
     "The mount runs on the private socket now, but the image did not attach: %@ The attach agent retries every 15 minutes.":
       "Montowanie działa już na prywatnym gnieździe, ale obraz się nie podłączył: %@ Agent podłączania próbuje co 15 minut.",
+    "The image kept being refused - the Google Drive mount was restarted: %@":
+      "Obraz był wciąż odrzucany - montowanie Dysku Google zostało zrestartowane: %@",
     "CloudMachine: Drive remote control is open":
       "CloudMachine: sterowanie Dyskiem jest otwarte",
     "Any web page can send it commands, including deleting the backup. Open CloudMachine and restart the mount, or run prepare-shutdown and restart the Mac.":
