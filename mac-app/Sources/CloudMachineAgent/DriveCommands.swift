@@ -115,8 +115,19 @@ struct AttachImage: AsyncParsableCommand {
           "Time Machine now has NO DESTINATION. Check: %@", "cloudmachine-agent drive-status"))
       throw ExitCode(1)
     }
-    let result = await BackupImageService.attach()
+    var result = await BackupImageService.attach()
     print(result.message)
+
+    // A series of EAGAINs from `hdiutil` ends in a restart of the mount - see
+    // `AttachStall`. Its result replaces the attach's: a restart that brought
+    // the image up is a success of this tick.
+    if let restart = await AttachStall.afterAttach(result) {
+      print(
+        L10n.tr(
+          "The image kept being refused - the Google Drive mount was restarted: %@", restart.message
+        ))
+      result = restart
+    }
 
     // Three cases, not two. This command runs under launchd every 900 s, so
     // its exit code ends up as an entry in `launchd-gdrive-attach.err.log` -

@@ -64,7 +64,9 @@ public enum MountRestart {
 
   static func run(_ steps: Steps) async -> CMActionResult {
     if let reason = refusal(backupRunning: await steps.backupRunning(), mounted: steps.mounted()) {
-      return CMActionResult(succeeded: false, message: reason)
+      // `didNotRun`: nothing was touched, so `AttachStall` does not count a
+      // refusal as the restart its cooldown waits after.
+      return CMActionResult(succeeded: false, message: reason, didNotRun: true)
     }
 
     let drained = await steps.detachAndDrain()

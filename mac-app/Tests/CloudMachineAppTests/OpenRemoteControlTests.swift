@@ -184,6 +184,7 @@ final class OpenRemoteControlTests: XCTestCase {
       let calls = Calls()
       let result = await MountRestart.run(steps(calls, backupRunning: running))
       XCTAssertFalse(result.succeeded)
+      XCTAssertTrue(result.didNotRun, "a refusal touched nothing - AttachStall must not count it")
       XCTAssertEqual(calls.log, [])
     }
     let calls = Calls()

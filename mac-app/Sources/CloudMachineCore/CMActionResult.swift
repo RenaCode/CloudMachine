@@ -22,13 +22,21 @@ public struct CMActionResult {
   /// silently - meaning nobody notices until something fails.
   public var didNotRun: Bool
 
+  /// `true` if `hdiutil attach` was turned away with "Resource temporarily
+  /// unavailable" on every attempt - the failure that the mount restart in
+  /// `AttachStall` answers. Recognized once, where `hdiutil` runs, so callers
+  /// do not match on `message`.
+  public var attachTemporarilyUnavailable: Bool
+
   public init(
-    succeeded: Bool, message: String, isSudoAuthFailure: Bool = false, didNotRun: Bool = false
+    succeeded: Bool, message: String, isSudoAuthFailure: Bool = false, didNotRun: Bool = false,
+    attachTemporarilyUnavailable: Bool = false
   ) {
     self.succeeded = succeeded
     self.message = message
     self.isSudoAuthFailure = isSudoAuthFailure
     self.didNotRun = didNotRun
+    self.attachTemporarilyUnavailable = attachTemporarilyUnavailable
   }
 
   /// What the caller should do with this result - in particular, which exit
