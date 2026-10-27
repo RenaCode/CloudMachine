@@ -252,15 +252,30 @@ public enum TimeMachineStatus {
       case "URL": block.url = value
       case "Mount Point": block.mountPoint = value
       case "ID": block.id = value
-      case "Quota":
-        let number = value.split(separator: " ").first.map(String.init) ?? value
-        block.quotaGB = Double(number)
+      case "Quota": block.quotaGB = quotaGB(value)
       default: break
       }
       current = block
     }
     flush()
     return result
+  }
+
+  /// `Quota` as tmutil prints it, in GB. tmutil formats it for the user's
+  /// region whatever `LC_ALL` says: 2450 GB came out as `2,45 TB` on
+  /// 27.10.2026, and reading only "<number> GB" took that for no quota.
+  /// Decimal units, as macOS shows sizes. `nil` = not a size.
+  static func quotaGB(_ value: String) -> Double? {
+    let parts = value.split(separator: " ")
+    guard let first = parts.first,
+      let number = Double(first.replacingOccurrences(of: ",", with: "."))
+    else { return nil }
+    switch parts.count > 1 ? parts[1].uppercased() : "GB" {
+    case "TB": return number * 1000
+    case "GB": return number
+    case "MB": return number / 1000
+    default: return nil
+    }
   }
 
   /// The registered destinations; `nil` = tmutil DID NOT ANSWER, `[]` = it

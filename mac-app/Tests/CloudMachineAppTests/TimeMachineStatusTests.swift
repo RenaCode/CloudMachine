@@ -145,4 +145,18 @@ final class TimeMachineStatusTests: XCTestCase {
       XCTAssertEqual(TimeMachineStatus.destinations(destinationInfoOutput: answer!), [])
     }
   }
+
+  /// 27.10.2026: tmutil printed the 2450 GB quota as `2,45 TB` (Polish
+  /// region), and the status kept asking to set a quota that was set.
+  func testQuotaIsReadInTheUnitTmutilPrints() {
+    XCTAssertEqual(TimeMachineStatus.quotaGB("300 GB"), 300)
+    XCTAssertEqual(TimeMachineStatus.quotaGB("2,45 TB"), 2450)
+    XCTAssertEqual(TimeMachineStatus.quotaGB("2.45 TB"), 2450)
+    XCTAssertNil(TimeMachineStatus.quotaGB("none"))
+    let parsed = TimeMachineStatus.destinations(
+      destinationInfoOutput: "Name          : CloudMachine\nQuota         : 2,45 TB\n")
+    XCTAssertEqual(parsed.first?.quotaGB, 2450)
+    XCTAssertTrue(MachineBudget.quotaMatches(currentQuotaGB: 2450, limitGB: 3500))
+    XCTAssertFalse(MachineBudget.quotaMatches(currentQuotaGB: 2000, limitGB: 3500))
+  }
 }
