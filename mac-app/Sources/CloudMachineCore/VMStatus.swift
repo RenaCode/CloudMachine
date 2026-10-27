@@ -36,6 +36,23 @@ public enum VMStatus {
     return report
   }
 
+  /// Whether Time Machine's destinations include this machine; `nil` = unknown
+  /// (no address, or `tmutil` did not answer).
+  public static func timeMachineTargetsMachine() async -> Bool? {
+    guard let address = await VMLayout.currentAddress(),
+      let info = try? await ProcessRunner.run(
+        "/usr/bin/tmutil", ["destinationinfo"], timeout: TimeMachineStatus.commandTimeout),
+      info.succeeded || info.stdout.contains("No destinations")
+    else { return nil }
+    return targets(urls: destinationURLs(destinationInfo: info.stdout), address: address)
+  }
+
+  /// `smb://tm@<address>/...` among the destinations. The `@` and `/` keep
+  /// 192.168.64.1 from matching 192.168.64.10.
+  static func targets(urls: [String], address: String) -> Bool {
+    urls.contains { $0.contains("@\(address)/") }
+  }
+
   /// `URL : smb://...` lines of `tmutil destinationinfo`.
   static func destinationURLs(destinationInfo: String) -> [String] {
     destinationInfo.split(separator: "\n").compactMap { raw in

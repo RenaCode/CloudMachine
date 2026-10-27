@@ -41,3 +41,17 @@ Each layer is there for a reason:
     cloudmachine-agent vm-prepare-bundle   # 32 MB bands, bands moved to Drive
     cloudmachine-agent vm-status
     cloudmachine-agent vm-guard            # one check; the launchd agent runs it every minute
+
+## Trying a change without touching the live machine
+
+Every `vm-*` command takes the machine and the Drive folder from two
+variables, so a change can be tried on a throwaway machine while `cmsmb`
+keeps backing up:
+
+```sh
+export CLOUDMACHINE_VM_INSTANCE=cmtest CLOUDMACHINE_VM_REMOTE=gdrive:CloudMachine/test-vm-tm
+cloudmachine-agent vm-setup && cloudmachine-agent vm-status
+```
+
+`vm-prepare-bundle` refuses while Time Machine is backing up to *this*
+machine; a backup going to another destination does not stop it.

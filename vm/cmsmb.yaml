@@ -50,6 +50,9 @@ provision:
   path: /opt/cloudmachine/punchfs/punchfs.c
   file: punchfs/punchfs.c
 - mode: data
+  path: /opt/cloudmachine/punchfs/passthrough_helpers.h
+  file: punchfs/passthrough_helpers.h
+- mode: data
   path: /opt/cloudmachine/punchfs/test-punchfs.sh
   file: punchfs/test-punchfs.sh
   permissions: 755

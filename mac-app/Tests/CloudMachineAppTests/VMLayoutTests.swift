@@ -192,4 +192,12 @@ final class VMLayoutTests: XCTestCase {
         "com.renacode.cloudmachine.vm-start.plist.template",
       ])
   }
+
+  func testTimeMachineTargetIsMatchedByWholeAddress() {
+    let urls = ["smb://tm@192.168.64.10/CloudMachine"]
+    XCTAssertTrue(VMStatus.targets(urls: urls, address: "192.168.64.10"))
+    XCTAssertFalse(VMStatus.targets(urls: urls, address: "192.168.64.1"))
+    XCTAssertFalse(VMStatus.targets(urls: urls, address: "192.168.64.11"))
+    XCTAssertFalse(VMStatus.targets(urls: [], address: "192.168.64.10"))
+  }
 }

@@ -11,8 +11,18 @@ import Foundation
 /// This is the new path, next to the attached-image one; neither touches the
 /// other.
 public enum VMLayout {
-  /// Lima instance name. Fixed: the launchd agent and the guard look it up.
-  public static let instanceName = "cmsmb"
+  /// Lima instance name: `cmsmb`, which the launchd agents look up.
+  /// `CLOUDMACHINE_VM_INSTANCE` points the commands at another machine -
+  /// that is how a change is tried on a throwaway VM while `cmsmb` keeps
+  /// backing up.
+  public static var instanceName: String {
+    override("CLOUDMACHINE_VM_INSTANCE") ?? "cmsmb"
+  }
+
+  static func override(_ name: String) -> String? {
+    guard let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else { return nil }
+    return value
+  }
   /// SMB share name, as in `vm/samba/smb.conf`.
   public static let shareName = "CloudMachine"
   /// SMB user created by the provisioning script.
@@ -45,8 +55,10 @@ public enum VMLayout {
 
   /// `gdrive:CloudMachine/<folder>-tm`: a folder of its own, next to the
   /// attached image's folder, so the two layouts never share bands.
+  /// `CLOUDMACHINE_VM_REMOTE` replaces it whole (see `instanceName`).
   public static var remote: String {
-    "\(DriveBufferService.remoteName):\(DriveBufferService.remoteRoot)/\(DriveFolder.name)-tm"
+    override("CLOUDMACHINE_VM_REMOTE")
+      ?? "\(DriveBufferService.remoteName):\(DriveBufferService.remoteRoot)/\(DriveFolder.name)-tm"
   }
 
   /// `vm/` among the resources (the repo root in a checkout, Resources in the app).
