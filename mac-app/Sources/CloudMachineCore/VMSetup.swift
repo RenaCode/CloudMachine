@@ -73,6 +73,18 @@ public enum VMSetup {
       messages.append(L10n.tr("Machine %@ was already running.", VMLayout.instanceName))
     }
 
+    if await VMLayout.excludeMachineFromTimeMachine() {
+      messages.append(
+        L10n.tr(
+          "Excluded %@ (the machine and its upload buffer) from Time Machine.",
+          VMLayout.limaHome.path))
+    } else {
+      messages.append(
+        L10n.tr(
+          "WARNING: could not exclude %@ from Time Machine - run: tmutil addexclusion %@",
+          VMLayout.limaHome.path, VMLayout.limaHome.path))
+    }
+
     // 2. The Drive folder.
     let env = VMLayout.envLine("CM_REMOTE", VMLayout.remote)
     guard

@@ -234,4 +234,22 @@ final class VMGuardDecisionTests: XCTestCase {
     XCTAssertTrue(fake.marker)
     XCTAssertTrue(fake.log.contains { $0.contains("NO ANSWER") }, "\(fake.log)")
   }
+
+  /// 27.10.2026: ~/.lima was in the backup and the first backup sat on the
+  /// machine's own disk. The guard renews the exclusion on the hour.
+  func testRenewsTheMachineExclusionOnTheHour() async {
+    final class Count: @unchecked Sendable { var n = 0 }
+    let count = Count()
+    let fake = Fake()
+    fake.reading = reading(usedGiB: 10)
+    fake.running = true
+    var probes = fake.probes
+    probes.excludeMachine = { count.n += 1 }
+    probes.minute = { 0 }
+    _ = await VMGuard(thresholds: thresholds, probes: probes).step()
+    XCTAssertEqual(count.n, 1)
+    probes.minute = { 17 }
+    _ = await VMGuard(thresholds: thresholds, probes: probes).step()
+    XCTAssertEqual(count.n, 1, "only on the hour")
+  }
 }

@@ -69,6 +69,8 @@ public struct VMGuard: Sendable {
     public var tmutil: @Sendable (String) async -> Bool
     public var log: @Sendable (String) -> Void
     public var minute: @Sendable () -> Int
+    /// Renews the Time Machine exclusion of the machine's directory (hourly).
+    public var excludeMachine: @Sendable () async -> Void = {}
 
     public static let live = Probes(
       reading: { await VMLayout.currentReading() },
@@ -85,7 +87,8 @@ public struct VMGuard: Sendable {
       },
       tmutil: { await BufferGuardService.tmutil($0) },
       log: { CMLogger.log($0) },
-      minute: { Calendar.current.component(.minute, from: Date()) })
+      minute: { Calendar.current.component(.minute, from: Date()) },
+      excludeMachine: { await VMLayout.excludeMachineFromTimeMachine() })
   }
 
   public var thresholds: Thresholds
@@ -137,6 +140,8 @@ public struct VMGuard: Sendable {
       break
     }
     if probes.minute() == 0 {
+      // The exclusion is an xattr; a recreated ~/.lima would silently lose it.
+      await probes.excludeMachine()
       let state = running.map { $0 ? "1" : "0" } ?? "unknown"
       probes.log(
         "VM guard ok: buffer \(used) GiB, queue \(queued), free \(free) GiB, TM running=\(state)")

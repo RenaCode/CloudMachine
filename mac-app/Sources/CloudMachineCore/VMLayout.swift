@@ -61,6 +61,25 @@ public enum VMLayout {
       ?? "\(DriveBufferService.remoteName):\(DriveBufferService.remoteRoot)/\(DriveFolder.name)-tm"
   }
 
+  /// Lima's directory with the machine's disk (`LIMA_HOME`, else `~/.lima`).
+  /// The disk holds rclone's buffer: left in the backup, Time Machine copies
+  /// its own backlog through the machine - on 27.10.2026 that kept the first
+  /// backup on one ever-changing 17 GB file for half an hour.
+  public static var limaHome: URL {
+    if let custom = override("LIMA_HOME") { return URL(fileURLWithPath: custom) }
+    return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".lima")
+  }
+
+  /// Keeps `limaHome` out of Time Machine. The exclusion is an xattr on the
+  /// directory, so it is renewed rather than set once (as for the old buffer,
+  /// `DriveBufferService.excludeBufferFromTimeMachine`).
+  @discardableResult
+  public static func excludeMachineFromTimeMachine() async -> Bool {
+    let result = try? await ProcessRunner.run(
+      "/usr/bin/tmutil", ["addexclusion", limaHome.path], timeout: 30)
+    return result?.succeeded == true
+  }
+
   /// `vm/` among the resources (the repo root in a checkout, Resources in the app).
   public static var templateDir: URL? {
     guard let root = CMPaths.resourcesRoot else { return nil }

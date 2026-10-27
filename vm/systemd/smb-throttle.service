@@ -1,0 +1,16 @@
+[Unit]
+Description=CloudMachine: shape incoming SMB (Time Machine) to the Google Drive upload rate
+After=network-online.target
+Wants=network-online.target
+Before=smbd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 320 Mbit/s = ~38 MB/s, measured upload to Drive 25-65 MiB/s (27.10.2026).
+Environment=RATE=320mbit
+ExecStart=/usr/local/sbin/smb-throttle start
+ExecStop=/usr/local/sbin/smb-throttle stop
+
+[Install]
+WantedBy=multi-user.target

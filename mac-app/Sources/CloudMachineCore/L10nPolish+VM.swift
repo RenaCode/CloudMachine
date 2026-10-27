@@ -156,6 +156,10 @@ extension L10nPolish {
       "Rozpakowanie obrazu nie powiodło się: %@",
     "Still to upload:  %@ GiB in %@ bands, uploading %@ (cache on disk %@ GiB)":
       "Do wysłania:      %@ GiB w %@ pasmach, wysyłane %@ (cache na dysku %@ GiB)",
+    "Excluded %@ (the machine and its upload buffer) from Time Machine.":
+      "Wykluczono %@ (maszyna i jej bufor wysyłki) z Time Machine.",
+    "WARNING: could not exclude %@ from Time Machine - run: tmutil addexclusion %@":
+      "UWAGA: nie udało się wykluczyć %@ z Time Machine - uruchom: tmutil addexclusion %@",
     "Upload buffer:    no answer from rclone (rc %@)":
       "Bufor wysyłki:    brak odpowiedzi rclone (rc %@)",
     "When Time Machine has created its empty image, stop the backup (tmutil stopbackup) and run: cloudmachine-agent vm-prepare-bundle":

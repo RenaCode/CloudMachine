@@ -175,6 +175,20 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(smbConf.contains("max open files = 500000"))
   }
 
+  /// 27.10.2026: policing (`police ... drop`) held SMB at ~2.7 MB/s; the
+  /// shaper must stay a queue (ifb + htb), and the template must install it.
+  func testSMBShaperQueuesInsteadOfDropping() throws {
+    let vm = Self.repoRoot.appendingPathComponent("vm")
+    let script = try String(
+      contentsOf: vm.appendingPathComponent("smb-throttle.sh"), encoding: .utf8)
+    let yaml = try String(contentsOf: vm.appendingPathComponent("cmsmb.yaml"), encoding: .utf8)
+    XCTAssertTrue(script.contains("mirred egress redirect dev ifb0"))
+    XCTAssertTrue(script.contains("htb rate"))
+    XCTAssertFalse(script.contains("police rate"), "policing drops packets and collapses TCP")
+    XCTAssertTrue(yaml.contains("file: systemd/smb-throttle.service"))
+    XCTAssertTrue(yaml.contains("systemctl enable --now smb-throttle.service"))
+  }
+
   /// `install-launchd` installs every template at the TOP of `launchd/`. The
   /// machine's agents must not be there: a Mac on the attached-image layout
   /// would get an agent starting a machine it does not have.
