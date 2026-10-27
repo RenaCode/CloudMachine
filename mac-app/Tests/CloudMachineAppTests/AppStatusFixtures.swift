@@ -10,7 +10,9 @@ extension MachineStatus {
     machine.state = .running
     machine.address = "192.168.64.10"
     machine.services = [
-      "rclone-tm": "active", "punchfs": "active", "tm-bands-bind": "active", "smbd": "active",
+      "smb-throttle": "active", "rclone-tm": "active", "punchfs": "active",
+      "tm-bands-bind": "active",
+      "smbd": "active",
     ]
     machine.reading = VMLayout.Reading(
       buffer: VMLayout.BufferStats(

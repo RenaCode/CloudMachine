@@ -39,7 +39,7 @@ public enum VMLayout {
   }
 
   /// The systemd units the share depends on, in start order.
-  public static let services = ["rclone-tm", "punchfs", "tm-bands-bind", "smbd"]
+  public static let services = ["smb-throttle", "rclone-tm", "punchfs", "tm-bands-bind", "smbd"]
 
   /// Host-side state: `~/.cloudmachine/vm`.
   public static var hostDir: URL {

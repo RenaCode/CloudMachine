@@ -120,7 +120,9 @@ final class VMLayoutTests: XCTestCase {
   /// never failed; a unit nobody reported is unknown, not fine.
   func testServicesVerdict() {
     var services = [
-      "rclone-tm": "active", "punchfs": "active", "tm-bands-bind": "inactive", "smbd": "active",
+      "smb-throttle": "active", "rclone-tm": "active", "punchfs": "active",
+      "tm-bands-bind": "inactive",
+      "smbd": "active",
     ]
     XCTAssertEqual(VMStatus.servicesHealthy(services), true)
     services["tm-bands-bind"] = "failed"
