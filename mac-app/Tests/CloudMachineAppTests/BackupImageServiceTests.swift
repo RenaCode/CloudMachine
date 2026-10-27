@@ -107,7 +107,7 @@ final class BackupImageServiceTests: XCTestCase {
     let points = [
       "/",
       "/Volumes/CloudMachine",
-      "/Users/mbeczynski/.cloudmachine/drive",
+      "/Users/someone/.cloudmachine/drive",
       "/Volumes/.timemachine/mac-studio/2026-09-23-101500.backup/CloudMachine",
       "/Volumes/.timemachine/mac-studio/2026-09-22-231500.backup/CloudMachine",
       // Trap: a similar name, but NOT under the snapshot directory.

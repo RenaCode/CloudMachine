@@ -112,8 +112,9 @@ It works two ways:
 ### Upgrading and uninstalling
 
 `brew upgrade --cask renacode/tap/cloudmachine` replaces the app without
-restarting the Google Drive mount. (Use the full name: a second tap with a
-`cloudmachine` cask, left over from testing, makes the short name ambiguous.)
+restarting the Google Drive mount. The cask in the tap can be a version
+behind the latest GitHub Release: it is updated by a pull request after each
+release (see `packaging/README.md`).
 When Homebrew reopens the app, it reloads the background agents so they run
 the new version; `cloudmachine-agent drive-status` shows `Agents: OK`. Changes
 to the mount itself wait for its next start. One such change is rclone's
