@@ -154,8 +154,8 @@ extension L10nPolish {
       "nieznany",
     "Unpacking the image failed: %@":
       "Rozpakowanie obrazu nie powiodło się: %@",
-    "Upload buffer:    %@ GiB, queued %@, uploading %@":
-      "Bufor wysyłki:    %@ GiB, w kolejce %@, wysyłane %@",
+    "Still to upload:  %@ GiB in %@ bands, uploading %@ (cache on disk %@ GiB)":
+      "Do wysłania:      %@ GiB w %@ pasmach, wysyłane %@ (cache na dysku %@ GiB)",
     "Upload buffer:    no answer from rclone (rc %@)":
       "Bufor wysyłki:    brak odpowiedzi rclone (rc %@)",
     "When Time Machine has created its empty image, stop the backup (tmutil stopbackup) and run: cloudmachine-agent vm-prepare-bundle":

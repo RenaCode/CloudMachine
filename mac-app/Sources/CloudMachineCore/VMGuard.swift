@@ -4,7 +4,8 @@ import Foundation
 /// than rclone uploads to Google Drive (750 GB a day at most), and the buffer
 /// is the machine's 200 GB disk. One `step()` per launchd run (every 60 s).
 ///
-/// Pause when the buffer holds more than `highGiB` or the disk has less than
+/// Pause when more than `highGiB` is still to upload (`unsentBytes` - not the
+/// cache size, see `VMLayout.BufferStats`) or the disk has less than
 /// `minFreeGiB` free. Resume below `lowGiB` - and ONLY if this guard paused
 /// the backup (the marker file); a backup the person stopped stays stopped.
 /// No answer from the machine or from tmutil means: do nothing.
@@ -42,8 +43,10 @@ public struct VMGuard: Sendable {
     reading: VMLayout.Reading?, backupRunning: Bool?, pausedByGuard: Bool,
     thresholds: Thresholds
   ) -> Action {
-    guard let reading else { return .nothing }
-    let usedGiB = reading.buffer.bytesUsed / gib
+    // No queue = unknown backlog: the cache size would stand in for it, and
+    // it is exactly the number that kept the backup paused on 27.10.
+    guard let reading, let unsent = reading.buffer.unsentBytes else { return .nothing }
+    let usedGiB = unsent / gib
     let freeGiB = reading.freeBytes / gib
     if usedGiB > Int64(thresholds.highGiB) || freeGiB < Int64(thresholds.minFreeGiB) {
       return backupRunning == true ? .pause : .nothing
@@ -109,14 +112,14 @@ public struct VMGuard: Sendable {
     let paused = probes.markerExists()
     let action = Self.decide(
       reading: reading, backupRunning: running, pausedByGuard: paused, thresholds: thresholds)
-    let used = reading.buffer.bytesUsed / Self.gib
+    let used = (reading.buffer.unsentBytes ?? -1) / Self.gib
     let free = reading.freeBytes / Self.gib
     let queued = reading.buffer.uploadsQueued
     switch action {
     case .pause:
       if await probes.tmutil("stopbackup") {
         probes.setMarker(true)
-        probes.log("VM guard: PAUSE - buffer \(used) GiB, queue \(queued), free \(free) GiB")
+        probes.log("VM guard: PAUSE - unsent \(used) GiB, queue \(queued), free \(free) GiB")
       } else {
         probes.log("VM guard: tmutil stopbackup FAILED - buffer \(used) GiB, free \(free) GiB")
       }
@@ -126,7 +129,7 @@ public struct VMGuard: Sendable {
       // for good with nobody left to resume it.
       if await probes.tmutil("startbackup") {
         probes.setMarker(false)
-        probes.log("VM guard: RESUME - buffer \(used) GiB, free \(free) GiB")
+        probes.log("VM guard: RESUME - unsent \(used) GiB, free \(free) GiB")
       } else {
         probes.log("VM guard: tmutil startbackup FAILED - will try again on the next run")
       }

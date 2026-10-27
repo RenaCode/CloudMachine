@@ -13,10 +13,41 @@ final class VMGuardDecisionTests: XCTestCase {
   private let thresholds = VMGuard.Thresholds()
   private let gib: Int64 = 1 << 30
 
-  private func reading(usedGiB: Int64, freeGiB: Int64 = 150, queued: Int = 3) -> VMLayout.Reading {
+  /// `usedGiB` is what is still to upload; the cache on disk is bigger on
+  /// purpose (116 GiB, as on 27.10) so no rule can lean on it by accident.
+  private func reading(
+    usedGiB: Int64, freeGiB: Int64 = 150, queued: Int = 3, cacheGiB: Int64 = 116
+  ) -> VMLayout.Reading {
     VMLayout.Reading(
-      buffer: .init(bytesUsed: usedGiB * gib, uploadsQueued: queued, uploadsInProgress: 1),
+      buffer: .init(
+        bytesUsed: cacheGiB * gib, uploadsQueued: queued, uploadsInProgress: 1,
+        unsentBytes: usedGiB * gib),
       freeBytes: freeGiB * gib)
+  }
+
+  /// 27.10.2026 12:24-12:37: paused at 116 GiB of cache, then the backlog fell
+  /// to 30 GiB while the cache stayed at 116 - the guard deciding on the
+  /// cache never resumed. The backlog is what counts.
+  func testResumesOnTheBacklogWhileTheCacheStaysFull() {
+    XCTAssertEqual(
+      VMGuard.decide(
+        reading: reading(usedGiB: 30, cacheGiB: 116), backupRunning: false, pausedByGuard: true,
+        thresholds: thresholds), .resume)
+    XCTAssertEqual(
+      VMGuard.decide(
+        reading: reading(usedGiB: 30, cacheGiB: 116), backupRunning: true, pausedByGuard: false,
+        thresholds: thresholds), .nothing, "a full cache alone must not pause")
+  }
+
+  func testUnknownBacklogDoesNothing() {
+    var r = reading(usedGiB: 0)
+    r.buffer.unsentBytes = nil
+    for paused in [false, true] {
+      XCTAssertEqual(
+        VMGuard.decide(
+          reading: r, backupRunning: true, pausedByGuard: paused, thresholds: thresholds),
+        .nothing)
+    }
   }
 
   // MARK: - The decision

@@ -100,9 +100,10 @@ public enum VMStatus {
     if let reading = report.reading {
       out.append(
         L10n.tr(
-          "Upload buffer:    %@ GiB, queued %@, uploading %@",
-          "\(reading.buffer.bytesUsed / VMGuard.gib)", "\(reading.buffer.uploadsQueued)",
-          "\(reading.buffer.uploadsInProgress)"))
+          "Still to upload:  %@ GiB in %@ bands, uploading %@ (cache on disk %@ GiB)",
+          reading.buffer.unsentBytes.map { "\($0 / VMGuard.gib)" } ?? "?",
+          "\(reading.buffer.uploadsQueued)", "\(reading.buffer.uploadsInProgress)",
+          "\(reading.buffer.bytesUsed / VMGuard.gib)"))
       out.append(L10n.tr("Free in machine:  %@ GiB", "\(reading.freeBytes / VMGuard.gib)"))
     } else {
       out.append(

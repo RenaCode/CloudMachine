@@ -200,4 +200,16 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertFalse(VMStatus.targets(urls: urls, address: "192.168.64.11"))
     XCTAssertFalse(VMStatus.targets(urls: [], address: "192.168.64.10"))
   }
+
+  func testReadingCarriesTheUnsentBacklogFromVfsQueue() {
+    let stats = #"{"diskCache":{"bytesUsed":124554051584,"uploadsQueued":2,"uploadsInProgress":1}}"#
+    let queue = #"{"queue":[{"name":"bands/a","size":33554432},{"name":"bands/b","size":1048576}]}"#
+    let r = VMLayout.reading(scriptOutput: "\(stats)\nCMQUEUE \(queue)\nCMFREE 1\n")
+    XCTAssertEqual(r?.buffer.unsentBytes, 33_554_432 + 1_048_576)
+    XCTAssertEqual(r?.buffer.bytesUsed, 124_554_051_584)
+    let noQueue = VMLayout.reading(scriptOutput: "\(stats)\nCMQUEUE \nCMFREE 1\n")
+    XCTAssertNotNil(noQueue, "stats and free space still make a reading")
+    XCTAssertNil(noQueue?.buffer.unsentBytes, "an empty queue answer is unknown, not zero")
+    XCTAssertEqual(VMLayout.unsentBytes(vfsQueueJSON: #"{"queue":[]}"#), 0)
+  }
 }

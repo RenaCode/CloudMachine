@@ -165,11 +165,38 @@ public enum VMLayout {
     return nil
   }
 
-  /// What rclone's `vfs/stats` says about the upload buffer.
+  /// What rclone says about the upload buffer.
+  ///
+  /// `bytesUsed` is the whole cache on disk, uploaded bands included: rclone
+  /// keeps them for reading until the cache reaches `--vfs-cache-max-size`.
+  /// It does NOT fall when the upload catches up - on 27.10.2026 it stayed at
+  /// 116 GiB for 13 minutes while the real backlog was 30 GiB, and a guard
+  /// deciding on it never resumed the backup. Decisions use `unsentBytes`,
+  /// the sum of `vfs/queue`.
   public struct BufferStats: Equatable, Sendable {
     public var bytesUsed: Int64
     public var uploadsQueued: Int
     public var uploadsInProgress: Int
+    /// Bytes still to upload; `nil` = `vfs/queue` did not answer.
+    public var unsentBytes: Int64?
+
+    public init(
+      bytesUsed: Int64, uploadsQueued: Int, uploadsInProgress: Int, unsentBytes: Int64? = nil
+    ) {
+      self.bytesUsed = bytesUsed
+      self.uploadsQueued = uploadsQueued
+      self.uploadsInProgress = uploadsInProgress
+      self.unsentBytes = unsentBytes
+    }
+  }
+
+  /// Sum of the item sizes in `vfs/queue`; `nil` when it is not that JSON.
+  static func unsentBytes(vfsQueueJSON: String) -> Int64? {
+    guard let data = vfsQueueJSON.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let queue = object["queue"] as? [[String: Any]]
+    else { return nil }
+    return queue.reduce(Int64(0)) { $0 + ((($1["size"] as? NSNumber)?.int64Value) ?? 0) }
   }
 
   static func bufferStats(vfsStatsJSON: String) -> BufferStats? {
@@ -191,23 +218,29 @@ public enum VMLayout {
     public var freeBytes: Int64
   }
 
-  /// The script prints `vfs/stats` JSON on one line, then `CMFREE <bytes>`.
+  /// The script prints `vfs/stats` JSON on one line, `CMQUEUE <vfs/queue JSON>`
+  /// on the next, then `CMFREE <bytes>`.
   static let readingScript =
     "curl -s -m 20 -X POST http://\(Guest.rcAddress)/vfs/stats | tr -d '\\n'; echo; "
+    + "printf 'CMQUEUE '; curl -s -m 20 -X POST http://\(Guest.rcAddress)/vfs/queue | tr -d '\\n'; echo; "
     + "echo CMFREE $(df -B1 --output=avail \(Guest.cacheDir) | tail -1 | tr -dc 0-9)"
 
   /// `nil` unless BOTH parts are there: half an answer is no answer.
   static func reading(scriptOutput: String) -> Reading? {
     var stats: BufferStats?
     var free: Int64?
+    var unsent: Int64?
     for line in scriptOutput.split(separator: "\n") {
-      if line.hasPrefix("CMFREE ") {
+      if line.hasPrefix("CMQUEUE ") {
+        unsent = unsentBytes(vfsQueueJSON: String(line.dropFirst("CMQUEUE ".count)))
+      } else if line.hasPrefix("CMFREE ") {
         free = Int64(line.dropFirst("CMFREE ".count).trimmingCharacters(in: .whitespaces))
       } else if line.hasPrefix("{") {
         stats = bufferStats(vfsStatsJSON: String(line))
       }
     }
-    guard let stats, let free else { return nil }
+    guard var stats, let free else { return nil }
+    stats.unsentBytes = unsent
     return Reading(buffer: stats, freeBytes: free)
   }
 
