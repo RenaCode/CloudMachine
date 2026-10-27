@@ -10,8 +10,6 @@ extension L10nPolish {
       "Adres:            %@",
     "Already prepared (%@ exists) - nothing to do.":
       "Już przygotowany (istnieje %@) - nie ma nic do zrobienia.",
-    "Also install the vm-start and vm-guard launchd agents.":
-      "Zainstaluj też agentów launchd vm-start i vm-guard.",
     "Converts Time Machine's new, empty image in the machine to 32 MB bands and moves the bands to Google Drive.":
       "Przerabia nowy, pusty obraz Time Machine w maszynie na pasma 32 MB i przenosi pasma na Google Drive.",
     "Copy rclone.conf into the machine even if it already has one.":

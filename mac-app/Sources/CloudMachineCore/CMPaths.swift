@@ -1,6 +1,6 @@
 import Foundation
 
-/// Resolves all paths used by CloudMachine - config, logs, mount points, and
+/// Resolves all paths used by CloudMachine - config, logs, the state directory and
 /// (for the CLI/launchd) the resources directory (`launchd/`,
 /// `config/machines.example.json`) - regardless of whether the code runs as a
 /// packaged .app (Resources are read-only, next to the binary in
@@ -76,6 +76,15 @@ public enum CMPaths {
   }
 
   public static var configPath: URL { appSupportDir.appendingPathComponent("machines.json") }
+
+  /// `~/.cloudmachine`: the managed rclone (`bin/`), the machine's state
+  /// (`vm/`). Created on first use.
+  public static var stateDir: URL {
+    let dir = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent(".cloudmachine")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+  }
 
   /// Under XCTest, a temporary directory of this test process. `swift test`
   /// used to append to the real `cloudmachine.log`: lock messages from image

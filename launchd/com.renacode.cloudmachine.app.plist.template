@@ -21,8 +21,8 @@
     would launch it over and over. The user closing the window should stay
     closed, not be an invitation to restart.
 
-    The backups themselves do NOT depend on this app - the gdrive-buffer,
-    gdrive-attach and buffer-guard agents do them. This is only a viewer.
+    The backups themselves do NOT depend on this app - the machine (started
+    by vm-start) and the vm-guard agent do them. This is only a viewer.
   -->
   <key>StandardOutPath</key>
   <string>__CM_LOG_DIR__/launchd-app.out.log</string>

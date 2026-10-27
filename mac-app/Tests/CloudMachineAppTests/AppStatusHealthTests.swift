@@ -7,9 +7,8 @@ import XCTest
 /// and the headline in the menu bar.
 ///
 /// They exist because mutation testing exposed a gap: `healthy` and `headline` had NO
-/// test at all, so the fix adding `erroredFiles` and `outOfSpace` to them
-/// passed, but its inverse would have passed just as well. Broken
-/// and working looked identical in the test suite too.
+/// test at all, so a fix adding a condition to them passed, but its inverse
+/// would have passed just as well.
 ///
 /// Headlines that come from `UploadState` or `BackupHealth.formatAge` (CloudMachineCore)
 /// are compared with the core's own text: their wording is that module's business,
@@ -17,268 +16,231 @@ import XCTest
 @MainActor
 final class AppStatusHealthTests: XCTestCase {
 
-  /// A state in which everything really works - the reference point.
-  private func healthy() -> AppStatus {
-    let status = AppStatus()
-    status.dependencyState = .ready
-    status.remoteConfigured = true
-    status.timeMachineState = .registered(mountPoint: "/Volumes/CloudMachine")
-    var buffer = BufferStatus()
-    buffer.mounted = true
-    buffer.imageAttached = true
-    // Must be explicit: `BufferStatus` starts from "queue not read", so that
-    // a fresh, unchecked state does not pass for an empty queue.
-    buffer.queueKnown = true
-    buffer.freeDiskGB = 400
-    status.buffer = buffer
-    // CHANGE 23.09.2026: "everything attached" stopped being enough for the green
-    // badge. The reference point now also has to contain the fact that a backup
-    // WAS ACTUALLY made - because that is exactly what was missing in the failure for which
-    // `BackupHealth` was created in the first place. Previously this helper described the state of the
-    // devices and said nothing about whether the backup succeeded; the test "a healthy state
-    // is healthy" therefore also passed for a Mac that had not made a backup for
-    // two days.
-    status.backupCycle = BackupCycleStatus(
-      known: true, lastSuccess: Date().addingTimeInterval(-1800), problems: [],
-      checkedAt: Date())
-    return status
+  private func healthyStatus() -> AppStatus { AppStatus.healthyForTests() }
+
+  private func withReading(
+    _ status: AppStatus, _ change: (inout VMLayout.BufferStats) -> Void
+  ) {
+    var machine = status.machine
+    var buffer = machine.reading!.buffer
+    change(&buffer)
+    machine.reading!.buffer = buffer
+    status.machine = machine
   }
 
-  /// REGRESSION 23.09.2026: `rclone rc` did not answer within the time limit,
-  /// the caller substituted zeros and the menu bar showed "Ready" with 386 bands
-  /// waiting in the queue.
-  func testUnreadQueueTakesAwayGreenBadge() {
-    let status = healthy()
-    status.buffer.queueKnown = false
-    XCTAssertFalse(status.healthy, "Unknown = not green.")
-    XCTAssertNotEqual(status.headline, "Ready")
-    XCTAssertEqual(status.buffer.uploadState, .queueUnknown)
-  }
-
-  // MARK: - Open remote control
-
-  /// REGRESSION 11.10.2026 (N-K1): the old mount kept listening on the open
-  /// TCP port after the upgrade, and the window stayed green - only one line
-  /// of `drive-status` said so.
-  func testOpenRemoteControlTakesAwayGreenAndSaysSo() {
-    let status = healthy()
+  func testHealthyStateIsHealthy() {
+    let status = healthyStatus()
     XCTAssertTrue(status.healthy)
+    XCTAssertEqual(status.headline, "Ready")
+    XCTAssertEqual(status.overallTone, .success)
+  }
+
+  /// REGRESSION 23.09.2026: rclone did not answer, the caller substituted
+  /// zeros and the menu bar showed "Ready" with bands waiting in the queue.
+  func testUnreadQueueTakesAwayGreenBadge() {
+    let status = healthyStatus()
+    withReading(status) { $0.unsentBytes = nil }
+    XCTAssertFalse(status.healthy)
+    XCTAssertEqual(status.machine.uploadState, .queueUnknown)
+    XCTAssertEqual(status.headline, UploadState.queueUnknown.headline)
+  }
+
+  /// An open remote control makes any web page able to delete the backup.
+  func testOpenRemoteControlTakesAwayGreenAndSaysSo() {
+    let status = healthyStatus()
     status.remoteControlOpen = true
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.headline, "Drive remote control is open - restart the mount")
-    XCTAssertTrue(status.canRestartMount)
-    // Backups still work in this state.
-    XCTAssertTrue(status.canStartBackup)
+    XCTAssertEqual(status.headline, "rclone's remote control is open on this Mac")
+    XCTAssertEqual(status.overallTone, .danger)
   }
-
-  func testMountRestartIsNotOfferedDuringABackupOrAnotherAction() {
-    let status = healthy()
-    XCTAssertFalse(status.canRestartMount, "Nothing to restart while the port is closed.")
-    status.remoteControlOpen = true
-    status.backupProgress = BackupProgressInfo()
-    XCTAssertFalse(status.canRestartMount)
-    status.backupProgress = nil
-    status.isBusy = true
-    XCTAssertFalse(status.canRestartMount)
-  }
-
-  // MARK: - "Back up now"
 
   /// REGRESSION 09.10.2026: the button followed `healthy`, so an OLD backup -
   /// the very thing it fixes - greyed it out.
   func testStaleBackupStillAllowsBackingUp() {
-    let status = healthy()
-    status.backupCycle = BackupCycleStatus(
-      known: true, lastSuccess: Date().addingTimeInterval(-2 * 86400), problems: [],
-      checkedAt: Date())
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-3 * 24 * 3600)
     XCTAssertFalse(status.healthy)
     XCTAssertTrue(status.canStartBackup)
   }
 
   func testUnreadQueueStillAllowsBackingUp() {
-    let status = healthy()
-    status.buffer.queueKnown = false
+    let status = healthyStatus()
+    withReading(status) { $0.unsentBytes = nil }
     XCTAssertTrue(status.canStartBackup)
   }
 
   func testNowhereToBackUpToBlocksTheButton() {
-    for breakIt in [
-      { (s: AppStatus) in s.buffer.mounted = false },
-      { (s: AppStatus) in s.buffer.imageAttached = false },
-      { (s: AppStatus) in s.timeMachineState = .notRegistered },
-      { (s: AppStatus) in s.timeMachineState = .noAnswer },
-      { (s: AppStatus) in s.remoteConfigured = false },
-      { (s: AppStatus) in s.isBusy = true },
-    ] {
-      let status = healthy()
-      breakIt(status)
-      XCTAssertFalse(status.canStartBackup)
-    }
+    var status = healthyStatus()
+    status.machine.state = .notRunning("Stopped")
+    XCTAssertFalse(status.canStartBackup)
+    XCTAssertTrue(status.canStartMachine)
+
+    status = healthyStatus()
+    status.timeMachineState = .notRegistered
+    XCTAssertFalse(status.canStartBackup)
+
+    status = healthyStatus()
+    status.machine.services["smbd"] = "failed"
+    XCTAssertFalse(status.canStartBackup)
+
+    status = healthyStatus()
+    status.isBusy = true
+    XCTAssertFalse(status.canStartBackup)
   }
 
-  // MARK: - "Cloud sync queue" row
-
-  /// REGRESSION 09.10.2026: an empty queue with abandoned bands read
-  /// "Everything uploaded" - for data that exists only on this Mac.
+  /// An empty queue with abandoned bands is not "Everything uploaded" - the
+  /// data exists only in the machine.
   func testAbandonedBandsAreNotEverythingUploaded() {
-    var buffer = healthy().buffer
-    buffer.erroredFiles = 3
-    XCTAssertNotEqual(buffer.queueSummary, L10n.tr("Everything uploaded"))
-    XCTAssertTrue(buffer.queueSummary.contains("3"))
+    let status = healthyStatus()
+    withReading(status) { $0.erroredFiles = 3 }
+    XCTAssertNotEqual(status.machine.queueSummary, "Everything uploaded")
+    XCTAssertTrue(status.machine.queueSummary.contains("3"))
   }
 
   func testQueueRowStates() {
-    var buffer = healthy().buffer
-    XCTAssertEqual(buffer.queueSummary, L10n.tr("Everything uploaded"))
-    buffer.uploadsQueued = 5
-    XCTAssertEqual(buffer.queueSummary, L10n.tr("%@ in progress, %@ queued", "0", "5"))
-    buffer.queueKnown = false
-    XCTAssertEqual(buffer.queueSummary, L10n.tr("not read"))
+    let status = healthyStatus()
+    XCTAssertEqual(status.machine.queueSummary, "Everything uploaded")
+    withReading(status) {
+      $0.unsentBytes = 5 * VMGuard.gib
+      $0.uploadsQueued = 160
+      $0.uploadsInProgress = 8
+    }
+    XCTAssertEqual(status.machine.queueSummary, "5 GiB in 160 bands, 8 uploading")
+    withReading(status) { $0.unsentBytes = nil }
+    XCTAssertEqual(status.machine.queueSummary, "not read")
+    status.machine = MachineStatus()
+    XCTAssertEqual(status.machine.queueSummary, "not read", "a fresh state is not a measurement")
   }
 
-  func testHealthyStateIsHealthy() {
-    let status = healthy()
-    XCTAssertTrue(status.healthy)
-    XCTAssertEqual(status.headline, "Ready")
-  }
-
-  /// THIS is the failure. Bands that rclone did not upload exist only
-  /// on this Mac - so the backup is not a copy. The interface then showed
-  /// a green badge and "Ready".
+  /// Bands rclone did not upload exist only in the machine - the backup is
+  /// not a copy.
   func testUnsentFilesTakeAwayGreenBadge() {
-    let status = healthy()
-    status.buffer.erroredFiles = 7
-    XCTAssertFalse(status.healthy, "Unsent bands MUST NOT pass for a healthy state.")
-    XCTAssertEqual(status.buffer.uploadState, .failedFiles(7))
-    XCTAssertEqual(status.headline, UploadState.failedFiles(7).headline)
+    let status = healthyStatus()
+    withReading(status) { $0.erroredFiles = 2 }
+    XCTAssertFalse(status.healthy)
+    XCTAssertEqual(status.machine.uploadState, .failedFiles(2))
   }
 
-  /// rclone reports that it has nowhere left to put data. A stronger signal than
-  /// any threshold of ours, because it comes from the one who really knows.
   func testFullBufferTakesAwayGreenBadge() {
-    let status = healthy()
-    status.buffer.outOfSpace = true
+    let status = healthyStatus()
+    withReading(status) { $0.outOfSpace = true }
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.buffer.uploadState, .bufferFull)
-    XCTAssertEqual(status.headline, UploadState.bufferFull.headline)
+    XCTAssertEqual(status.machine.uploadState, .bufferFull)
   }
 
-  func testMissingMountTakesAwayGreenBadge() {
-    let status = healthy()
-    status.buffer.mounted = false
+  /// rclone in the machine down: nothing reaches the Drive.
+  func testStoppedUploadTakesAwayGreenBadge() {
+    let status = healthyStatus()
+    status.machine.services["rclone-tm"] = "activating"
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.headline, "Buffer is not working")
+    XCTAssertEqual(status.machine.uploadState, .mountDown)
+    XCTAssertEqual(status.headline, "A service in the CloudMachine machine is not running")
   }
 
-  func testDetachedImageTakesAwayGreenBadge() {
-    let status = healthy()
-    status.buffer.imageAttached = false
+  func testMachineStatesHaveTheirOwnHeadlines() {
+    let status = healthyStatus()
+    status.machine = MachineStatus()
+    status.machine.state = .notCreated
+    XCTAssertEqual(status.headline, "The CloudMachine machine is not set up yet")
+    status.machine.state = .notRunning("Stopped")
+    XCTAssertEqual(status.headline, "The CloudMachine machine is stopped")
+    status.machine.state = .noAnswer
+    XCTAssertEqual(status.headline, "The CloudMachine machine does not answer")
     XCTAssertFalse(status.healthy)
-    XCTAssertEqual(status.headline, "Backup image not attached")
+    XCTAssertEqual(status.overallTone, .danger)
+  }
+
+  /// `tm-bands-bind` is skipped before `vm-prepare-bundle`; that is not a failure.
+  func testSkippedBandBindIsNotAFailure() {
+    let status = healthyStatus()
+    status.machine.services["tm-bands-bind"] = "inactive"
+    XCTAssertTrue(status.healthy)
+    status.machine.services["tm-bands-bind"] = "failed"
+    XCTAssertFalse(status.healthy)
   }
 
   func testChangedTimeMachineDestinationTakesAwayGreenBadge() {
-    let status = healthy()
+    let status = healthyStatus()
     status.timeMachineState = .notRegistered
     XCTAssertFalse(status.healthy)
     XCTAssertEqual(status.headline, "Time Machine does not point to CloudMachine")
   }
 
-  /// The daily limit does NOT require action, but the bands then sit only on this Mac -
-  /// so the green badge is not deserved.
-  func testExhaustedDriveLimitTakesAwayGreenBadge() {
-    let status = healthy()
-    status.buffer.dailyQuotaExhausted = true
-    XCTAssertFalse(status.healthy)
-    XCTAssertFalse(status.buffer.uploadState.needsAttention)
-  }
-
-  /// No space on the Drive is something DIFFERENT from the daily limit: it will not pass on its own.
-  func testNoSpaceOnDriveRequiresAction() {
-    let status = healthy()
-    status.buffer.driveFull = true
-    XCTAssertFalse(status.healthy)
-    XCTAssertTrue(status.buffer.uploadState.needsAttention)
-  }
-
   func testUnconnectedDriveTakesAwayGreenBadge() {
-    let status = healthy()
+    let status = healthyStatus()
     status.remoteConfigured = false
     XCTAssertFalse(status.healthy)
+    XCTAssertEqual(status.headline, "Google Drive not connected")
   }
 
-  /// An upload in progress is NOT a failure - as long as the queue shrinks, everything goes
-  /// as designed. Without this test a "fix" consisting of raising an alarm
-  /// on every non-empty queue would have gone unnoticed.
+  /// An upload in progress is NOT a failure - as long as the queue shrinks,
+  /// everything goes as designed.
   func testUploadInProgressIsNotAFailure() {
-    let status = healthy()
-    status.buffer.uploadsQueued = 12
+    let status = healthyStatus()
+    withReading(status) {
+      $0.unsentBytes = 2 * VMGuard.gib
+      $0.uploadsQueued = 60
+      $0.uploadsInProgress = 4
+    }
     XCTAssertTrue(status.healthy)
-    XCTAssertEqual(status.buffer.uploadState, .flowing(queued: 12))
-    XCTAssertEqual(status.headline, UploadState.flowing(queued: 12).headline)
+    XCTAssertEqual(status.machine.uploadState, .flowing(queued: 64))
+    XCTAssertEqual(status.headline, UploadState.flowing(queued: 64).headline)
   }
 
-  // MARK: - Age of the last SUCCESSFUL backup
-
-  /// THE failure. The mount is up, the image attached, the queue empty, the Time
-  /// Machine destination set - and the last COMPLETED backup is two days old. The panel
-  /// showed "Healthy / Ready" then, because it never asked about this even once:
-  /// `grep -rn "BackupHealth" Sources/CloudMachineApp/` gave no hits.
+  /// THE failure: the machine runs, Time Machine points at it, the queue is
+  /// empty - and the last COMPLETED backup is two days old.
   func testOldBackupTakesAwayGreenBadge() {
-    let status = healthy()
-    status.backupCycle.lastSuccess = Date().addingTimeInterval(-48 * 3600)
-    XCTAssertFalse(
-      status.healthy,
-      "All the devices can be fine while there has been no backup for two days.")
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-2 * 24 * 3600)
+    XCTAssertFalse(status.healthy)
     XCTAssertEqual(
-      status.headline, "No completed backup for \(BackupHealth.formatAge(48 * 3600))")
+      status.headline,
+      "No completed backup for \(BackupHealth.formatAge(status.backupCycle.age()!))")
   }
 
-  /// The threshold boundary. Just below it is still fine, just above it no longer -
-  /// without this test a "fix" setting the threshold to 100 years would pass silently.
+  /// The threshold boundary works both ways.
   func testBackupAgeThresholdWorksBothWays() {
-    let justBefore = healthy()
-    justBefore.backupCycle.lastSuccess = Date().addingTimeInterval(
-      -(BackupHealth.maxAgeHours * 3600 - 60))
-    XCTAssertTrue(justBefore.healthy)
-
-    let justAfter = healthy()
-    justAfter.backupCycle.lastSuccess = Date().addingTimeInterval(
-      -(BackupHealth.maxAgeHours * 3600 + 60))
-    XCTAssertFalse(justAfter.healthy)
+    let status = healthyStatus()
+    let limit = BackupHealth.maxAgeHours * 3600
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-(limit - 60))
+    XCTAssertTrue(status.healthy)
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-(limit + 60))
+    XCTAssertFalse(status.healthy)
   }
 
   /// An unread backup counter is NOT the same as a backup made a moment ago.
-  /// The default `BackupCycleStatus` has `known == false` precisely so that
-  /// the panel does not show green before anyone has asked anything.
   func testUnreadBackupCounterTakesAwayGreenBadge() {
-    let status = healthy()
+    let status = healthyStatus()
     status.backupCycle = BackupCycleStatus()
     XCTAssertFalse(status.healthy)
     XCTAssertEqual(status.headline, "Unknown when the last backup was made")
   }
 
-  /// The preferences were read and there is NOT A SINGLE successful backup in them - which is
-  /// something other than "could not read" and must sound different.
   func testNoBackupAtAllTakesAwayGreenBadge() {
-    let status = healthy()
-    status.backupCycle = BackupCycleStatus(known: true, lastSuccess: nil, checkedAt: Date())
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = nil
     XCTAssertFalse(status.healthy)
     XCTAssertEqual(status.headline, "There is no completed backup at all")
   }
 
-  /// After "Prepare for restart" the image is detached on purpose: the headline
-  /// says so instead of reporting a failure, and the badge is still not green.
-  func testDetachedForRestartHasItsOwnHeadline() {
-    let status = healthy()
-    status.buffer.imageAttached = false
-    XCTAssertEqual(status.headline, L10n.tr("Backup image not attached"))
-    status.preparedForRestart = true
-    XCTAssertEqual(
-      status.headline, L10n.tr("Ready for restart - the image is detached on purpose"))
-    XCTAssertFalse(status.healthy)
-    // The preparation does not cover an image that is attached again.
-    status.buffer.imageAttached = true
-    XCTAssertFalse(status.detachedForRestart)
+  /// Time Machine has made its first image and the bands are still 875 MB on
+  /// the machine's disk - `vm-prepare-bundle` is due, and only then.
+  func testBundleIsDueOnlyForANewUnpreparedImage() {
+    var machine = MachineStatus.healthyForTests
+    XCTAssertFalse(machine.bundleNeedsPreparing)
+    machine.bundlePrepared = false
+    machine.imageCount = 0
+    XCTAssertFalse(machine.bundleNeedsPreparing, "no image yet - Time Machine has to create it")
+    machine.imageCount = 1
+    XCTAssertTrue(machine.bundleNeedsPreparing)
+    machine.bundlePrepared = nil
+    XCTAssertFalse(machine.bundleNeedsPreparing, "unread is not 'not prepared'")
+  }
+
+  func testMachineStateFromLima() {
+    XCTAssertEqual(MachineState.from(instanceStatus: .none), .noAnswer)
+    XCTAssertEqual(MachineState.from(instanceStatus: .some(nil)), .notCreated)
+    XCTAssertEqual(MachineState.from(instanceStatus: .some("Running")), .running)
+    XCTAssertEqual(MachineState.from(instanceStatus: .some("Stopped")), .notRunning("Stopped"))
   }
 }

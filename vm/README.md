@@ -35,12 +35,31 @@ Each layer is there for a reason:
 
 ## Commands
 
-    cloudmachine-agent vm-setup            # create/start the machine, print the tmutil command
+    cloudmachine-agent vm-setup --install-agents   # create/start the machine, agents, print the tmutil command
     sudo tmutil setdestination smb://tm:<password>@<address>/CloudMachine
     # ...Time Machine creates its empty image; stop the backup...
     cloudmachine-agent vm-prepare-bundle   # 32 MB bands, bands moved to Drive
     cloudmachine-agent vm-status
     cloudmachine-agent vm-guard            # one check; the launchd agent runs it every minute
+    cloudmachine-agent prepare-shutdown    # before a restart: stop the backup, drain, limactl stop
+
+`install-launchd` (also run by `--install-agents`) installs four agents:
+`app`, `backup-health`, `vm-start` (boots the machine at login) and `vm-guard`
+(pauses Time Machine when more than 110 GiB waits to be uploaded or the
+machine has less than 40 GiB free, resumes below 40 GiB - only what it paused).
+
+## No ports to the Mac
+
+rclone's remote control listens in the machine on `127.0.0.1:5572` without a
+password - the guard and the status read the upload queue through it. Lima
+forwards a guest's localhost ports to the Mac's by default, and on the Mac's
+localhost any web page can send it commands, deleting the backup included.
+`cmsmb.yaml` therefore forwards nothing (`portForwards` with `ignore: true`);
+Samba is reached over vzNAT. A machine created from an older template keeps
+the forwarding until the rule is added to `~/.lima/cmsmb/lima.yaml` and the
+machine is restarted (`cloudmachine-agent prepare-shutdown`, then
+`limactl start cmsmb`). `vm-status` and the backup watchdog report it while
+`127.0.0.1:5572` answers on the Mac.
 
 ## Trying a change without touching the live machine
 

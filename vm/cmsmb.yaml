@@ -24,6 +24,17 @@ networks:
 containerd:
   system: false
   user: false
+# Nothing in the machine is forwarded to the Mac. Lima forwards the guest's
+# localhost ports by default, and rclone's remote control (127.0.0.1:5572, no
+# password) would then answer on the Mac's localhost - where any web page can
+# send it commands, deleting the backup included. Samba is reached over vzNAT.
+portForwards:
+- guestIP: "127.0.0.1"
+  proto: any
+  ignore: true
+- guestIP: "0.0.0.0"
+  proto: any
+  ignore: true
 provision:
 - mode: data
   path: /etc/samba/smb.conf

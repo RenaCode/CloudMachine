@@ -21,7 +21,7 @@ public enum HealthAlert {
   }
 
   struct AlertState: Codable {
-    /// The text last SHOWN - kept for a person (`drive-status`, diagnosis from
+    /// The text last SHOWN - kept for a person (`vm-status`, diagnosis from
     /// the file), not for comparison. It is in the UI language of the run that
     /// wrote it.
     var lastSummary: String
@@ -63,7 +63,7 @@ public enum HealthAlert {
   /// adding made-up failures to the production log.
   ///
   /// `log` is injectable for exactly the same reason as
-  /// `BufferGuardService.Probes.log`. Until it was, every `swift test` run
+  /// `VMGuard.Probes.log`. Until it was, every `swift test` run
   /// appended its invented "BACKUP FAILURE" (then still in Polish) to the
   /// real `cloudmachine.log` - measured 25.09.2026: 117 lines containing a
   /// word that existed only in `HealthAlertTests.raport(_:)` (now
@@ -190,7 +190,7 @@ public enum HealthAlert {
     "osascript did not show the notification (permissions or no graphical session)"
 
   /// The last report that could NOT be delivered - to be shown in
-  /// `drive-status`. `nil` when the last report was delivered or when there
+  /// `vm-status`. `nil` when the last report was delivered or when there
   /// was none. A silent alarm has to be visible somewhere a person looks on
   /// their own, because by definition it will not reach them via a
   /// notification.

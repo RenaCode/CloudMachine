@@ -22,34 +22,41 @@ public enum RemoteConfigurer {
   /// folder.
   ///
   /// "Not listed" is an answer only when rclone READ a configuration. Without
-  /// `rclone.conf` it lists nothing and exits 0 - and on a Mac whose mount has
-  /// already run (`InstallationTraces`), a lost file is far likelier than a
-  /// remote that never was. That case is `nil` too: answered "no remote", it
-  /// gave such a Mac a new, empty Drive folder for good (second audit, S4).
+  /// `rclone.conf` it lists nothing and exits 0 - and on a Mac that has
+  /// already set up the machine (its SMB password file exists), a lost file is
+  /// far likelier than a remote that never was. That case is `nil` too:
+  /// answered "no remote", it would give such a Mac a new, empty Drive folder
+  /// for good (second audit, S4).
   public static func isConfigured(remoteName: String) async -> Bool? {
     let listed = remoteListed(
       remoteName, in: try? await CMTooling.runRclone(["listremotes"], timeout: 30))
     guard listed == false else { return listed }
     let configFile = configFileExists(
       in: try? await CMTooling.runRclone(["config", "file"], timeout: 30))
-    let folders = InstallationTraces.cachedFolders()
-    let answer = absentAnswer(configFileExists: configFile, cachedFolders: folders)
+    let machineSetUp = machineWasSetUp()
+    let answer = absentAnswer(configFileExists: configFile, machineSetUp: machineSetUp)
     if answer == nil {
       CMLogger.log(
         "rclone lists no '\(remoteName)' remote, but its configuration file "
           + (configFile == false ? "does not exist" : "could not be checked")
-          + " while this Mac has cached Drive folders (\(folders.joined(separator: ", "))) -"
-          + " treating it as UNKNOWN, not as 'no remote'")
+          + " while this Mac has already set up the machine - treating it as UNKNOWN, not as 'no remote'"
+      )
     }
     return answer
   }
 
+  /// The trace a backup leaves on this Mac: `vm-setup` writes the machine's
+  /// SMB password file only after rclone.conf has been copied into it.
+  static func machineWasSetUp() -> Bool {
+    FileManager.default.fileExists(atPath: VMLayout.passwordFile.path)
+  }
+
   /// Pure: what "the remote is not listed" means, given whether rclone's
-  /// configuration file exists (`nil` = could not tell) and which Drive
-  /// folders a mount has already cached here.
-  static func absentAnswer(configFileExists: Bool?, cachedFolders: [String]) -> Bool? {
+  /// configuration file exists (`nil` = could not tell) and whether this Mac
+  /// has already set up the machine.
+  static func absentAnswer(configFileExists: Bool?, machineSetUp: Bool) -> Bool? {
     if configFileExists == true { return false }
-    return cachedFolders.isEmpty ? false : nil
+    return machineSetUp ? nil : false
   }
 
   /// Reads `rclone config file`. rclone says outright when the file is
@@ -107,39 +114,29 @@ public enum RemoteConfigurer {
   }
 
   /// Connects to Google Drive and prepares EXACTLY the remote and folder that
-  /// the mount uses.
-  ///
-  /// Previously the names were taken from `machines.json` (`remote_name`,
-  /// `gdrive-cloudmachine` by default, plus a folder with the machine key),
-  /// while the mount runs on the constants `DriveBufferService.remoteName` /
-  /// `.remotePath` (`gdrive:CloudMachine/mac-studio`). The documented
-  /// installation path - `configure-remote`, then `create-image` - therefore
-  /// ended with a remote nobody ever uses, and a "Drive is not mounted" error
-  /// at the next step. The working installation on this machine has a
-  /// `[gdrive]` put together by hand; it could not be reproduced from the repo
-  /// alone.
+  /// the machine uses (`DriveFolder.remoteName`, `VMLayout.remote`).
+  /// `vm-setup` copies the resulting `rclone.conf` into the machine.
   ///
   /// `config` and `machineKey` stay in the signature because the GUI and the
-  /// CLI have them, but from now on the remote's name is decided by the same
-  /// constant that builds the mount command. One source of truth or none.
+  /// CLI have them; the remote's name is the constant every command uses.
   ///
   /// `acceptScopeChange` is the second, explicit "yes" that replacing an
   /// existing remote needs - see `replacementGate`. Even with it, the new
-  /// token is checked against the existing image before anything is written
+  /// token is checked against the existing backup before anything is written
   /// (`replacementVerdict`).
   @discardableResult
   public static func connect(
     config: MachinesConfig, machineKey: String, replaceExisting: Bool = false,
     acceptScopeChange: Bool = false, folder: String? = nil
   ) async -> CMActionResult {
-    let remoteName = DriveBufferService.remoteName
+    let remoteName = DriveFolder.remoteName
 
     // We ABORT rather than warn. `rclone config create` overwrites an entry
     // with the same name without asking, and with it the token, `client_id`
     // and `scope` of the working installation. A new credential with the
     // `drive.file` scope sees only files created by ITSELF - the existing
     // backup image, created by the previous credential, then becomes
-    // invisible and the mount stops finding it. The backup is intact, but
+    // invisible to every rclone using that token. The backup is intact, but
     // inaccessible, which in practice means the same thing.
     let configured = await isConfigured(remoteName: remoteName)
     // "Could not check" stops here as firmly as "it exists": both mean we do
@@ -149,13 +146,12 @@ public enum RemoteConfigurer {
       var message = L10n.tr(
         "Could not check whether remote '%@' already exists (rclone listremotes did not answer or failed), so nothing was changed. Run `%@ listremotes` to see the error, then try again.",
         remoteName, CMTooling.managedRclonePath.path)
-      let folders = InstallationTraces.cachedFolders()
-      if !folders.isEmpty {
+      if machineWasSetUp() {
         message +=
           "\n"
           + L10n.tr(
-            "Or rclone.conf is missing: this Mac has already backed up to Google Drive (folders %@), so it is not connected anew blindly. Restore the file from a backup. To connect anyway, create an empty file at the path `%@ config file` prints and run again - the existing folder is kept.",
-            folders.joined(separator: ", "), CMTooling.managedRclonePath.path)
+            "Or rclone.conf is missing: this Mac has already set up the CloudMachine machine, so it is not connected anew blindly. Restore the file from a backup (the machine keeps its own copy in %@). To connect anyway, create an empty file at the path `%@ config file` prints and run again - the existing folder is kept.",
+            VMLayout.Guest.rcloneConfig, CMTooling.managedRclonePath.path)
       }
       return CMActionResult(succeeded: false, message: message)
     }
@@ -176,22 +172,22 @@ public enum RemoteConfigurer {
     case .success:
       break
     }
-    let remotePath = "\(remoteName):\(DriveBufferService.remotePath)"
+    let remotePath = VMLayout.remote
 
     // What the CURRENT connection sees, asked before it is replaced: the new
     // token will be held against it. No answer stops here - the check below
     // would have nothing to compare with.
-    var imageBefore: BackupImageService.RemotePresence?
+    var backupBefore: RemotePresence?
     if configured {
-      let presence = await BackupImageService.remoteImagePresence()
+      let presence = await backupPresence()
       if case .unknown(let why) = presence {
         return CMActionResult(
           succeeded: false,
           message: L10n.tr(
-            "Could not check with the current connection whether the backup image is on Google Drive (%@), so remote '%@' was NOT replaced: without that answer the new sign-in cannot be checked against it.",
+            "Could not check with the current connection whether the backup is on Google Drive (%@), so remote '%@' was NOT replaced: without that answer the new sign-in cannot be checked against it.",
             why, remoteName))
       }
-      imageBefore = presence
+      backupBefore = presence
     }
 
     // Own OAuth credentials from the Keychain. On rclone's shared `client_id`
@@ -223,19 +219,13 @@ public enum RemoteConfigurer {
     // what the working installation has - grants reading, changing and
     // DELETING the entire contents of the Google account. That is an
     // incomparably broader permission than a directory with the bands of one
-    // image needs, all the more so because the mount runs with
+    // backup needs, all the more so because the machine's rclone runs with
     // `--drive-use-trash=false`, so deletion has no trash from which anything
     // could be undone.
     //
-    // Binary: THE SAME one the rest of the system uses
-    // (`~/.cloudmachine/bin/rclone`), not `/usr/bin/env rclone`. Until
-    // 23.09.2026 `connect` went through `env`, i.e. to rclone from Homebrew -
-    // while `isConfigured` in this same file and the whole mount go through
-    // `CMTooling.runRclone`. There were two consequences, both silent: without
-    // Homebrew the documented installation path (`install-rclone`, then
-    // `configure-remote`) ended with exit code 127 and a message without a
-    // cause, and WITH Homebrew the configuration was written by a DIFFERENT
-    // binary than the one the system then uses.
+    // Binary: THE SAME one the rest of the Mac side uses
+    // (`~/.cloudmachine/bin/rclone`), not `/usr/bin/env rclone`, so the
+    // configuration is written by the binary that reads it afterwards.
     //
     // `authorize` is called via `ProcessRunner.run` directly on the managed
     // binary's path, because `CMTooling.runRclone` does not accept `env`,
@@ -259,11 +249,11 @@ public enum RemoteConfigurer {
         succeeded: false,
         message: L10n.tr("Could not read the token from the output of rclone authorize."))
     }
-    if let imageBefore {
-      let imageAfter = await imagePresence(
+    if let backupBefore {
+      let backupAfter = await backupPresence(
         token: token, clientID: clientID, clientSecret: clientSecret)
       if let refusal = replacementVerdict(
-        before: imageBefore, after: imageAfter, remoteName: remoteName)
+        before: backupBefore, after: backupAfter, remoteName: remoteName)
       {
         return refusal
       }
@@ -278,10 +268,6 @@ public enum RemoteConfigurer {
       createArgs += ["client_id=\(clientID)", "client_secret=\(clientSecret)"]
     }
     createArgs.append("token=\(token)")
-    // Again the same binary as the mount: if `config create` went through
-    // Homebrew, it would write the entry into a configuration that the binary
-    // used by the system may not read - and then `isConfigured` says "there is
-    // no remote" right after a successful "connected".
     let createResult = try? await CMTooling.runRclone(createArgs, timeout: 60)
     guard createResult?.succeeded == true else {
       return CMActionResult(succeeded: false, message: L10n.tr("rclone config create failed."))
@@ -290,12 +276,11 @@ public enum RemoteConfigurer {
     guard mkdirResult?.succeeded == true else {
       // We RETURN AN ERROR, not "success": the remote exists, but without
       // this folder we have no confirmation that writing to this account
-      // actually works - and the next installation step (`create-image`)
-      // assumes it does.
+      // actually works - and the next step (`vm-setup`) assumes it does.
       return CMActionResult(
         succeeded: false,
         message: L10n.tr(
-          "Connected to Google Drive, but could not create the folder '%@' - without it the mount will not start. Check the account permissions and try again.",
+          "Connected to Google Drive, but could not create the folder '%@' - without it the machine has nowhere to keep the backup. Check the account permissions and try again.",
           remotePath))
     }
     return CMActionResult(
@@ -313,8 +298,7 @@ public enum RemoteConfigurer {
   /// `--replace-existing`, is easy to reach for - until 11.10.2026 the panel
   /// itself suggested it after every change of the Google credentials. On a
   /// Mac like this project's own (`scope = drive`, its own `client_id`), the
-  /// new sign-in gets `drive.file` and does not see the existing image: the
-  /// mount shows an empty folder and `create-image` sees nothing to protect.
+  /// new sign-in gets `drive.file` and does not see the existing backup.
   /// The second flag is there so that the user has read that sentence.
   static func replacementGate(
     configured: Bool, replaceExisting: Bool, acceptScopeChange: Bool, remoteName: String
@@ -331,23 +315,31 @@ public enum RemoteConfigurer {
       return CMActionResult(
         succeeded: false,
         message: L10n.tr(
-          "Remote '%@' was NOT replaced. The new sign-in gets the 'drive.file' scope, which sees only files created under its own client_id. The existing backup was most likely created by the current connection and would become invisible: the mount would show an empty folder, and create-image could start a second, empty backup next to it. Before anything is written, the new token is checked against the existing image, and the replacement is abandoned if it cannot see it. To go ahead, run again with --replace-existing --accept-scope-change.",
+          "Remote '%@' was NOT replaced. The new sign-in gets the 'drive.file' scope, which sees only files created under its own client_id. The existing backup was most likely created by the current connection and would become invisible to it. Before anything is written, the new token is checked against the existing backup, and the replacement is abandoned if it cannot see it. The machine keeps its own copy of the configuration until vm-setup --replace-rclone-config. To go ahead, run again with --replace-existing --accept-scope-change.",
           remoteName))
     }
     return nil
   }
 
+  /// What a token sees of this Mac's backup folder.
+  public enum RemotePresence: Equatable {
+    case present
+    case absent
+    /// Unknown. `why` goes into the message, so that the user knows what
+    /// exactly was missing.
+    case unknown(String)
+  }
+
   /// Whether the new token may replace the remote, given what the old one and
   /// the new one see. `nil` = it may.
   ///
-  /// Only an image that WAS visible can be lost: with none before, there is
+  /// Only a backup that WAS visible can be lost: with none before, there is
   /// nothing for the new token to miss. When there was one, the new token
   /// has to see it too - "absent" and "no answer" both stop the replacement,
   /// because writing the token is the step that cannot be taken back (the
   /// old token is gone from `rclone.conf` with it).
   static func replacementVerdict(
-    before: BackupImageService.RemotePresence, after: BackupImageService.RemotePresence,
-    remoteName: String
+    before: RemotePresence, after: RemotePresence, remoteName: String
   ) -> CMActionResult? {
     guard before == .present else { return nil }
     let why: String
@@ -359,32 +351,59 @@ public enum RemoteConfigurer {
     return CMActionResult(
       succeeded: false,
       message: L10n.tr(
-        "The new sign-in does NOT see the existing backup image (%@), so remote '%@' was NOT replaced and rclone.conf is unchanged. With this token the mount would show an empty folder. Keep the current connection, or sign in with the credential (client_id) that created the image.",
+        "The new sign-in does NOT see the existing backup (%@), so remote '%@' was NOT replaced and rclone.conf is unchanged. Keep the current connection, or sign in with the credential (client_id) that created the backup.",
         why, remoteName))
   }
 
-  /// Whether `token` sees this Mac's image - the same `lsf` as
-  /// `BackupImageService.remoteImagePresence`, on a remote defined only for
-  /// this call (`:drive:`), so nothing is written to `rclone.conf`. The token
-  /// and the keys go through the environment, not the command line, for the
-  /// reason given at `authorize`.
-  static func imagePresence(token: String, clientID: String?, clientSecret: String?) async
-    -> BackupImageService.RemotePresence
+  /// `bands/` in the machine's Drive folder, as the current connection sees it.
+  static func backupPresence() async -> RemotePresence {
+    guard
+      let result = try? await CMTooling.runRclone(
+        ["lsf", "--dirs-only", VMLayout.remote], timeout: 120)
+    else { return .unknown(L10n.tr("rclone did not answer")) }
+    return classifyRemoteListing(
+      succeeded: result.succeeded, stdout: result.stdout, stderr: result.stderr)
+  }
+
+  /// The same `lsf` with `token`, on a remote defined only for this call
+  /// (`:drive:`), so nothing is written to `rclone.conf`. The token and the
+  /// keys go through the environment, not the command line, for the reason
+  /// given at `authorize`.
+  static func backupPresence(token: String, clientID: String?, clientSecret: String?) async
+    -> RemotePresence
   {
     var env = ["RCLONE_DRIVE_TOKEN": token, "RCLONE_DRIVE_SCOPE": "drive.file"]
     if let clientID, let clientSecret {
       env["RCLONE_DRIVE_CLIENT_ID"] = clientID
       env["RCLONE_DRIVE_CLIENT_SECRET"] = clientSecret
     }
+    let path = VMLayout.remote.split(separator: ":", maxSplits: 1).last.map(String.init) ?? ""
     guard
       let result = try? await ProcessRunner.run(
-        CMTooling.managedRclonePath.path,
-        ["lsf", "--dirs-only", ":drive:\(DriveBufferService.remotePath)"], env: env, timeout: 120)
+        CMTooling.managedRclonePath.path, ["lsf", "--dirs-only", ":drive:\(path)"], env: env,
+        timeout: 120)
     else {
       return .unknown(L10n.tr("rclone did not answer"))
     }
-    return BackupImageService.classifyRemoteListing(
+    return classifyRemoteListing(
       succeeded: result.succeeded, stdout: result.stdout, stderr: result.stderr)
+  }
+
+  /// `lsf --dirs-only` of the folder -> whether the backup's `bands/` is there.
+  /// A missing folder is an answer ("absent"), any other error is not.
+  static func classifyRemoteListing(succeeded: Bool, stdout: String, stderr: String)
+    -> RemotePresence
+  {
+    if succeeded {
+      let present = stdout.split(whereSeparator: \.isNewline).contains {
+        $0.trimmingCharacters(in: .whitespaces) == "bands/"
+      }
+      return present ? .present : .absent
+    }
+    if stderr.lowercased().contains("directory not found") { return .absent }
+    let reason = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    return .unknown(
+      reason.isEmpty ? L10n.tr("rclone lsf ended with an error") : String(reason.suffix(200)))
   }
 
   // MARK: - Saving credentials

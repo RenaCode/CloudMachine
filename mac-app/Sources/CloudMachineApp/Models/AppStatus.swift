@@ -10,128 +10,147 @@ enum DependencyState: Equatable {
   case ready
 }
 
-enum TimeMachineState: Equatable {
+/// The Lima machine itself, as `limactl list` reports it.
+enum MachineState: Equatable {
   case unknown
-  /// Time Machine does not point at our image - there is effectively no backup.
-  case notRegistered
-  /// `tmutil` DID NOT ANSWER within the time limit, so we know nothing about the destination.
-  ///
-  /// A separate state for the same reason as `TimeMachineStatus.DestinationReading.noAnswer`
-  /// and `BufferStatus.queueKnown`: a missing answer has no right to pretend to be a result.
-  /// Until 25.09.2026 the panel showed "Time Machine does not point to
-  /// CloudMachine" here - a sentence that sounds true and is false, sending
-  /// a person off to register the destination again while the destination is
-  /// intact and it was the read that hung (`tmutil destinationinfo` reaches
-  /// into the Google Drive mount).
+  /// `limactl` did not answer (or is not installed) - nothing is known.
   case noAnswer
-  case registered(mountPoint: String)
-}
+  /// There is no machine `cmsmb` yet: `vm-setup` creates it.
+  case notCreated
+  /// The machine exists but does not run; Lima's word for it (`Stopped`, ...).
+  case notRunning(String)
+  case running
 
-extension TimeMachineState {
-  /// Translates the `tmutil` answer into a panel state.
-  ///
-  /// Extracted from `CloudMachineController.refreshTimeMachine()` and pure,
-  /// so a test can show that THREE answers give THREE states.
-  /// Previously the controller asked `currentDestinationMountPoint()`, which returns
-  /// `nil` both when there is no destination and when there is no answer - so both paths
-  /// ended in the same `.notRegistered`. The `backup-health` watchdog has
-  /// distinguished them since 23.09.2026 (`destinationReading()`); the panel did not.
-  static func from(_ reading: TimeMachineStatus.DestinationReading, target: String)
-    -> TimeMachineState
-  {
-    switch reading {
-    case .mountPoint(let path):
-      return path == target ? .registered(mountPoint: path) : .notRegistered
-    case .none: return .notRegistered
-    case .noAnswer: return .noAnswer
+  /// Translates the `limactl list` answer. Pure, so a test can show that a
+  /// missing answer does not pass for a stopped machine.
+  static func from(instanceStatus: String??) -> MachineState {
+    switch instanceStatus {
+    case .none: return .noAnswer
+    case .some(.none): return .notCreated
+    case .some(.some("Running")): return .running
+    case .some(.some(let other)): return .notRunning(other)
     }
   }
 }
 
-/// State of the buffer between Time Machine and Google Drive.
-struct BufferStatus: Equatable {
-  var mounted: Bool = false
-  var imageAttached: Bool = false
-  var sizeGB: Int = 0
-  /// `nil` = there was NO measurement (statfs failed), not "zero gigabytes" -
-  /// see `BufferGuardService.freeGB()`. The same distinction as
-  /// `queueKnown` below.
-  var freeDiskGB: Int?
-  /// How many files are waiting to be uploaded. This number matters more than the
-  /// buffer size: if it grows and does not return to zero between backups, uploading
-  /// is not keeping up with writing.
-  var uploadsQueued: Int = 0
-  var uploadsInProgress: Int = 0
-  /// Whether the counters above come from a reading at all.
+enum TimeMachineState: Equatable {
+  case unknown
+  /// No Time Machine destination is the machine's share - there is effectively no backup.
+  case notRegistered
+  /// `tmutil` DID NOT ANSWER within the time limit, so we know nothing about the destination.
   ///
-  /// `false` by default, and that matters more than it looks: a freshly created
-  /// `BufferStatus` has nothing but zeros, which are not a measurement. A default of `true`
-  /// would mean "empty queue" and the menu bar would light up green before
-  /// anything had been checked.
-  var queueKnown: Bool = false
-  var erroredFiles: Int = 0
-  /// There is no space left on Google Drive. It will NOT pass on its own.
-  var driveFull: Bool = false
-  /// The Google daily UPLOAD limit (750 GB) is exhausted. It passes on its own.
-  ///
-  /// Kept separate from `driveFull`, because these are two different situations with
-  /// the same symptom: one means "wait", the other "free up space". Previously they were
-  /// a single field and the interface could not tell them apart.
-  var dailyQuotaExhausted: Bool = false
-  /// rclone has nowhere to put data - the buffer is full of nothing but unsent files.
-  var outOfSpace: Bool = false
+  /// A separate state, because a missing answer has no right to pretend to be a
+  /// result: "Time Machine does not point to CloudMachine" sends a person off to
+  /// register a destination that may be intact, while it was the read that hung.
+  case noAnswer
+  case registered(url: String)
+}
 
-  var draining: Bool { uploadsInProgress > 0 || uploadsQueued > 0 }
-
-  /// The "Cloud sync queue" row.
+extension TimeMachineState {
+  /// Translates the `tmutil destinationinfo` answer into a panel state. Pure,
+  /// so a test can show that THREE answers give THREE states.
   ///
-  /// An empty queue is "everything uploaded" only when rclone abandoned
-  /// nothing on the way: an abandoned band drops out of the queue exactly like
-  /// an uploaded one (see `DriveBufferService.QueueStats.isQuiet`). Until
-  /// 09.10.2026 the row then said "Everything uploaded" - in red, above a row
-  /// counting the errors.
+  /// `address` is the machine's current address; without it any CloudMachine
+  /// share counts (see `VMStatus.isMachineShare`).
+  static func from(_ destinations: [TimeMachineStatus.Destination]?, address: String?)
+    -> TimeMachineState
+  {
+    guard let destinations else { return .noAnswer }
+    guard let ours = VMStatus.machineDestination(in: destinations, address: address),
+      let url = ours.url
+    else { return .notRegistered }
+    return .registered(url: url)
+  }
+}
+
+/// What the machine said about itself: services, the upload buffer, the image.
+struct MachineStatus: Equatable {
+  var state: MachineState = .unknown
+  var address: String?
+  /// `systemctl is-active` per unit; empty = not read.
+  var services: [String: String] = [:]
+  /// `nil` = no reading (the machine is down or rclone did not answer).
+  var reading: VMLayout.Reading?
+  var punchfsOpenFiles: Int?
+  var punchfsFileLimit: Int?
+  var bundlePrepared: Bool?
+  var imageCount: Int?
+
+  var isRunning: Bool { state == .running }
+
+  /// `nil` = not known (no answer from the machine).
+  var servicesHealthy: Bool? {
+    guard isRunning, !services.isEmpty else { return nil }
+    return VMStatus.servicesHealthy(services)
+  }
+
+  /// Whether the counters below come from a reading at all. A fresh
+  /// `MachineStatus` has nothing but zeros, which are not a measurement.
+  var queueKnown: Bool { reading?.buffer.unsentBytes != nil }
+
+  var unsentGiB: Int? { reading?.buffer.unsentBytes.map { Int($0 / VMGuard.gib) } }
+  var cacheGiB: Int? { reading.map { Int($0.buffer.bytesUsed / VMGuard.gib) } }
+  var freeGiB: Int? { reading.map { Int($0.freeBytes / VMGuard.gib) } }
+  var erroredFiles: Int { reading?.buffer.erroredFiles ?? 0 }
+  var uploadsQueued: Int { reading?.buffer.uploadsQueued ?? 0 }
+  var uploadsInProgress: Int { reading?.buffer.uploadsInProgress ?? 0 }
+
+  var draining: Bool { (reading?.buffer.unsentBytes ?? 0) > 0 }
+
+  /// Time Machine has created its image, and it still has 875 MB bands on the
+  /// machine's local disk: `vm-prepare-bundle` is due.
+  var bundleNeedsPreparing: Bool {
+    bundlePrepared == false && (imageCount ?? 0) > 0
+  }
+
+  var punchfsNearLimit: Bool {
+    guard let open = punchfsOpenFiles, let limit = punchfsFileLimit else { return false }
+    return Double(open) > Double(limit) * VMStatus.fileWarningRatio
+  }
+
+  /// The "To upload" row. An empty queue is "everything uploaded" only when
+  /// rclone abandoned nothing on the way: an abandoned band drops out of the
+  /// queue exactly like an uploaded one.
   var queueSummary: String {
-    guard queueKnown else { return L10n.tr("not read") }
+    guard let unsent = unsentGiB else { return L10n.tr("not read") }
     if draining {
       return L10n.tr(
-        "%@ in progress, %@ queued", "\(uploadsInProgress)", "\(uploadsQueued)")
+        "%@ GiB in %@ bands, %@ uploading", "\(unsent)", "\(uploadsQueued)",
+        "\(uploadsInProgress)")
     }
     if erroredFiles > 0 {
-      return L10n.tr("%@ fragments abandoned - only on this Mac", "\(erroredFiles)")
+      return L10n.tr("%@ fragments abandoned - only in the machine", "\(erroredFiles)")
     }
     return L10n.tr("Everything uploaded")
   }
 
   /// The single source of truth on whether the backup reaches the Drive - and why not.
+  ///
+  /// `driveFull` and `dailyQuotaExhausted` are not read here: the rclone log
+  /// that tells them lives in the machine. A stalled upload still shows - the
+  /// backlog grows and the guard pauses Time Machine.
   var uploadState: UploadState {
     UploadState.from(
-      mounted: mounted,
+      mounted: isRunning && services["rclone-tm"] == "active",
       queueKnown: queueKnown,
       queued: uploadsQueued,
       inProgress: uploadsInProgress,
       failedFiles: erroredFiles,
-      bufferOutOfSpace: outOfSpace,
-      driveFull: driveFull,
-      dailyQuotaExhausted: dailyQuotaExhausted)
+      bufferOutOfSpace: reading?.buffer.outOfSpace ?? false,
+      driveFull: false,
+      dailyQuotaExhausted: false)
   }
 }
 
 /// Whether the backup cycle is STILL working - measured by the date of the last SUCCESSFUL backup.
 ///
-/// Until 23.09.2026 the interface did not ask this question even once: `grep -rn
-/// "BackupHealth" Sources/CloudMachineApp/` returned not a single hit.
-/// The panel computed health solely from the state of the DEVICES - the mount, the image, the
-/// Time Machine destination, the queue - that is, from the MOMENTARY state. The failure described
-/// in the `BackupHealth` header as the most dangerous one looks exactly the other way round:
-/// everything mounted, the image attached, the queue empty, and Time Machine has not
-/// finished a backup for two days. The panel then showed "Healthy / Ready".
+/// The state of the machine at this moment can be flawless while Time Machine
+/// has not finished a backup for two days; this is the one measure that moves
+/// only on success.
 struct BackupCycleStatus: Equatable {
-  /// Whether the Time Machine preferences could be read at all.
-  ///
-  /// `false` by default, and that matters more than it looks - just as with
-  /// `queueKnown`: a freshly created state is not a measurement, and missing Full
-  /// Disk Access (the most common reason the preferences file is unreadable)
-  /// must not pass for the absence of a problem.
+  /// Whether the Time Machine preferences could be read at all. `false` by
+  /// default: a freshly created state is not a measurement, and missing Full
+  /// Disk Access must not pass for the absence of a problem.
   var known: Bool = false
   /// Date of the last COMPLETED backup. `nil` = there is not a single one.
   var lastSuccess: Date?
@@ -144,11 +163,8 @@ struct BackupCycleStatus: Equatable {
     lastSuccess.map { now.timeIntervalSince($0) }
   }
 
-  /// Whether the last SUCCESSFUL backup is recent enough.
-  ///
-  /// No reading and no backup both give `false` - either one means that nobody
-  /// has confirmed the backup works, and a green badge is exactly such a
-  /// confirmation.
+  /// Whether the last SUCCESSFUL backup is recent enough. No reading and no
+  /// backup both give `false` - nobody has confirmed the backup works.
   func isFresh(now: Date = Date(), maxAgeHours: Double = BackupHealth.maxAgeHours) -> Bool {
     guard known, let age = age(now: now) else { return false }
     return age <= maxAgeHours * 3600
@@ -186,23 +202,15 @@ struct BackupProgressInfo: Equatable {
 final class AppStatus: ObservableObject {
   @Published var dependencyState: DependencyState = .unknown
   @Published var remoteConfigured: Bool = false
-  @Published var buffer = BufferStatus()
+  @Published var machine = MachineStatus()
   /// The answer to "when was a BACKUP last made" - the only measure
   /// that moves only on success.
   @Published var backupCycle = BackupCycleStatus()
   @Published var timeMachineState: TimeMachineState = .unknown
   /// When the `backup-health` watchdog last RAN. `nil` = the panel has not
-  /// asked yet (not: "has never run" - that is a separate state, `.never`).
-  ///
-  /// The panel shows this for the same reason it shows the age of the last
-  /// backup: the watchdog runs with `StartInterval 1800` and without `KeepAlive`, so
-  /// when unloaded or hung it gives no symptom other than silence - and silence
-  /// is the normal state here.
-  ///
-  /// DELIBERATELY not part of `healthy`: the panel computes backup freshness ITSELF, from the
-  /// same preferences file the watchdog computes it from. A dead watchdog therefore does not
-  /// mean the backup is not working - it means nobody reports a failure,
-  /// and that is a different failure with its own red row.
+  /// asked yet. DELIBERATELY not part of `healthy`: a dead watchdog does not
+  /// mean the backup is not working - it means nobody reports a failure, and
+  /// that is a different failure with its own red row.
   @Published var watchdog: WatchdogHeartbeat.Freshness?
   @Published var backupProgress: BackupProgressInfo?
   @Published var lastAction: LastRunResult?
@@ -217,30 +225,21 @@ final class AppStatus: ObservableObject {
   @Published var budgetUsage: MachineBudget.Usage?
   @Published var timeMachineQuotaGB: Double?
   @Published var timeMachineDestinationID: String?
-  /// Whether the mount agent is loaded in launchd; `nil` until asked.
+  /// Whether the backup watchdog agent is loaded in launchd; `nil` until asked.
   @Published var agentsInstalled: Bool?
-  /// Whether this Mac's image exists on the mounted Drive; `nil` while the
-  /// Drive is not mounted, because then nobody can know.
-  @Published var imageExists: Bool?
-  /// The Drive mount still takes commands on the open TCP port - a mount from
-  /// before the private socket that survived the upgrade (see
-  /// `DriveBufferService.legacyPortOpen`). Until 11.10.2026 only one line of
-  /// `drive-status` said so; the window was green.
+  /// rclone's remote control in the machine answers on the Mac's
+  /// 127.0.0.1:5572 (Lima's port forwarding) - any web page can send it
+  /// commands. See `VMStatus.remoteControlOpenOnMac`.
   @Published var remoteControlOpen: Bool = false
-  /// The Mac was prepared for a restart (`ShutdownPrep`): the image is
-  /// detached ON PURPOSE until the restart.
-  @Published var preparedForRestart: Bool = false
   @Published var isBusy: Bool = false
   @Published var busyLabel: String = ""
   @Published var errorMessage: String?
-  /// When the state was last read successfully. Shown in the interface, because
-  /// a frozen view looks exactly like a failure - and those are two different things
-  /// that the user has to tell apart without looking into the logs.
+  /// When the state was last read successfully. A frozen view looks exactly
+  /// like a failure - and those are two different things.
   @Published var lastRefresh: Date?
 
   /// Whether the backup watchdog is RUNNING. `false` also when the panel has not
-  /// asked yet - unchecked has no right to show green, just like
-  /// `queueKnown` and `BackupCycleStatus.known`.
+  /// asked yet - unchecked has no right to show green.
   var watchdogRunning: Bool {
     if case .fresh = watchdog { return true }
     return false
@@ -252,38 +251,33 @@ final class AppStatus: ObservableObject {
       return L10n.tr("Missing: %@", what.joined(separator: ", "))
     }
     if !remoteConfigured { return L10n.tr("Google Drive not connected") }
-    if !buffer.mounted { return L10n.tr("Buffer is not working") }
-    if !buffer.imageAttached {
-      return detachedForRestart
-        ? L10n.tr("Ready for restart - the image is detached on purpose")
-        : L10n.tr("Backup image not attached")
+    switch machine.state {
+    case .notCreated: return L10n.tr("The CloudMachine machine is not set up yet")
+    case .notRunning: return L10n.tr("The CloudMachine machine is stopped")
+    case .noAnswer: return L10n.tr("The CloudMachine machine does not answer")
+    case .unknown, .running: break
+    }
+    if machine.servicesHealthy == false {
+      return L10n.tr("A service in the CloudMachine machine is not running")
     }
     if case .notRegistered = timeMachineState {
       return L10n.tr("Time Machine does not point to CloudMachine")
     }
-    // No answer from tmutil MUST sound different from a changed destination: it is
-    // the first sentence a person reads, and it decides what they will do.
-    // "Does not point" tells them to register the destination again - a needless and misleading
-    // step when the destination is intact and it was the read that hung.
+    // No answer from tmutil MUST sound different from a changed destination:
+    // "does not point" tells a person to register the destination again.
     if case .noAnswer = timeMachineState {
       return L10n.tr(
         "UNKNOWN whether Time Machine points to CloudMachine - tmutil did not answer")
     }
-    // ONE source speaks about uploading - otherwise the menu bar and the status card could
-    // claim different things. Files that rclone did not upload exist ONLY
-    // on this Mac, which is exactly where the backup has no right to be the only
-    // copy; that is precisely why `UploadState` puts them ahead of the daily limit.
-    let upload = buffer.uploadState
+    // ONE source speaks about uploading - otherwise the menu bar and the status
+    // card could claim different things.
+    let upload = machine.uploadState
     if !upload.isNominal { return upload.headline }
     // Backups work in this state, but any web page can delete them - so it
     // comes before every sentence that sounds like "all is well".
-    if remoteControlOpen {
-      return L10n.tr("Drive remote control is open - restart the mount")
-    }
+    if remoteControlOpen { return L10n.tr("rclone's remote control is open on this Mac") }
     if backupProgress != nil { return L10n.tr("Backup in progress") }
-    // The state of the devices can be flawless while there has been no backup for two days.
-    // This sentence must come BEFORE "Ready", otherwise the headline contradicts the
-    // badge next to it (healthy = false, and the text says "Ready").
+    // The machine can be flawless while there has been no backup for two days.
     if !backupCycle.isFresh() {
       guard backupCycle.known else { return L10n.tr("Unknown when the last backup was made") }
       guard let age = backupCycle.age() else {
@@ -295,51 +289,51 @@ final class AppStatus: ObservableObject {
     return L10n.tr("Ready")
   }
 
-  /// Whether the state is really good.
-  ///
-  /// WARNING: `erroredFiles` and `outOfSpace` MUST be here. Without them the menu bar
-  /// showed a green badge and "Ready" while some of the image's bands never
-  /// reached the Drive - and such a backup may not open. Broken
-  /// looked exactly the same as working.
-  ///
-  /// SECOND WARNING, from 23.09.2026: `backupCycle` MUST be here for the same
-  /// reason. All the other conditions describe the state of the DEVICES at this moment,
-  /// and each of them can be met when no backup has been made for two days.
-  /// The green badge is meant to say "the data is safe", and that follows
-  /// solely from a backup having BEEN MADE - not from the disk being attached.
-  ///
-  /// THIRD, from 11.10.2026: `remoteControlOpen`. A backup that any web page
-  /// can delete is not safe, however fresh it is.
-  /// A detached image that is not a failure: the preparation for a restart
-  /// detached it, and the agents attach it again after the restart.
-  var detachedForRestart: Bool { preparedForRestart && !buffer.imageAttached }
-
+  /// Whether the state is really good: every device AND a fresh completed
+  /// backup AND no open remote control. The green badge says "the data is
+  /// safe", and that follows solely from a backup having BEEN MADE.
   var healthy: Bool {
-    guard case .ready = dependencyState, remoteConfigured, buffer.mounted, buffer.imageAttached,
-      case .registered = timeMachineState, buffer.uploadState.isNominal,
-      backupCycle.isFresh(), !remoteControlOpen
+    guard case .ready = dependencyState, remoteConfigured, machine.isRunning,
+      machine.servicesHealthy == true, case .registered = timeMachineState,
+      machine.uploadState.isNominal, backupCycle.isFresh(), !remoteControlOpen
     else { return false }
     return true
-  }
-
-  /// Whether "Restart the mount" may be offered: the port is open, nothing
-  /// else is running, and Time Machine is not backing up. `MountRestart`
-  /// checks the backup itself again - this only keeps the button honest.
-  var canRestartMount: Bool {
-    remoteControlOpen && !isBusy && backupProgress == nil
   }
 
   /// Whether "Back up now" can do anything: the backup has somewhere to go.
-  ///
-  /// NOT `healthy`, which until 09.10.2026 decided this too. `healthy` also
-  /// asks for a fresh backup - so after two days without one, with every
-  /// device in place, the only button that fixes that was grey. Likewise with
-  /// an unread queue or the Google daily limit: Time Machine still writes into
-  /// the buffer then. Only what makes `tmutil startbackup` pointless blocks it.
+  /// NOT `healthy` - after two days without a backup, the button that fixes
+  /// that must not be grey.
   var canStartBackup: Bool {
-    guard case .ready = dependencyState, remoteConfigured, buffer.mounted, buffer.imageAttached,
+    guard remoteConfigured, machine.isRunning, machine.servicesHealthy == true,
       case .registered = timeMachineState, !isBusy
     else { return false }
     return true
+  }
+
+  /// Whether "Start the machine" makes sense.
+  var canStartMachine: Bool {
+    if case .notRunning = machine.state { return !isBusy }
+    return false
+  }
+}
+
+extension AppStatus {
+  /// The verdict's colour, shared by the menu bar and the window: green only
+  /// for a really good state, red for what needs a person, amber for the rest
+  /// (unknown, not checked yet, passes by itself).
+  var overallTone: StatusTone {
+    if healthy { return .success }
+    if case .missing = dependencyState { return .danger }
+    if !remoteConfigured { return .danger }
+    switch machine.state {
+    case .notCreated, .notRunning, .noAnswer: return .danger
+    case .unknown, .running: break
+    }
+    if machine.servicesHealthy == false { return .danger }
+    if case .notRegistered = timeMachineState { return .danger }
+    if machine.uploadState.needsAttention { return .danger }
+    if remoteControlOpen { return .danger }
+    if backupCycle.known && !backupCycle.isFresh() { return .danger }
+    return .warning
   }
 }

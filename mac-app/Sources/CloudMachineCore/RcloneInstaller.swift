@@ -2,14 +2,10 @@ import Foundation
 
 /// Downloads the official rclone binary - port of `gdrive/install-rclone.sh`.
 ///
-/// It exists because rclone from Homebrew is built without FUSE support and,
-/// when asked to mount, refuses outright:
-///
-///     rclone mount is not supported on MacOS when rclone is installed via Homebrew
-///
-/// We install it alongside, in our own directory
-/// (`CMTooling.managedRclonePath`), without touching the Homebrew installation
-/// - the remaining, non-mounting code paths can keep using it.
+/// Installed in our own directory (`CMTooling.managedRclonePath`), without
+/// touching Homebrew: the Mac's rclone signs in to Google Drive, writes the
+/// `rclone.conf` that `vm-setup` copies into the machine, and measures usage.
+/// The machine has its own rclone (`vm/cmsmb.yaml`).
 public enum RcloneInstaller {
 
   private static let versionURL = "https://downloads.rclone.org/version.txt"

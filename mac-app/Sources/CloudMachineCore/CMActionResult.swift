@@ -13,52 +13,9 @@ public struct CMActionResult {
   /// handing the user a dead end.
   public var isSudoAuthFailure: Bool
 
-  /// `true` if the operation did NOT START at all - not because something went
-  /// wrong, but because the resource was held by another operation (see
-  /// `BackupImageService.busyResult`).
-  ///
-  /// A separate field rather than recognizing it by the content of `message`:
-  /// matching on text breaks with every change of the message, and does so
-  /// silently - meaning nobody notices until something fails.
-  public var didNotRun: Bool
-
-  /// `true` if `hdiutil attach` was turned away with "Resource temporarily
-  /// unavailable" on every attempt - the failure that the mount restart in
-  /// `AttachStall` answers. Recognized once, where `hdiutil` runs, so callers
-  /// do not match on `message`.
-  public var attachTemporarilyUnavailable: Bool
-
-  public init(
-    succeeded: Bool, message: String, isSudoAuthFailure: Bool = false, didNotRun: Bool = false,
-    attachTemporarilyUnavailable: Bool = false
-  ) {
+  public init(succeeded: Bool, message: String, isSudoAuthFailure: Bool = false) {
     self.succeeded = succeeded
     self.message = message
     self.isSudoAuthFailure = isSudoAuthFailure
-    self.didNotRun = didNotRun
-    self.attachTemporarilyUnavailable = attachTemporarilyUnavailable
-  }
-
-  /// What the caller should do with this result - in particular, which exit
-  /// code a CLI command running under launchd should end with.
-  ///
-  /// It exists because "busy with another operation" is NOT a failure, yet
-  /// with exit code 1 it ended up in `launchd-gdrive-attach.err.log` - exactly
-  /// where a person looks when asking "is the backup working". It is the same
-  /// bug this code fights in the other direction ("no answer read as an
-  /// answer"), only reversed: a normal state read as a failure.
-  public enum Disposition: Equatable {
-    /// It worked.
-    case ok
-    /// Nothing happened and nothing broke. A periodic tick should simply try
-    /// again on the next run.
-    case skipped
-    /// A real failure - this one must be visible.
-    case failed
-  }
-
-  public var disposition: Disposition {
-    if succeeded { return .ok }
-    return didNotRun ? .skipped : .failed
   }
 }

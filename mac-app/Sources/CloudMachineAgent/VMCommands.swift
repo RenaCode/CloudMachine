@@ -2,8 +2,7 @@ import ArgumentParser
 import CloudMachineCore
 import Foundation
 
-// The machine layout (Time Machine over SMB to a Lima VM) - see vm/README.md.
-// It runs beside the attached-image commands; none of these touch the image.
+// The machine (Time Machine over SMB to a Lima VM) - see vm/README.md.
 
 struct VMSetupCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
@@ -20,7 +19,7 @@ struct VMSetupCommand: AsyncParsableCommand {
 
   @Flag(
     name: .long,
-    help: ArgumentHelp(L10n.tr("Also install the vm-start and vm-guard launchd agents.")))
+    help: ArgumentHelp(L10n.tr("Also install the launchd agents (same as install-launchd).")))
   var installAgents = false
 
   func run() async throws {
@@ -28,7 +27,7 @@ struct VMSetupCommand: AsyncParsableCommand {
     for line in result.messages { print(line) }
     guard result.succeeded else { throw ExitCode.failure }
     if installAgents {
-      let agents = await LaunchdInstaller.installVMAgents()
+      let agents = await LaunchdInstaller.install()
       print(agents.message)
       if !agents.succeeded { throw ExitCode.failure }
     }
@@ -104,6 +103,39 @@ struct VMStatusCommand: AsyncParsableCommand {
   func run() async throws {
     let (lines, healthy) = await VMStatus.lines()
     for line in lines { print(line) }
+    print(L10n.tr("Drive folder:     %@", VMLayout.remote))
+
+    let limit = MachineBudget.limitGB()
+    print(
+      L10n.tr(
+        "Space limit:      %@",
+        MachineBudget.summary(limitGB: limit, usage: MachineBudget.storedUsage())))
+    if let limit, let destinations = await TimeMachineStatus.destinationsReading(),
+      let ours = VMStatus.machineDestination(in: destinations, address: nil), let id = ours.id,
+      !MachineBudget.quotaMatches(currentQuotaGB: ours.quotaGB, limitGB: limit)
+    {
+      print(
+        L10n.tr(
+          "                  Time Machine quota not set to match - run: %@",
+          MachineBudget.setQuotaCommand(destinationID: id, limitGB: limit)))
+    }
+
+    // Who watches the watchdog: without this line "no alarm" meant both "the
+    // backup works" and "nobody checked" - see `WatchdogHeartbeat`.
+    print(L10n.tr("Backup watchdog:  %@", StatusLines.watchdogRun(WatchdogHeartbeat.current())))
+    let broken = await AgentRepair.brokenAgents()
+    print(
+      L10n.tr(
+        "Agents:           %@",
+        broken.isEmpty
+          ? "OK"
+          : L10n.tr(
+            "CANNOT START: %@ - open CloudMachine or run backup-health to reload them",
+            broken.joined(separator: ", "))))
+    // At the very end: an alarm whose notification failed is seen ONLY here.
+    for line in StatusLines.undeliveredAlert(HealthAlert.lastDeliveryFailure()) {
+      print(line)
+    }
     if !healthy { throw ExitCode.failure }
   }
 }

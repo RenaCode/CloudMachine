@@ -5,7 +5,7 @@ import XCTest
 /// What happens when `tmutil` DOES NOT ANSWER.
 ///
 /// Until 23.09.2026 the answer was "nothing": `tmutil` calls had no time
-/// limit, so with a dead FUSE-T mount (the ENXIO incident of 22.09)
+/// limit, so with a dead destination (the ENXIO incident of 22.09)
 /// `destinationinfo` entered uninterruptible I/O and `BackupHealth.
 /// currentReport()` never returned. launchd with `StartInterval` does not
 /// start a second instance while the first one is alive - the watchdog went
@@ -41,13 +41,13 @@ final class TimeMachineTimeoutTests: XCTestCase {
   /// This distinction is the whole point of the time limit. If a hung tmutil
   /// reported itself as `destinationRegistered: false`, the watchdog would
   /// send the person off to change a destination that is set correctly - and
-  /// the real cause (a dead mount) would be left untouched.
+  /// the real cause (a hung destination) would be left untouched.
   func testNoTmutilAnswerIsASeparateFailure() {
     let now = Date(timeIntervalSince1970: 1_758_000_000)
 
     let unknown = BackupHealth.evaluate(
       lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
-      result: 0, now: now, mounted: true, attached: true, destinationRegistered: nil,
+      result: 0, now: now, machineRunning: true, servicesHealthy: true, destinationRegistered: nil,
       erroredFiles: 0, outOfSpace: false, queueReadable: true)
 
     XCTAssertFalse(unknown.healthy, "Unknown = not healthy.")
@@ -66,7 +66,8 @@ final class TimeMachineTimeoutTests: XCTestCase {
 
     let changed = BackupHealth.evaluate(
       lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
-      result: 0, now: now, mounted: true, attached: true, destinationRegistered: false,
+      result: 0, now: now, machineRunning: true, servicesHealthy: true,
+      destinationRegistered: false,
       erroredFiles: 0, outOfSpace: false, queueReadable: true)
 
     XCTAssertTrue(
@@ -80,84 +81,58 @@ final class TimeMachineTimeoutTests: XCTestCase {
 
     let fine = BackupHealth.evaluate(
       lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
-      result: 0, now: now, mounted: true, attached: true, destinationRegistered: true,
+      result: 0, now: now, machineRunning: true, servicesHealthy: true, destinationRegistered: true,
       erroredFiles: 0, outOfSpace: false, queueReadable: true)
 
     XCTAssertTrue(fine.healthy)
   }
 
-  // MARK: - Unread mount table
+  // MARK: - The machine: no answer is not "stopped"
 
   /// The reference point for this group: everything working.
   private func healthy(
-    mounted: Bool? = true, attached: Bool? = true, imageDeadErrno: Int32? = nil
+    machineRunning: Bool? = true, servicesHealthy: Bool? = true
   ) -> BackupHealth.Report {
     let now = Date(timeIntervalSince1970: 1_758_000_000)
     return BackupHealth.evaluate(
       lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
-      result: 0, now: now, mounted: mounted, attached: attached, destinationRegistered: true,
-      erroredFiles: 0, outOfSpace: false, queueReadable: true, imageDeadErrno: imageDeadErrno)
+      result: 0, now: now, machineRunning: machineRunning, servicesHealthy: servicesHealthy,
+      destinationRegistered: true, erroredFiles: 0, outOfSpace: false, queueReadable: true)
   }
 
-  /// THAT silence. `BackupImageService.Attachment` got a fourth case
-  /// `.unknown` ("the mount table could not be read"), and the caller passed
-  /// `attachment != .detached` to the watchdog - i.e. `.unknown` went in as
-  /// `true`, "attached". The watchdog, whose ONLY job is not to claim things
-  /// it does not know, stayed silent about a state it did not know. This was
-  /// the only place in this round where "I do not know" went towards silence
-  /// rather than an alarm.
-  func testUnreadImageStateIsNotSilence() {
-    let unknown = healthy(attached: nil)
-
+  func testUnknownMachineIsNotSilence() {
+    let unknown = healthy(machineRunning: nil, servicesHealthy: nil)
     XCTAssertFalse(unknown.healthy, "Unknown = not healthy. Silence is not allowed here.")
     XCTAssertTrue(
       unknown.problems.contains {
-        $0.summary == "Unknown whether the backup image is attached"
+        $0.summary == "Unknown whether the CloudMachine machine is running"
       })
   }
 
-  /// ...and it is not the same as a real detachment. The message "is not
-  /// attached" would send the person off to attach an image that may be
-  /// attached correctly - the same principle as with a changed destination.
-  func testUnreadImageStateSoundsDifferentFromDetachment() {
-    let unknown = healthy(attached: nil)
-    let detached = healthy(attached: false)
-
+  /// "Is not running" sends a person off to start a machine that may run.
+  func testUnknownMachineSoundsDifferentFromStoppedMachine() {
+    let unknown = healthy(machineRunning: nil, servicesHealthy: nil)
+    let stopped = healthy(machineRunning: false, servicesHealthy: nil)
     XCTAssertFalse(
-      unknown.problems.contains { $0.summary == "The backup image is not attached" },
-      "Not reading is NOT a detachment.")
-    XCTAssertTrue(detached.problems.contains { $0.summary == "The backup image is not attached" })
-    XCTAssertFalse(
-      detached.problems.contains { $0.summary.hasPrefix("Unknown whether the backup image") },
-      "A real detachment is a FACT, not an unknown.")
-  }
-
-  /// The same for the mount. `isMounted` is `mountedState() ?? false`, so an
-  /// unread mount table reported itself as "mount is not working" - an alarm
-  /// about a state nobody measured, sending the person off to fix something
-  /// that may be fine.
-  func testUnreadMountSoundsDifferentFromMissingMount() {
-    let unknown = healthy(mounted: nil)
-    let missing = healthy(mounted: false)
-
-    XCTAssertFalse(unknown.healthy)
+      unknown.problems.contains { $0.summary == "The CloudMachine machine is not running" })
     XCTAssertTrue(
-      unknown.problems.contains {
-        $0.summary == "Unknown whether the Google Drive mount is working"
-      })
+      stopped.problems.contains { $0.summary == "The CloudMachine machine is not running" })
     XCTAssertFalse(
-      unknown.problems.contains { $0.summary == "Google Drive mount is not working" })
-    XCTAssertTrue(missing.problems.contains { $0.summary == "Google Drive mount is not working" })
+      stopped.problems.contains { $0.summary.hasPrefix("Unknown whether") },
+      "A stopped machine is a FACT, not an unknown.")
   }
 
-  /// An attached but DEAD image must still be reported - rebuilding the
-  /// `attached` branch into three states must not lose this case, because it
-  /// has already cost 15 hours without a backup.
-  func testDeadImageIsStillReported() {
-    let dead = healthy(attached: true, imageDeadErrno: 6)
-    XCTAssertTrue(dead.problems.contains { $0.summary.contains("DEAD (errno 6)") })
-    // With an unknown state we do NOT guess that the image is alive.
-    XCTAssertFalse(healthy(attached: nil).problems.contains { $0.summary.contains("DEAD") })
+  /// Running, but nothing inside answered: its own problem, not "a service is down".
+  func testSilentMachineSoundsDifferentFromAServiceDown() {
+    let silent = healthy(servicesHealthy: nil)
+    let down = healthy(servicesHealthy: false)
+    XCTAssertTrue(
+      silent.problems.contains { $0.summary == "The CloudMachine machine does not answer" })
+    XCTAssertFalse(silent.problems.contains { $0.summary.hasPrefix("A service") })
+    XCTAssertTrue(
+      down.problems.contains {
+        $0.summary == "A service in the CloudMachine machine is not running"
+      })
   }
 
   /// `runningState()` exists so that "not in progress" and "unknown" can be

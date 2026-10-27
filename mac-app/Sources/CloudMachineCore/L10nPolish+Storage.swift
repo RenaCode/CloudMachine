@@ -30,75 +30,9 @@ extension L10nPolish {
       "Nic nie czeka w kolejce — kopia na Google Drive jest kompletna.",
     "rclone did not answer the question about the queue, so it is unknown how many backups are still waiting to be uploaded. This does not mean something broke — under load the answer can be late. It only means that right now nobody knows. If it persists, the backup cycle check will report it.":
       "rclone nie odpowiedział na pytanie o kolejkę, więc nie wiadomo, ile kopii czeka jeszcze na wysłanie. To nie znaczy, że coś się zepsuło — pod obciążeniem odpowiedź potrafi się spóźnić. Znaczy tylko tyle, że w tej chwili nikt tego nie wie. Jeśli utrzymuje się dłużej, zgłosi to kontrola cyklu backupu.",
-    // BackupImageService
-    "%@: another image operation is in progress (creating, attaching, detaching or verifying) - NOTHING was done. Try again shortly.":
-      "%@: inna operacja na obrazie jest w toku (tworzenie, podpinanie, odpinanie albo sprawdzanie) - NIE zrobiono nic. Spróbuj za chwilę.",
-    "NOT ATTACHED": "BRAK",
-    "DEAD - in the mount table, but reads fail (errno %@); attach-image attaches it again":
-      "MARTWY - w tablicy montowań, ale odczyt pada (errno %@); attach-image podpina na nowo",
-    "UNKNOWN - in the mount table, but the readability probe did not answer within %@ s":
-      "NIE WIADOMO - w tablicy montowań, ale sonda czytelności nie odpowiedziała w %@ s",
-    "UNKNOWN - could not read the mount table":
-      "NIE WIADOMO - nie udało się odczytać tablicy montowań",
-    "Image creation": "Utworzenie obrazu",
-    "Drive is not mounted - start the buffer first.":
-      "Drive nie jest zamontowany - najpierw uruchom bufor.",
-    "Could not read the mount table - it is UNKNOWN whether the buffer is mounted. NOT creating the image.":
-      "Nie udało się odczytać tablicy montowań - NIE WIADOMO, czy bufor jest zamontowany. NIE tworzę obrazu.",
-    "The buffer did not come up within %@ min - NOT creating the image.":
-      "Bufor nie stanął w %@ min - NIE tworzę obrazu.",
-    "The image already exists. Deleting it erases the whole backup - do it deliberately.":
-      "Obraz już istnieje. Usunięcie go kasuje cały backup - zrób to świadomie.",
-    "The image already exists on Google Drive (the mount cache did not show it, but the remote has it). Deleting it erases the whole backup - do it deliberately.":
-      "Obraz już istnieje na Google Drive (cache montowania go nie pokazywał, ale zdalny go ma). Usunięcie go kasuje cały backup - zrób to świadomie.",
-    "Could not confirm on Google Drive that the image is not there yet (%@) - ABORTING. Creating the image over an existing backup is irreversible, so I do not start without that answer.":
-      "Nie udało się potwierdzić na Google Drive, że obrazu tam jeszcze nie ma (%@) - PRZERYWAM. Tworzenie obrazu na istniejącym backupie jest nieodwracalne, więc bez tej odpowiedzi nie zaczynam.",
-    "Could not create the image: %@": "Nie udało się utworzyć obrazu: %@",
+    // RemoteConfigurer
     "unknown error": "nieznany błąd",
-    "Created a %@ GB image, band size %@ MB.": "Utworzono obraz %@ GB, pasmo %@ MB.",
     "rclone did not answer": "rclone nie odpowiedział",
     "rclone lsf ended with an error": "rclone lsf zakończyło się błędem",
-    "Image attach": "Podpięcie obrazu",
-    "Drive is not mounted.": "Drive nie jest zamontowany.",
-    "Could not read the mount table - it is UNKNOWN whether the buffer is mounted. NOT attaching the image.":
-      "Nie udało się odczytać tablicy montowań - NIE WIADOMO, czy bufor jest zamontowany. NIE podpinam obrazu.",
-    "No image - create it first.": "Brak obrazu - najpierw go utwórz.",
-    "Already attached: %@": "Już podpięte: %@",
-    "The image is in the mount table, but the readability probe did not answer within %@ s - it is UNKNOWN whether the device is alive. NOT force-detaching and NOT attaching.":
-      "Obraz jest w tablicy montowań, ale sonda czytelności nie odpowiedziała w %@ s - NIE WIADOMO, czy urządzenie żyje. NIE odpinam na siłę i NIE podpinam.",
-    "Could not read the mount table - it is UNKNOWN whether the image is attached. NOT attaching.":
-      "Nie udało się odczytać tablicy montowań - NIE WIADOMO, czy obraz jest podpięty. NIE podpinam.",
-    "Image dead (errno %@) and could not be detached: %@":
-      "Obraz martwy (errno %@) i nie dał się odpiąć: %@",
-    "An orphaned mount point blocks the attach: %@\nRemove it and try again:  sudo rmdir '%@'":
-      "Osierocony punkt montowania blokuje podpięcie: %@\nUsuń go i spróbuj ponownie:  sudo rmdir '%@'",
-    "Could not attach the image: %@": "Nie udało się podpiąć obrazu: %@",
-    "Attached: %@": "Podpięte: %@",
-    "Image detach": "Odpięcie obrazu",
-    "Could not detach - the image is held by browsed backup snapshots that could not be unmounted:\n%@\nClose the Time Machine / Finder window on the backup and try again.":
-      "Nie udało się odpiąć - obraz trzymają przeglądane migawki backupu, których nie dało się odmontować:\n%@\nZamknij okno Time Machine / Findera na backupie i spróbuj ponownie.",
-    "Could not detach.": "Nie udało się odpiąć.",
-    "Detached (without waiting for the upload - the data may be local only).":
-      "Odpięte (bez czekania na wysyłkę - dane mogą być tylko lokalnie).",
-    "Detached, but the upload did NOT finish in time - do not delete the buffer.":
-      "Odpięte, ale wysyłka NIE zakończyła się w czasie - nie kasuj bufora.",
-    "Detached, but rclone ABANDONED %@ backup fragments - they exist only on this Mac and are not on Google Drive. Do not delete the buffer.":
-      "Odpięte, ale rclone PORZUCIŁ %@ fragmentów kopii - istnieją wyłącznie na tym Macu i na Google Drive ich nie ma. Nie kasuj bufora.",
-    "Detached, everything uploaded to Google Drive.": "Odpięte, wszystko wysłane na Google Drive.",
-    "Image verification": "Sprawdzenie obrazu",
-    "No image.": "Brak obrazu.",
-    "The image is attached - detach it before verifying.":
-      "Obraz jest podpięty - odepnij go przed sprawdzeniem.",
-    "Could not find an APFS device in the image.": "Nie znalazłem urządzenia APFS w obrazie.",
-    "Could not run %@ - the image's consistency REMAINS UNCHECKED.":
-      "Nie udało się uruchomić %@ - spójność obrazu POZOSTAJE NIESPRAWDZONA.",
-    "Check INTERRUPTED - device %@ disappeared midway (someone force-detached the image). This is not a result about the backup's state: the image's consistency REMAINS UNCHECKED. Repeat the check.":
-      "Sprawdzenie PRZERWANE - urządzenie %@ zniknęło w trakcie (ktoś odpiął obraz na siłę). To nie jest wynik o stanie backupu: spójność obrazu POZOSTAJE NIESPRAWDZONA. Powtórz sprawdzenie.",
-    "Image consistent.": "Obraz spójny.",
-    "Image INCONSISTENT: %@": "Obraz NIESPÓJNY: %@",
-    // BufferGuardService
-    "CloudMachine: upload to Drive is stalled": "CloudMachine: wysyłka na Dysk stoi",
-    "Upload to Google Drive is stalled - daily limit exhausted.":
-      "Wysyłka na Google Drive stoi - wyczerpany limit dobowy.",
   ]
 }

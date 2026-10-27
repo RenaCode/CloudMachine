@@ -19,7 +19,7 @@ struct BuildApp: AsyncParsableCommand {
     commandName: "build-app",
     abstract:
       L10n.tr(
-        "Builds CloudMachine.app (Release) - GUI + cloudmachine-agent in Contents/MacOS/, plus launchd/config as Resources."
+        "Builds CloudMachine.app (Release) - GUI + cloudmachine-agent in Contents/MacOS/, plus launchd/, vm/ and config/ as Resources."
       )
   )
 

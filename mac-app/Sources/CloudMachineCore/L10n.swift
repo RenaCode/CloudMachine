@@ -62,6 +62,7 @@ public enum L10n {
     L10nPolish.agent,
     L10nPolish.safety,
     L10nPolish.vm,
+    L10nPolish.machine,
   ]
 }
 

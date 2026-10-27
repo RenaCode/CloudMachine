@@ -99,10 +99,16 @@ final class VMLayoutTests: XCTestCase {
       SVC tm-bands-bind inactive
       SVC smbd active
       FD 910 1024
-      {"diskCache":{"bytesUsed":1073741824,"uploadsQueued":1,"uploadsInProgress":0}}
+      BUNDLEENV 0
+      IMAGES 1
+      {"diskCache":{"bytesUsed":1073741824,"uploadsQueued":1,"uploadsInProgress":0,"erroredFiles":2,"outOfSpace":true}}
       CMFREE 2147483648
       """
     let report = VMStatus.report(scriptOutput: output)
+    XCTAssertEqual(report.bundlePrepared, false)
+    XCTAssertEqual(report.imageCount, 1)
+    XCTAssertEqual(report.reading?.buffer.erroredFiles, 2)
+    XCTAssertEqual(report.reading?.buffer.outOfSpace, true)
     XCTAssertEqual(report.services["punchfs"], "active")
     XCTAssertEqual(report.services["tm-bands-bind"], "inactive")
     XCTAssertEqual(report.punchfsOpenFiles, 910)
@@ -110,16 +116,43 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertEqual(report.reading?.freeBytes, 2_147_483_648)
   }
 
-  func testDestinationURLs() {
-    let info = """
-      ====================================================
-      Name          : CloudMachine
-      Kind          : Network
-      URL           : smb://tm@192.168.64.10/CloudMachine
-      ID            : 1234
-      """
+  /// `tm-bands-bind` may be skipped (inactive) before `vm-prepare-bundle`,
+  /// never failed; a unit nobody reported is unknown, not fine.
+  func testServicesVerdict() {
+    var services = [
+      "smb-throttle": "active", "rclone-tm": "active", "punchfs": "active",
+      "tm-bands-bind": "inactive",
+      "smbd": "active",
+    ]
+    XCTAssertEqual(VMStatus.servicesHealthy(services), true)
+    services["tm-bands-bind"] = "failed"
+    XCTAssertEqual(VMStatus.servicesHealthy(services), false)
+    services["tm-bands-bind"] = "active"
+    services["smbd"] = "inactive"
+    XCTAssertEqual(VMStatus.servicesHealthy(services), false)
+    services["smbd"] = nil
+    XCTAssertNil(VMStatus.servicesHealthy(services))
+  }
+
+  /// An unknown backlog after `prepare-shutdown` must not read as "all uploaded".
+  func testShutdownMessageNamesTheBacklog() {
+    XCTAssertTrue(VMShutdown.outcomeMessage(unsentBytes: 0).contains("everything reached"))
+    let left = VMShutdown.outcomeMessage(unsentBytes: 3 * VMGuard.gib)
+    XCTAssertTrue(left.contains("3 GiB"), left)
+    XCTAssertFalse(left.contains("everything reached"))
+    let unknown = VMShutdown.outcomeMessage(unsentBytes: nil)
+    XCTAssertFalse(unknown.contains("everything reached"))
+    XCTAssertTrue(unknown.contains("did not say"))
+  }
+
+  func testPasswordIsRedactedInStatusLines() {
     XCTAssertEqual(
-      VMStatus.destinationURLs(destinationInfo: info), ["smb://tm@192.168.64.10/CloudMachine"])
+      VMStatus.redactedPassword("smb://tm:s3cret@192.168.64.10/CloudMachine"),
+      "smb://tm:***@192.168.64.10/CloudMachine")
+    XCTAssertEqual(
+      VMStatus.redactedPassword("smb://tm@192.168.64.10/CloudMachine"),
+      "smb://tm@192.168.64.10/CloudMachine")
+    XCTAssertFalse(VMSetup.maskedDestinationCommand(address: "192.168.64.10").contains("s3cret"))
   }
 
   // MARK: - The template ships with the repo
@@ -189,30 +222,40 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(yaml.contains("systemctl enable --now smb-throttle.service"))
   }
 
-  /// `install-launchd` installs every template at the TOP of `launchd/`. The
-  /// machine's agents must not be there: a Mac on the attached-image layout
-  /// would get an agent starting a machine it does not have.
-  func testMachineAgentsAreNotInstalledByInstallLaunchd() throws {
+  /// `install-launchd` installs every template in `launchd/`: exactly the
+  /// four of the machine layout, and none of the retired disk-image agents.
+  func testInstallLaunchdShipsOnlyTheMachineLayoutsAgents() throws {
     let launchd = Self.repoRoot.appendingPathComponent("launchd")
-    let top = try FileManager.default.contentsOfDirectory(atPath: launchd.path)
-    XCTAssertFalse(top.contains { $0.contains("vm-") }, "\(top)")
-    let vm = try FileManager.default.contentsOfDirectory(
-      atPath: launchd.appendingPathComponent("vm").path
-    ).sorted()
+    let top = try FileManager.default.contentsOfDirectory(atPath: launchd.path).sorted()
     XCTAssertEqual(
-      vm,
+      top,
       [
+        "com.renacode.cloudmachine.app.plist.template",
+        "com.renacode.cloudmachine.backup-health.plist.template",
         "com.renacode.cloudmachine.vm-guard.plist.template",
         "com.renacode.cloudmachine.vm-start.plist.template",
       ])
+    for retired in AgentRepair.retired {
+      XCTAssertFalse(top.contains { $0.contains(".\(retired).") }, retired)
+    }
+  }
+
+  /// The guest's rclone remote control has no password: Lima must not forward
+  /// it to the Mac's localhost, where any web page can reach it.
+  func testTemplateForwardsNoPortsToTheMac() throws {
+    let template = try String(
+      contentsOf: Self.repoRoot.appendingPathComponent("vm/cmsmb.yaml"), encoding: .utf8)
+    XCTAssertTrue(template.contains("portForwards:"), "no portForwards section")
+    XCTAssertTrue(template.contains("ignore: true"))
   }
 
   func testTimeMachineTargetIsMatchedByWholeAddress() {
-    let urls = ["smb://tm@192.168.64.10/CloudMachine"]
-    XCTAssertTrue(VMStatus.targets(urls: urls, address: "192.168.64.10"))
-    XCTAssertFalse(VMStatus.targets(urls: urls, address: "192.168.64.1"))
-    XCTAssertFalse(VMStatus.targets(urls: urls, address: "192.168.64.11"))
-    XCTAssertFalse(VMStatus.targets(urls: [], address: "192.168.64.10"))
+    let url = "smb://tm@192.168.64.10/CloudMachine"
+    XCTAssertTrue(VMStatus.isMachineShare(url, address: "192.168.64.10"))
+    XCTAssertFalse(VMStatus.isMachineShare(url, address: "192.168.64.1"))
+    XCTAssertFalse(VMStatus.isMachineShare(url, address: "192.168.64.11"))
+    XCTAssertTrue(VMStatus.isMachineShare(url, address: nil))
+    XCTAssertFalse(VMStatus.isMachineShare("smb://nas/Backups", address: nil))
   }
 
   func testReadingCarriesTheUnsentBacklogFromVfsQueue() {

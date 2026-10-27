@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 /// Connects the interface to the services in `CloudMachineCore`. It contains no backup
-/// logic itself - what it knows about Google Drive, the image and the buffer lives in the services,
+/// logic itself - what it knows about Google Drive and the machine lives in the services,
 /// so that the CLI and the GUI do exactly the same thing.
 @MainActor
 final class CloudMachineController: ObservableObject {
@@ -20,7 +20,7 @@ final class CloudMachineController: ObservableObject {
   /// How often we refresh the answer to "when was a backup last made".
   ///
   /// Less often than the rest of the panel (10 s), and deliberately: `BackupHealth.currentReport()`
-  /// reads the Time Machine preferences file, asks rclone for the Drive capacity
+  /// reads the Time Machine preferences file, asks the machine, rclone for the Drive capacity
   /// and tmutil for the backup destination - that is seconds of work, not microseconds. The backup
   /// cycle is hourly, so an answer from five minutes ago is just as
   /// good as one from five seconds ago.
@@ -41,8 +41,7 @@ final class CloudMachineController: ObservableObject {
       var cycles = 0
       while !Task.isCancelled {
         await self?.refreshAll()
-        // An agent can stop being startable later too (gdrive-buffer only
-        // notices when its rclone exits), so check every few minutes.
+        // An agent can stop being startable later too, so check every few minutes.
         cycles += 1
         if cycles % 30 == 0 { await AgentRepair.repairBroken() }
         try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
@@ -58,7 +57,7 @@ final class CloudMachineController: ObservableObject {
   func refreshAll() async {
     await refreshCredentials()
     await refreshDependencies()
-    await refreshBuffer()
+    await refreshMachine()
     await refreshTimeMachine()
     await refreshProgress()
     await refreshBackupCycle()
@@ -66,15 +65,10 @@ final class CloudMachineController: ObservableObject {
     // run in it. See `WatchdogHeartbeat`: without this the only symptom of an
     // unloaded watchdog is silence, and silence is the normal state here.
     status.watchdog = WatchdogHeartbeat.current()
-    status.preparedForRestart = ShutdownPrep.holdsAttach()
     status.lastRefresh = Date()
   }
 
-  /// Age of the last SUCCESSFUL backup.
-  ///
-  /// The panel did not ask this question even once (see `BackupCycleStatus`),
-  /// so the failure "everything attached, and no backup for two days" looked
-  /// in it exactly the same as a working system. The source is the same one
+  /// Age of the last SUCCESSFUL backup. The source is the same one
   /// the `backup-health` watchdog uses - a single source of truth, so that
   /// the panel and the watchdog cannot claim different things about the same thing.
   private func refreshBackupCycle(force: Bool = false) async {
@@ -106,25 +100,20 @@ final class CloudMachineController: ObservableObject {
       readiness.ready ? .ready : .missing(readiness.missing, readiness.remedies)
     // No answer keeps what we knew: flipping to "not connected" would offer
     // the "Connect Google Drive" card on a working installation.
-    if let configured = await RemoteConfigurer.isConfigured(
-      remoteName: DriveBufferService.remoteName)
-    {
+    if let configured = await RemoteConfigurer.isConfigured(remoteName: DriveFolder.remoteName) {
       status.remoteConfigured = configured
     }
     // A REAL read of the file that actually matters - see
-    // `BackupHealth.preferencesReadable`. Previously this was
-    // `isReadableFile` (that is, `access(R_OK)`) on the DIRECTORY
-    // `~/Library/Application Support/com.apple.TCC`: the wrong path and a check
-    // that proves nothing under TCC.
+    // `BackupHealth.preferencesReadable`.
     status.hasFullDiskAccess = preferencesReads.readable(
       after: BackupHealth.preferencesReadable(), shown: status.hasFullDiskAccess)
-    status.driveFolderPath = "\(DriveBufferService.remoteName):\(DriveBufferService.remotePath)"
+    status.driveFolderPath = VMLayout.remote
     if !status.remoteConfigured, status.suggestedDriveFolder.isEmpty {
       let key = await MachineIdentity.currentKey()
       status.suggestedDriveFolder = DriveFolder.isValid(key) ? key : "this-mac"
     }
     status.agentsInstalled = await LaunchdInstaller.isInstalled(
-      label: "com.renacode.cloudmachine.gdrive-buffer")
+      label: "com.renacode.cloudmachine.vm-guard")
   }
 
   /// State of our own OAuth credentials. We check ONLY that the entry exists -
@@ -146,78 +135,51 @@ final class CloudMachineController: ObservableObject {
         clientID: clientID, clientSecret: clientSecret)
       await refreshCredentials()
       return RemoteConfigurer.credentialsSavedMessage(
-        remoteConfigured: await RemoteConfigurer.isConfigured(
-          remoteName: DriveBufferService.remoteName))
+        remoteConfigured: await RemoteConfigurer.isConfigured(remoteName: DriveFolder.remoteName))
     } catch {
       return L10n.tr("Not saved: %@", error.localizedDescription)
     }
   }
 
-  private func refreshBuffer() async {
-    let stats = await DriveBufferService.queueStats()
-    var buffer = BufferStatus()
-    buffer.mounted = DriveBufferService.isMounted
-    // A dead image (in the mount table, but unreadable) counts as
-    // NOT ATTACHED - from Time Machine's point of view that is exactly what it is.
-    //
-    // `await`, not a computed property: this function runs on `@MainActor`
-    // every 10 s, and the probe contains a `read()` on FUSE-T. Until 26.09.2026 this was
-    // an ordinary, blocking read - a wedged volume froze the whole interface
-    // (window movement, menus, buttons) for as long as the I/O took, that is, potentially
-    // forever. Now the probe runs on its own thread with a time limit, and the panel
-    // waits for the result without blocking the main thread.
-    buffer.imageAttached = await BackupImageService.attachment().isUsable
-    // We take the buffer size from rclone; walking the directory ourselves means 6504
-    // stat calls every 10 seconds on the disk the backup is being written to.
-    buffer.sizeGB = BufferGuardService.bufferGB(stats: stats)
-    buffer.freeDiskGB = BufferGuardService.freeGB()
-    // Two separate questions, because the answers mean different things: lack of space has to be
-    // fixed, the daily limit passes on its own.
-    buffer.driveFull = DriveBufferService.hitStorageQuota()
-    buffer.dailyQuotaExhausted = DriveBufferService.uploadStalled()
-    // Distinguishes "read" from "came out as zero" - without it, no answer from
-    // rclone looked like an empty queue.
-    buffer.queueKnown = stats != nil
-    if let stats {
-      buffer.uploadsQueued = stats.uploadsQueued
-      buffer.uploadsInProgress = stats.uploadsInProgress
-      buffer.erroredFiles = stats.erroredFiles
-      buffer.outOfSpace = stats.outOfSpace
+  /// The machine: Lima's view of it, then - only when it runs - one script in
+  /// it for the services, the upload buffer and the image, and its address.
+  private func refreshMachine() async {
+    var machine = MachineStatus()
+    let instance: String??
+    do {
+      instance = .some(try await VMLayout.instanceStatus())
+    } catch {
+      instance = .none
     }
-    status.buffer = buffer
-    status.remoteControlOpen = DriveBufferService.legacyPortOpenNow()
-    status.imageExists =
-      buffer.mounted
-      ? FileManager.default.fileExists(atPath: BackupImageService.imagePath.path) : nil
+    machine.state = MachineState.from(instanceStatus: instance)
+    if machine.isRunning, let report = await VMStatus.currentReport() {
+      machine.services = report.services
+      machine.reading = report.reading
+      machine.punchfsOpenFiles = report.punchfsOpenFiles
+      machine.punchfsFileLimit = report.punchfsFileLimit
+      machine.bundlePrepared = report.bundlePrepared
+      machine.imageCount = report.imageCount
+      machine.address = await VMLayout.currentAddress()
+    }
+    status.machine = machine
+    status.remoteControlOpen = VMStatus.remoteControlOpenOnMac()
   }
 
-  /// `destinationReading()`, and NOT `currentDestinationMountPoint()`.
-  ///
-  /// The latter returns `nil` both when there is no destination and when there is no
-  /// answer from tmutil, so the panel showed "Time Machine does not point to
-  /// CloudMachine" even when it knew NOTHING about the destination. The direction of the error
-  /// was safe (a false alarm instead of false calm), but the message
-  /// sent a person off to register a destination that is intact. The distinction has existed
-  /// in `DestinationReading` since 23.09.2026 and the `backup-health` watchdog already
-  /// uses it - the panel is the last place that conflated these two things.
-  ///
-  /// The destination may also exist and point somewhere else - then there is no backup on Drive,
-  /// even though Time Machine looks configured; that is still
-  /// `.notRegistered`.
+  /// `destinationsReading()` keeps "no answer" apart from "no destination":
+  /// the panel must not tell a person to register a destination that is intact
+  /// while it was the read that hung. A destination pointing somewhere else is
+  /// still `.notRegistered`.
   private func refreshTimeMachine() async {
-    status.timeMachineState = TimeMachineState.from(
-      await TimeMachineStatus.destinationReading(),
-      target: BackupImageService.targetPath.path)
+    let destinations = await TimeMachineStatus.destinationsReading()
+    status.timeMachineState = TimeMachineState.from(destinations, address: status.machine.address)
     // Cheap reads only: the limit from machines.json, the last stored usage
     // measurement and `tmutil destinationinfo`. Measuring the Drive folder
     // is the watchdog's job (or the Measure button).
     status.budgetLimitGB = MachineBudget.limitGB()
     status.budgetUsage = MachineBudget.storedUsage()
-    let target = BackupImageService.targetPath.path
-    status.timeMachineQuotaGB = await TimeMachineStatus.destinationQuotaGB(
-      forMountPointContaining: target)
-    status.timeMachineDestinationID = await TimeMachineStatus.destinationID(
-      forMountPointContaining: target)
+    let ours = destinations.flatMap { VMStatus.machineDestination(in: $0, address: nil) }
+    status.timeMachineQuotaGB = ours?.quotaGB
+    status.timeMachineDestinationID = ours?.id
   }
 
   /// Stores this Mac's limit, then measures the Drive folder so the card
@@ -284,12 +246,6 @@ final class CloudMachineController: ObservableObject {
 
   // MARK: - Actions
 
-  func installFuse() async {
-    await run(L10n.tr("Installing FUSE-T"), log: "Installing FUSE-T") {
-      await FuseInstaller.install()
-    }
-  }
-
   /// Opens System Settings at Full Disk Access. Granting it is a decision
   /// only the user can make; the app can only take them to the right pane.
   func openFullDiskAccessSettings() {
@@ -301,14 +257,28 @@ final class CloudMachineController: ObservableObject {
   }
 
   var setupPlan: [SetupStep] {
-    SetupPlan.steps(
+    let machineExists: Bool?
+    switch status.machine.state {
+    case .unknown, .noAnswer: machineExists = nil
+    case .notCreated: machineExists = false
+    case .notRunning, .running: machineExists = true
+    }
+    let address = status.machine.address
+    let password = VMSetup.storedPassword()
+    return SetupPlan.steps(
       SetupPlan.Inputs(
-        hasRclone: CMTooling.hasManagedRclone, hasFuse: CMTooling.hasFuse,
-        remoteConfigured: status.remoteConfigured, hasFullDiskAccess: status.hasFullDiskAccess,
-        agentsInstalled: status.agentsInstalled, mounted: status.buffer.mounted,
-        imageExists: status.imageExists, imageAttached: status.buffer.imageAttached,
+        hasRclone: CMTooling.hasManagedRclone, remoteConfigured: status.remoteConfigured,
+        hasLima: VMLayout.limactlPath != nil, machineExists: machineExists,
+        machineRunning: status.machine.isRunning, hasFullDiskAccess: status.hasFullDiskAccess,
+        agentsInstalled: status.agentsInstalled,
         timeMachineNotPointingHere: status.timeMachineState == .notRegistered,
-        connectCommand: connectDriveCommand, setDestinationCommand: setDestinationCommand))
+        bundleNeedsPreparing: status.machine.bundleNeedsPreparing,
+        connectCommand: connectDriveCommand,
+        setDestinationCommand: address.flatMap { address in
+          password.map { VMSetup.destinationCommand(password: $0, address: address) }
+        },
+        maskedSetDestinationCommand: address.map { VMSetup.maskedDestinationCommand(address: $0) })
+    )
   }
 
   func installRclone() async {
@@ -329,41 +299,36 @@ final class CloudMachineController: ObservableObject {
       agent: CMPaths.agentBinaryPath?.path ?? "cloudmachine-agent", folder: folder)
   }
 
-  func createImage(sizeGB: Int) async {
-    await run(L10n.tr("Creating the backup image"), log: "Creating the backup image") {
-      await BackupImageService.create(sizeGB: sizeGB)
+  /// `vm-setup` from the app. The `tmutil` command it returns holds the SMB
+  /// password, so it is NOT part of the message (which goes to the log and on
+  /// screen); the setup card builds it from the password file instead.
+  func setUpMachine() async {
+    await run(L10n.tr("Setting up the CloudMachine machine"), log: "Setting up the machine") {
+      let result = await VMSetup.run(replaceRcloneConfig: false)
+      return CMActionResult(
+        succeeded: result.succeeded, message: result.messages.joined(separator: "\n"))
     }
   }
 
-  func attachImage() async {
-    // An explicit attach ends a preparation for restart that is no longer wanted.
-    ShutdownPrep.clear()
-    await run(L10n.tr("Attaching the image"), log: "Attaching the image") {
-      await BackupImageService.attach()
+  func startMachine() async {
+    await run(L10n.tr("Starting the CloudMachine machine"), log: "Starting the machine") {
+      await VMLayout.start()
     }
   }
 
-  /// Pauses the backup, detaches the image and waits until everything has
-  /// reached Drive, then keeps the image detached until the restart
-  /// (`ShutdownPrep`). The menu asks for confirmation first.
+  /// `vm-prepare-bundle`: refuses by itself while Time Machine backs up to the machine.
+  func prepareBundle() async {
+    await run(L10n.tr("Converting the image to 32 MB bands"), log: "Preparing the image") {
+      let outcome = await VMBundlePrep.run(bundleOverride: nil)
+      return CMActionResult(succeeded: outcome.succeeded, message: outcome.message)
+    }
+  }
+
+  /// Stops the backup, waits a while for the upload, then stops the machine
+  /// (`VMShutdown`). The menu asks for confirmation first.
   func prepareForRestart() async {
     await run(L10n.tr("Preparing for restart"), log: "Preparing for restart") {
-      await ShutdownPrep.perform()
-    }
-  }
-
-  /// Restarts the Drive mount so it comes back on the private socket. The
-  /// view asks for confirmation first; `MountRestart` refuses by itself
-  /// while Time Machine is backing up.
-  func restartMount() async {
-    await run(L10n.tr("Restarting the Google Drive mount"), log: "Restarting the Drive mount") {
-      await MountRestart.perform()
-    }
-  }
-
-  func verifyImage() async {
-    await run(L10n.tr("Checking image consistency"), log: "Checking image consistency") {
-      await BackupImageService.verify()
+      await VMShutdown.perform()
     }
   }
 
@@ -391,12 +356,6 @@ final class CloudMachineController: ObservableObject {
         message: result?.succeeded == true
           ? L10n.tr("Backup stopped.") : L10n.tr("Could not stop the backup."))
     }
-  }
-
-  /// A command the user has to paste themselves - `tmutil setdestination`
-  /// requires root, and the app has no sudoers rule.
-  var setDestinationCommand: String {
-    "sudo tmutil setdestination '\(BackupImageService.targetPath.path)'"
   }
 
   // MARK: - Shared action handling

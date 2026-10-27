@@ -4,50 +4,54 @@ import XCTest
 @testable import CloudMachineApp
 
 /// Three answers of `tmutil destinationinfo` MUST give three different panel
-/// states.
-///
-/// Until 25.09.2026 the panel asked
-/// `TimeMachineStatus.currentDestinationMountPoint()`, which returns `nil` both
-/// when there is no destination and when tmutil does not answer - both paths
-/// ended in the same `.notRegistered`, i.e. the text "Time Machine does not
-/// point to CloudMachine". The direction of the mistake was safe (a false
-/// alarm), but the sentence is false and tells the person to do the wrong
-/// thing: register a destination that is intact. The `backup-health` watchdog
-/// has told these two cases apart since 23.09.2026 (`destinationReading()`);
-/// the panel was the last place that merged them.
+/// states: the machine's share, no share of ours, and NO ANSWER. A missing
+/// answer read as "does not point" tells the person to register a destination
+/// that is intact.
 @MainActor
 final class TimeMachineDestinationStateTests: XCTestCase {
 
-  private let target = "/Volumes/CloudMachine"
+  private let ours = TimeMachineStatus.Destination(
+    name: "CloudMachine", kind: "Network", url: "smb://tm@192.168.64.10/CloudMachine", id: "ID-1")
 
   // MARK: - Translating the tmutil answer into a panel state
 
-  func testRegisteredDestinationIsOurImage() {
+  func testRegisteredDestinationIsTheMachine() {
     XCTAssertEqual(
-      TimeMachineState.from(.mountPoint(target), target: target),
-      .registered(mountPoint: target))
+      TimeMachineState.from([ours], address: "192.168.64.10"),
+      .registered(url: "smb://tm@192.168.64.10/CloudMachine"))
   }
 
-  /// A destination exists, but points elsewhere - there is NO backup on the
-  /// Drive.
-  func testDestinationPointingElsewhereIsNotRegistered() {
+  /// The machine got a new address and Time Machine still points at the old
+  /// one: that is not a backup to this machine.
+  func testDestinationAtAnotherAddressIsNotRegistered() {
+    XCTAssertEqual(TimeMachineState.from([ours], address: "192.168.64.11"), .notRegistered)
+  }
+
+  /// `192.168.64.1` must not match `192.168.64.10`.
+  func testAddressPrefixDoesNotMatch() {
+    XCTAssertEqual(TimeMachineState.from([ours], address: "192.168.64.1"), .notRegistered)
+  }
+
+  /// Without the machine's address (it did not answer) any CloudMachine share counts.
+  func testWithoutAddressAnyMachineShareCounts() {
     XCTAssertEqual(
-      TimeMachineState.from(.mountPoint("/Volumes/SomeOtherDisk"), target: target),
-      .notRegistered)
+      TimeMachineState.from([ours], address: nil),
+      .registered(url: "smb://tm@192.168.64.10/CloudMachine"))
+  }
+
+  func testOtherDestinationIsNotRegistered() {
+    let disk = TimeMachineStatus.Destination(
+      name: "Backup", kind: "Local", mountPoint: "/Volumes/Backup", id: "ID-2")
+    XCTAssertEqual(TimeMachineState.from([disk], address: nil), .notRegistered)
   }
 
   /// tmutil answered and there is no destination - THAT is "does not point".
   func testNoDestinationIsNotRegistered() {
-    XCTAssertEqual(TimeMachineState.from(.none, target: target), .notRegistered)
+    XCTAssertEqual(TimeMachineState.from([], address: nil), .notRegistered)
   }
 
-  /// THAT defect. tmutil not answering has no right to look like a changed
-  /// destination. `tmutil destinationinfo` reaches the mount living on Google
-  /// Drive and with a sick mount does not answer at all - and then we know
-  /// nothing about the destination, which is different information from
-  /// "there is no destination".
   func testNoTmutilAnswerIsNotNotRegistered() {
-    let state = TimeMachineState.from(.noAnswer, target: target)
+    let state = TimeMachineState.from(nil, address: nil)
     XCTAssertNotEqual(
       state, .notRegistered,
       "tmutil not answering must not pretend to be a changed destination")
@@ -85,18 +89,7 @@ final class TimeMachineDestinationStateTests: XCTestCase {
   /// so that the headline talks about the destination, not about something
   /// earlier.
   private func statusApartFrom(timeMachine: TimeMachineState) -> AppStatus {
-    let status = AppStatus()
-    status.dependencyState = .ready
-    status.remoteConfigured = true
-    var buffer = BufferStatus()
-    buffer.mounted = true
-    buffer.imageAttached = true
-    buffer.queueKnown = true
-    buffer.freeDiskGB = 400
-    status.buffer = buffer
-    status.backupCycle = BackupCycleStatus(
-      known: true, lastSuccess: Date().addingTimeInterval(-1800), problems: [],
-      checkedAt: Date())
+    let status = AppStatus.healthyForTests()
     status.timeMachineState = timeMachine
     return status
   }
