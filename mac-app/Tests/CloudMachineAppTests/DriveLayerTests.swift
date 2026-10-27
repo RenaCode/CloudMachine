@@ -251,7 +251,7 @@ final class DriveLayerTests: XCTestCase {
     XCTAssertEqual(value("--dir-cache-time"), "9999h")
   }
 
-  /// The band size was chosen by measurement (see gdrive/README.md). A change
+  /// The band size was chosen by measurement (`cloudmachine-poc amplification`). A change
   /// only takes effect when the image is created, so it must not be missed.
   func testBandSizeIs32MB() {
     XCTAssertEqual(BackupImageService.bandSectors * 512, 32 * 1024 * 1024)
