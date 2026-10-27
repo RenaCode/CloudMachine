@@ -125,8 +125,7 @@ It works two ways:
 ### Upgrading and uninstalling
 
 `brew upgrade --cask renacode/tap/cloudmachine` replaces the app; the machine
-keeps running. The cask in the tap can be a version behind the latest GitHub
-Release: it is updated by a pull request after each release (see
+keeps running. Each release updates the cask in the tap by itself (see
 `packaging/README.md`). If a new version does not show up, run `brew update`
 first - Homebrew refreshes the tap only now and then. When Homebrew reopens
 the app, it reloads the background agents so they run the new version;
