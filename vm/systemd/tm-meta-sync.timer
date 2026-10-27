@@ -1,0 +1,11 @@
+# CloudMachine: tm-meta-sync every 15 minutes. A backup's metadata changes at
+# the end of each hourly run, so a restore is at most one run behind the bands.
+[Unit]
+Description=Copy of the Time Machine image's files outside bands/, every 15 min
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target

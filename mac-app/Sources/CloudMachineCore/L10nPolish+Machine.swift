@@ -52,6 +52,8 @@ extension L10nPolish {
       "Zainstaluj agentów w tle (start maszyny, strażnik bufora, czujka kopii)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
       "Instaluje rclone przez Homebrew - sam CloudMachine używa tego z install-rclone.",
+    "Info.plist, token and mapped/ of the backup image exist only on the machine's disk; without them the bands in %@ cannot be restored. The copy (tm-meta-sync, every 15 min) goes to %@. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u tm-meta-sync":
+      "Info.plist, token i mapped/ obrazu kopii są tylko na dysku maszyny; bez nich pasm w %@ nie da się odtworzyć. Kopia (tm-meta-sync, co 15 min) trafia do %@. Sprawdź: cloudmachine-agent vm-status, potem w maszynie: journalctl -u tm-meta-sync",
     "Lima says the machine is running, but a command in it did not return. Without it nothing is known about Samba, rclone or the upload. Check: cloudmachine-agent vm-status":
       "Lima mówi, że maszyna działa, ale polecenie w niej nie wróciło. Bez tego nic nie wiadomo o Sambie, rclone ani wysyłce. Sprawdź: cloudmachine-agent vm-status",
     "Machine":
@@ -132,6 +134,10 @@ extension L10nPolish {
       "Maszyna jest zatrzymana. rclone nie powiedział, ile zostało do wysłania; to, co nie wyszło, zostaje w buforze maszyny i zostanie wysłane po następnym starcie. Można zrestartować Maca.",
     "The machine's disk is a file on this disk and grows as the upload buffer fills. With no space left the machine cannot write the buffer, and Time Machine's local snapshots have nowhere to go either.":
       "Dysk maszyny to plik na tym dysku i rośnie razem z buforem wysyłki. Bez wolnego miejsca maszyna nie zapisze bufora, a lokalne migawki Time Machine też nie mają gdzie trafić.",
+    "The image's metadata has never been copied to Drive":
+      "Metadane obrazu kopii nigdy nie trafiły na Drive",
+    "The image's metadata was last copied to Drive %@ ago":
+      "Metadane obrazu kopii trafiły na Drive ostatnio %@ temu",
     "The machine's disk is running out of space (%@ GB)":
       "Na dysku maszyny kończy się miejsce (%@ GB)",
     "The new sign-in does NOT see the existing backup (%@), so remote '%@' was NOT replaced and rclone.conf is unchanged. Keep the current connection, or sign in with the credential (client_id) that created the backup.":

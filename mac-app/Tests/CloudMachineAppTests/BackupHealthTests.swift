@@ -434,6 +434,28 @@ final class BackupHealthTests: XCTestCase {
     XCTAssertFalse(report.healthy)
   }
 
+  /// A metadata copy older than an hour is a backup that cannot be restored
+  /// after losing the Mac; right after startup it waits for the timer's
+  /// first run.
+  func testStaleMetadataCopyIsReported() {
+    func health(metaSyncAge: TimeInterval?, grace: Bool = false) -> BackupHealth.Report {
+      BackupHealth.evaluate(
+        lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
+        result: 0, now: now, machineRunning: true, servicesHealthy: true,
+        destinationRegistered: true, erroredFiles: 0, outOfSpace: false, queueReadable: true,
+        metaSyncAge: metaSyncAge, withinStartupGrace: grace)
+    }
+    XCTAssertTrue(health(metaSyncAge: 900).healthy)
+    XCTAssertTrue(health(metaSyncAge: nil).healthy)
+    XCTAssertEqual(health(metaSyncAge: 7200).problems.map(\.code), ["metadata-sync-stale"])
+    XCTAssertEqual(health(metaSyncAge: .infinity).problems.map(\.code), ["metadata-sync-stale"])
+    XCTAssertTrue(
+      health(metaSyncAge: .infinity).problems[0].summary.contains("never"))
+    let afterBoot = health(metaSyncAge: 10 * 3600, grace: true)
+    XCTAssertTrue(afterBoot.healthy)
+    XCTAssertEqual(afterBoot.deferred.map(\.code), ["metadata-sync-stale"])
+  }
+
   func testUptimeCanBeRead() {
     let uptime = BackupHealth.systemUptime()
     XCTAssertNotNil(uptime)

@@ -1,0 +1,24 @@
+# CloudMachine: the image's files outside bands/ (Info.plist, token, mapped/,
+# Time Machine's plists) live only on the machine's ext4 disk, and that disk is
+# kept out of Time Machine. Without a copy on Drive the bands alone cannot be
+# opened again after the Mac or the machine is lost - see vm/README.md
+# ("Restoring"). Copied next to the bands: gdrive:CloudMachine/<folder>-tm-meta.
+[Unit]
+Description=Copy of the Time Machine image's files outside bands/ to Google Drive
+After=rclone-tm.service tm-bands-bind.service
+ConditionPathExists=/etc/rclone/rclone.conf
+ConditionPathExists=/etc/cloudmachine/vm.env
+ConditionPathExists=/etc/cloudmachine/bundle.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/cloudmachine/vm.env
+EnvironmentFile=/etc/cloudmachine/bundle.env
+# `sync` deletes on Drive what is gone locally: an image without its Info.plist
+# (a new machine, a disk recreated before a restore) must not wipe the copy.
+ExecCondition=/usr/bin/test -s "/srv/tm-local/${CM_BUNDLE}/Info.plist"
+ExecStart=/usr/local/bin/rclone sync /srv/tm-local/ ${CM_REMOTE}-meta/ \
+  --config /etc/rclone/rclone.conf --exclude "*/bands/**" --exclude "*/lock" \
+  --log-file /var/log/tm-meta-sync.log --log-level NOTICE
+# Only after a successful sync: vm-status and backup-health read its age.
+ExecStartPost=/usr/bin/touch /var/lib/cloudmachine/tm-meta-sync.ok

@@ -178,6 +178,9 @@ public enum BackupHealth {
     machineFreeGB: Int? = nil,
     punchfsNearFileLimit: Bool = false,
     remoteControlOpen: Bool = false,
+    // Seconds since the last copy of the image's metadata to Drive
+    // (`.infinity` = never); `nil` = not known or nothing to copy yet.
+    metaSyncAge: TimeInterval? = nil,
     maxAgeHours: Double = BackupHealth.maxAgeHours,
     // Whether the startup grace period is in progress - see `startupGraceMinutes`.
     withinStartupGrace: Bool = false,
@@ -357,6 +360,25 @@ public enum BackupHealth {
             "127.0.0.1:5572 answers on the Mac: Lima forwards the machine's rclone remote control, which has no password. Any web page open in a browser can send it commands - including deleting the backup on Google Drive. Add the portForwards rule from vm/cmsmb.yaml to the machine and restart it (see vm/README.md)."
           ),
           code: "rc-port-open"))
+    }
+
+    // The bands on Drive cannot be opened without the image's metadata, which
+    // otherwise exists only on the machine's disk - kept out of Time Machine.
+    // A stale copy is a backup that cannot be restored after losing the Mac,
+    // while every other light is green. Deferred after startup: the stamp
+    // keeps its age across a night with the Mac off, and the timer's first
+    // run comes 5 min after the machine boots.
+    if let metaSyncAge, metaSyncAge > VMLayout.metaSyncMaxAge {
+      notReadyYet(
+        Problem(
+          summary: metaSyncAge.isFinite
+            ? L10n.tr(
+              "The image's metadata was last copied to Drive %@ ago", formatAge(metaSyncAge))
+            : L10n.tr("The image's metadata has never been copied to Drive"),
+          detail: L10n.tr(
+            "Info.plist, token and mapped/ of the backup image exist only on the machine's disk; without them the bands in %@ cannot be restored. The copy (tm-meta-sync, every 15 min) goes to %@. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u tm-meta-sync",
+            VMLayout.remote, VMLayout.metaRemote),
+          code: "metadata-sync-stale"))
     }
 
     // Space on the Drive. Running out of it stops every upload, and the
@@ -564,6 +586,9 @@ public enum BackupHealth {
       machineFreeGB: reading.map { Int($0.freeBytes / VMGuard.gib) },
       punchfsNearFileLimit: nearFileLimit,
       remoteControlOpen: VMStatus.remoteControlOpenOnMac(),
+      metaSyncAge: report.flatMap {
+        VMStatus.metaSyncOverdue($0) != nil ? $0.metaSync?.ageSeconds : nil
+      },
       maxAgeHours: maxAgeHours,
       // The REAL clock, not `now`: tests substitute a `now` from the past, and
       // uptime computed from it would come out negative, i.e. "startup in

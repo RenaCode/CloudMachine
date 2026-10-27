@@ -50,6 +50,14 @@ extension L10nPolish {
       "Gotowe: %@ ma pasma %@ MB na Google Drive; oryginał leży w %@ w maszynie. Uruchom kopię: tmutil startbackup",
     "exit code %@, no message":
       "kod wyjścia %@, bez komunikatu",
+    "Image metadata:   NEVER copied to %@ - check tm-meta-sync in the machine":
+      "Metadane obrazu:  NIGDY nie skopiowane do %@ - sprawdź tm-meta-sync w maszynie",
+    "Image metadata:   copied %@ ago to %@":
+      "Metadane obrazu:  skopiowane %@ temu do %@",
+    "Image metadata:   last copied %@ ago - OVERDUE (%@)":
+      "Metadane obrazu:  ostatnia kopia %@ temu - ZALEGŁA (%@)",
+    "Image metadata:   not copied yet - waits for vm-prepare-bundle":
+      "Metadane obrazu:  jeszcze bez kopii - czeka na vm-prepare-bundle",
     "Free in machine:  %@ GiB":
       "Wolne w maszynie: %@ GiB",
     "fsck_apfs -n found problems: %@":

@@ -131,7 +131,7 @@ public enum VMSetup {
     messages.append(L10n.tr("SMB password stored in %@ (mode 600).", VMLayout.passwordFile.path))
 
     // 5. Services.
-    let units = VMLayout.services.map { "\($0).service" }.joined(separator: " ")
+    let units = VMLayout.services.map(VMLayout.unitName).joined(separator: " ")
     guard
       let started = try? await VMLayout.rootShell(
         "systemctl daemon-reload && systemctl start \(units)", timeout: 300),

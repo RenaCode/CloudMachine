@@ -16,8 +16,32 @@ public enum VMStatus {
     public var bundlePrepared: Bool?
     /// How many images Time Machine has created in the machine; `nil` = not read.
     public var imageCount: Int?
+    /// The last successful `tm-meta-sync`; `nil` = not read.
+    public var metaSync: MetaSync?
 
     public init() {}
+  }
+
+  public enum MetaSync: Equatable, Sendable {
+    case never
+    /// Seconds since the last successful sync, by the machine's own clock.
+    case age(TimeInterval)
+
+    /// `.infinity` for `never`, so one threshold covers both.
+    public var ageSeconds: TimeInterval {
+      switch self {
+      case .never: return .infinity
+      case .age(let seconds): return seconds
+      }
+    }
+  }
+
+  /// Whether the metadata copy is overdue. Only for an image that went
+  /// through `vm-prepare-bundle`: before it, the sync is skipped by design.
+  /// `nil` = not known (not read, or no prepared image).
+  public static func metaSyncOverdue(_ report: Report) -> Bool? {
+    guard report.bundlePrepared == true, let sync = report.metaSync else { return nil }
+    return sync.ageSeconds > VMLayout.metaSyncMaxAge
   }
 
   static let script =
@@ -27,6 +51,7 @@ public enum VMStatus {
     + "$(awk '/Max open files/{print $4}' /proc/$pid/limits); fi; "
     + "echo BUNDLEENV $([ -s \(VMLayout.Guest.bundleEnv) ] && echo 1 || echo 0); "
     + "echo IMAGES $(ls -d \(VMLayout.Guest.localRoot)/*.sparsebundle 2>/dev/null | wc -l); "
+    + "echo METASYNC $(stat -c %Y \(VMLayout.Guest.metaSyncStamp) 2>/dev/null || echo 0) $(date +%s); "
     + VMLayout.readingScript
 
   static func report(scriptOutput: String) -> Report {
@@ -42,6 +67,10 @@ public enum VMStatus {
         report.bundlePrepared = fields[1] == "1"
       } else if fields.first == "IMAGES", fields.count >= 2 {
         report.imageCount = Int(fields[1])
+      } else if fields.first == "METASYNC", fields.count >= 3, let last = Int(fields[1]),
+        let now = Int(fields[2])
+      {
+        report.metaSync = last == 0 ? .never : .age(TimeInterval(max(0, now - last)))
       }
     }
     report.reading = VMLayout.reading(scriptOutput: scriptOutput)
@@ -160,10 +189,12 @@ public enum VMStatus {
     for service in VMLayout.services {
       let state = report.services[service] ?? L10n.tr("unknown")
       out.append(
-        L10n.tr("Service %@: %@", service.padding(toLength: 14, withPad: " ", startingAt: 0), state)
+        L10n.tr("Service %@: %@", service.padding(toLength: 18, withPad: " ", startingAt: 0), state)
       )
     }
     if servicesHealthy(report.services) != true { healthy = false }
+    if let line = metaSyncLine(report) { out.append(line) }
+    if metaSyncOverdue(report) == true { healthy = false }
     if let reading = report.reading {
       out.append(
         L10n.tr(
@@ -213,6 +244,25 @@ public enum VMStatus {
       healthy = false
     }
     return (out, healthy)
+  }
+
+  /// The metadata copy, for `vm-status`; `nil` when there is nothing to say.
+  static func metaSyncLine(_ report: Report) -> String? {
+    switch (report.bundlePrepared, report.metaSync) {
+    case (.some(false), _):
+      return L10n.tr("Image metadata:   not copied yet - waits for vm-prepare-bundle")
+    case (.some(true), .some(.never)):
+      return L10n.tr(
+        "Image metadata:   NEVER copied to %@ - check tm-meta-sync in the machine",
+        VMLayout.metaRemote)
+    case (.some(true), .some(.age(let seconds))):
+      let ago = BackupHealth.formatAge(seconds)
+      return seconds > VMLayout.metaSyncMaxAge
+        ? L10n.tr("Image metadata:   last copied %@ ago - OVERDUE (%@)", ago, VMLayout.metaRemote)
+        : L10n.tr("Image metadata:   copied %@ ago to %@", ago, VMLayout.metaRemote)
+    default:
+      return nil
+    }
   }
 
   /// `smb://tm:secret@host/...` -> `smb://tm:***@host/...`. tmutil prints
