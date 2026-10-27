@@ -116,8 +116,24 @@ public enum MachineBudget {
   public struct Usage: Codable, Equatable {
     public var bytes: UInt64
     public var measuredAt: Date
+    /// The Drive folder measured. `nil` in readings stored before 1.3.16.
+    public var path: String?
+
+    public init(bytes: UInt64, measuredAt: Date, path: String? = nil) {
+      self.bytes = bytes
+      self.measuredAt = measuredAt
+      self.path = path
+    }
 
     public var gb: Double { Double(bytes) / 1_073_741_824 }
+  }
+
+  /// A stored reading counts only for the folder backed up now. On 27.10.2026
+  /// the reading taken at 14:31 (101 MB, before the move to `<folder>-tm`)
+  /// was still shown at 18:00, when the folder held 215 GiB: it was younger
+  /// than `measurementMaxAge`, so nothing measured again.
+  static func usage(_ stored: Usage?, appliesTo path: String) -> Usage? {
+    stored?.path == path ? stored : nil
   }
 
   static var usageFile: URL { CMPaths.appSupportDir.appendingPathComponent("drive-usage.json") }
@@ -126,7 +142,7 @@ public enum MachineBudget {
     guard let data = try? Data(contentsOf: usageFile) else { return nil }
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
-    return try? decoder.decode(Usage.self, from: data)
+    return usage(try? decoder.decode(Usage.self, from: data), appliesTo: VMLayout.remote)
   }
 
   /// `rclone size --json` output -> bytes.
@@ -149,7 +165,7 @@ public enum MachineBudget {
       CMLogger.log("Could not measure the size of \(path) on Google Drive")
       return nil
     }
-    let usage = Usage(bytes: bytes, measuredAt: now)
+    let usage = Usage(bytes: bytes, measuredAt: now, path: path)
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
     if let data = try? encoder.encode(usage) {

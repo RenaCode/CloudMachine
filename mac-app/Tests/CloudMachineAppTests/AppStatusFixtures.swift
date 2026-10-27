@@ -13,6 +13,7 @@ extension MachineStatus {
       "smb-throttle": "active", "rclone-tm": "active", "punchfs": "active",
       "tm-bands-bind": "active",
       "smbd": "active",
+      "tm-meta-sync.timer": "active",
     ]
     machine.reading = VMLayout.Reading(
       buffer: VMLayout.BufferStats(

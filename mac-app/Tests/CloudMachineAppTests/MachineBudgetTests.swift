@@ -173,4 +173,17 @@ final class MachineBudgetTests: XCTestCase {
     XCTAssertEqual(MachineBudget.standing(limitGB: 1000, usage: usage(1100), now: now), .over)
     XCTAssertEqual(MachineBudget.standing(limitGB: nil, usage: usage(1100), now: now), .notSet)
   }
+
+  /// A reading of another folder (or one stored before readings named their
+  /// folder) is no reading: it is measured again instead of shown.
+  func testStoredUsageCountsOnlyForTheCurrentFolder() {
+    let at = Date(timeIntervalSince1970: 1_800_000_000)
+    let here = MachineBudget.Usage(bytes: 1, measuredAt: at, path: "gdrive:CloudMachine/a-tm")
+    XCTAssertEqual(MachineBudget.usage(here, appliesTo: "gdrive:CloudMachine/a-tm"), here)
+    XCTAssertNil(MachineBudget.usage(here, appliesTo: "gdrive:CloudMachine/b-tm"))
+    XCTAssertNil(
+      MachineBudget.usage(
+        MachineBudget.Usage(bytes: 1, measuredAt: at), appliesTo: "gdrive:CloudMachine/a-tm"))
+    XCTAssertNil(MachineBudget.usage(nil, appliesTo: "gdrive:CloudMachine/a-tm"))
+  }
 }

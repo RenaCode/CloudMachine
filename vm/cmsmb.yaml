@@ -71,6 +71,12 @@ provision:
   path: /etc/systemd/system/smb-throttle.service
   file: systemd/smb-throttle.service
 - mode: data
+  path: /etc/systemd/system/tm-meta-sync.service
+  file: systemd/tm-meta-sync.service
+- mode: data
+  path: /etc/systemd/system/tm-meta-sync.timer
+  file: systemd/tm-meta-sync.timer
+- mode: data
   path: /opt/cloudmachine/punchfs/test-punchfs.sh
   file: punchfs/test-punchfs.sh
   permissions: 755
@@ -128,9 +134,11 @@ provision:
     #    which `vm-setup` copies in, and the bands bind waits for
     #    /etc/cloudmachine/bundle.env, which `vm-prepare-bundle` writes.
     systemctl daemon-reload
-    systemctl enable rclone-tm.service punchfs.service tm-bands-bind.service smbd.service
+    systemctl enable rclone-tm.service punchfs.service tm-bands-bind.service smbd.service \
+      tm-meta-sync.timer
     # The SMB shaper needs nothing from the Mac; start it every boot.
     systemctl enable --now smb-throttle.service
     if [ -s /etc/rclone/rclone.conf ] && [ -s /etc/cloudmachine/vm.env ]; then
-      systemctl start rclone-tm.service punchfs.service tm-bands-bind.service smbd.service
+      systemctl start rclone-tm.service punchfs.service tm-bands-bind.service smbd.service \
+        tm-meta-sync.timer
     fi

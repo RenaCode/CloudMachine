@@ -36,10 +36,22 @@ public enum VMLayout {
     public static let cacheDir = "/var/cache/rclone"
     public static let backupDir = "/var/lib/cloudmachine/prepare-backup"
     public static let rcAddress = "127.0.0.1:5572"
+    /// Touched by `tm-meta-sync.service` after every successful sync.
+    public static let metaSyncStamp = "/var/lib/cloudmachine/tm-meta-sync.ok"
+    public static let rcloneLog = "/var/log/rclone-tm.log"
   }
 
-  /// The systemd units the share depends on, in start order.
-  public static let services = ["smb-throttle", "rclone-tm", "punchfs", "tm-bands-bind", "smbd"]
+  /// The systemd units the share depends on, in start order, then the timer
+  /// that copies the image's metadata to Drive. A name without a suffix is a
+  /// `.service` - see `unitName(_:)`.
+  public static let services = [
+    "smb-throttle", "rclone-tm", "punchfs", "tm-bands-bind", "smbd", "tm-meta-sync.timer",
+  ]
+
+  /// The systemd unit for an entry of `services`.
+  public static func unitName(_ service: String) -> String {
+    service.contains(".") ? service : "\(service).service"
+  }
 
   /// Host-side state: `~/.cloudmachine/vm`.
   public static var hostDir: URL {
@@ -58,6 +70,16 @@ public enum VMLayout {
     override("CLOUDMACHINE_VM_REMOTE")
       ?? "\(DriveFolder.remoteName):\(DriveFolder.remoteRoot)/\(DriveFolder.name)-tm"
   }
+
+  /// `gdrive:CloudMachine/<folder>-tm-meta`: the image's files outside
+  /// `bands/` (Info.plist, token, mapped/, Time Machine's plists), copied by
+  /// `tm-meta-sync` from the machine's disk. The bands alone cannot be opened
+  /// again; a restore takes both folders (vm/README.md, "Restoring").
+  public static var metaRemote: String { remote + "-meta" }
+
+  /// Older than this, the metadata copy is reported. The timer runs every
+  /// 15 min, so an hour is three runs missed in a row.
+  public static let metaSyncMaxAge: TimeInterval = 3600
 
   /// Lima's directory with the machine's disk (`LIMA_HOME`, else `~/.lima`).
   /// The disk holds rclone's buffer: left in the backup, Time Machine copies

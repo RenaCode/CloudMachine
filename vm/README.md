@@ -10,6 +10,7 @@ Time Machine --SMB--> Samba  /srv/tm-local/<Computer>.sparsebundle   (ext4: imag
                                bands/ = bind of /srv/tm-punch/bands
                       punchfs /srv/tm-punch                          (hole punch, xattrs)
                       rclone  /srv/tm  = gdrive:CloudMachine/<folder>-tm
+tm-meta-sync (every 15 min): /srv/tm-local minus bands/ -> gdrive:CloudMachine/<folder>-tm-meta
 ```
 
 Each layer is there for a reason:
@@ -20,6 +21,10 @@ Each layer is there for a reason:
 - macOS frees bands with a hole punch and keeps Samba's sparse flag and Apple
   streams in extended attributes; rclone supports neither. `punchfs` fills
   both gaps (see `punchfs/README.md`).
+- The image's small files (Info.plist, token, `mapped/`, Time Machine's
+  plists) are on the machine's disk, and that disk is kept out of Time
+  Machine. `tm-meta-sync` copies them to `<folder>-tm-meta` every 15 minutes;
+  without them the bands cannot be opened again (see "Restoring").
 - Time Machine creates bands of 875 MB. `vm-prepare-bundle` converts the new,
   empty image to 32 MB bands, so a day of changes fits Google's upload limit.
 
@@ -47,6 +52,45 @@ Each layer is there for a reason:
 `app`, `backup-health`, `vm-start` (boots the machine at login) and `vm-guard`
 (pauses Time Machine when more than 110 GiB waits to be uploaded or the
 machine has less than 40 GiB free, resumes below 40 GiB - only what it paused).
+
+## Restoring
+
+The backup on Drive is two folders: the bands in `gdrive:CloudMachine/<folder>-tm`
+and everything else of the image in `gdrive:CloudMachine/<folder>-tm-meta`
+(`vm-status`: "Image metadata"; the backup watchdog reports a copy older than
+an hour). To open it on a new Mac or after the machine's disk is lost:
+
+1. Install CloudMachine and rclone's configuration for the same Google
+   account, and give the Mac the same Drive folder name.
+2. `cloudmachine-agent vm-setup` - but do NOT point Time Machine at the
+   machine and do NOT run `vm-prepare-bundle`: either would start a new image.
+3. Put the image's files back and the bands under them (`<name>` is the
+   folder in `-tm-meta`, e.g. `Mac Studio.sparsebundle`):
+
+   ```sh
+   limactl shell --workdir / cmsmb sudo bash -c '
+     set -e
+     systemctl stop smbd
+     . /etc/cloudmachine/vm.env
+     rclone --config /etc/rclone/rclone.conf copy "$CM_REMOTE-meta/" /srv/tm-local/
+     cd /srv/tm-local && ls -d *.sparsebundle'      # -> <name>
+   limactl shell --workdir / cmsmb sudo bash -c '
+     set -e
+     b="/srv/tm-local/<name>"
+     mkdir -p "$b/bands" && chown -R tm:tm /srv/tm-local
+     printf "CM_BUNDLE=\"%s\"\n" "<name>" > /etc/cloudmachine/bundle.env
+     systemctl start tm-bands-bind smbd && findmnt "$b/bands"'
+   ```
+
+4. On the Mac, connect to the share (`smb://tm@<address>/CloudMachine`,
+   password in `~/.cloudmachine/vm/tm-smb.pass`). Migration Assistant ("From a
+   Mac, Time Machine backup") or Time Machine's "Browse backups" sees it; for a
+   read-only look, `hdiutil attach -readonly` the image.
+
+The metadata is copied every 15 minutes while bands are uploaded continuously,
+so restore from a state after a backup finished and its upload drained
+(`vm-status`: "Still to upload: 0"). Samba's `user.DOSATTRIB` attributes are
+not copied; Samba recreates them.
 
 ## No ports to the Mac
 

@@ -122,9 +122,12 @@ final class VMLayoutTests: XCTestCase {
     var services = [
       "smb-throttle": "active", "rclone-tm": "active", "punchfs": "active",
       "tm-bands-bind": "inactive",
-      "smbd": "active",
+      "smbd": "active", "tm-meta-sync.timer": "active",
     ]
     XCTAssertEqual(VMStatus.servicesHealthy(services), true)
+    services["tm-meta-sync.timer"] = "inactive"
+    XCTAssertEqual(VMStatus.servicesHealthy(services), false)
+    services["tm-meta-sync.timer"] = "active"
     services["tm-bands-bind"] = "failed"
     XCTAssertEqual(VMStatus.servicesHealthy(services), false)
     services["tm-bands-bind"] = "active"
@@ -220,6 +223,65 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertFalse(script.contains("police rate"), "policing drops packets and collapses TCP")
     XCTAssertTrue(yaml.contains("file: systemd/smb-throttle.service"))
     XCTAssertTrue(yaml.contains("systemctl enable --now smb-throttle.service"))
+  }
+
+  /// The units `vm-setup` starts: a timer keeps its suffix, the rest are services.
+  func testUnitNames() {
+    XCTAssertEqual(VMLayout.unitName("smbd"), "smbd.service")
+    XCTAssertEqual(VMLayout.unitName("tm-meta-sync.timer"), "tm-meta-sync.timer")
+    XCTAssertTrue(VMLayout.services.contains("tm-meta-sync.timer"))
+  }
+
+  func testMetadataSyncIsReadFromTheMachinesClock() {
+    func report(_ lines: String) -> VMStatus.Report { VMStatus.report(scriptOutput: lines) }
+    let synced = report("BUNDLEENV 1\nMETASYNC 1000 1600")
+    XCTAssertEqual(synced.metaSync, .age(600))
+    XCTAssertEqual(VMStatus.metaSyncOverdue(synced), false)
+
+    let stale = report("BUNDLEENV 1\nMETASYNC 1000 \(1000 + 3601)")
+    XCTAssertEqual(VMStatus.metaSyncOverdue(stale), true)
+
+    let never = report("BUNDLEENV 1\nMETASYNC 0 1600")
+    XCTAssertEqual(never.metaSync, .never)
+    XCTAssertEqual(VMStatus.metaSyncOverdue(never), true)
+
+    // Before vm-prepare-bundle the unit is skipped by design.
+    XCTAssertNil(VMStatus.metaSyncOverdue(report("BUNDLEENV 0\nMETASYNC 0 1600")))
+    // Not read is not known - never "fine".
+    XCTAssertNil(VMStatus.metaSyncOverdue(report("BUNDLEENV 1")))
+    XCTAssertEqual(VMLayout.metaRemote, VMLayout.remote + "-meta")
+  }
+
+  /// A refusal newer than the last upload means the limit still holds; `0`
+  /// from the machine means it does not; no line means not read.
+  func testUploadLimitIsReadFromTheEndOfTheLog() {
+    XCTAssertEqual(VMStatus.report(scriptOutput: "UPLOADLIMIT 1000 1600").uploadLimitAge, 600)
+    XCTAssertEqual(VMStatus.report(scriptOutput: "UPLOADLIMIT 0 1600").uploadLimitAge, 0)
+    XCTAssertNil(VMStatus.report(scriptOutput: "BUNDLEENV 1").uploadLimitAge)
+    XCTAssertTrue(VMStatus.script.contains("Received upload limit error"))
+  }
+
+  /// 27.10.2026: the image's Info.plist, token and mapped/ were only on the
+  /// machine's disk, so the bands on Drive could not be restored. The template
+  /// must install the copy, and the copy must neither carry the bands nor
+  /// wipe Drive from an image without its Info.plist.
+  func testTemplateCopiesTheImageMetadataToDrive() throws {
+    let vm = Self.repoRoot.appendingPathComponent("vm")
+    let unit = try String(
+      contentsOf: vm.appendingPathComponent("systemd/tm-meta-sync.service"), encoding: .utf8)
+    let timer = try String(
+      contentsOf: vm.appendingPathComponent("systemd/tm-meta-sync.timer"), encoding: .utf8)
+    let yaml = try String(contentsOf: vm.appendingPathComponent("cmsmb.yaml"), encoding: .utf8)
+    XCTAssertTrue(unit.contains("${CM_REMOTE}-meta/"))
+    XCTAssertTrue(unit.contains(#"--exclude "*/bands/**""#))
+    XCTAssertTrue(unit.contains(#"--exclude "*/lock""#))
+    XCTAssertTrue(
+      unit.contains(#"ExecCondition=/usr/bin/test -s "/srv/tm-local/${CM_BUNDLE}/Info.plist""#))
+    XCTAssertTrue(unit.contains("ExecStartPost=/usr/bin/touch \(VMLayout.Guest.metaSyncStamp)"))
+    XCTAssertTrue(timer.contains("OnUnitActiveSec=15min"))
+    XCTAssertTrue(yaml.contains("file: systemd/tm-meta-sync.service"))
+    XCTAssertTrue(yaml.contains("file: systemd/tm-meta-sync.timer"))
+    XCTAssertTrue(yaml.contains("tm-meta-sync.timer\n"))
   }
 
   /// `install-launchd` installs every template in `launchd/`: exactly the
