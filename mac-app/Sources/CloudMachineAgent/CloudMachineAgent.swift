@@ -32,6 +32,11 @@ struct CloudMachineAgent: AsyncParsableCommand {
       PrepareShutdown.self,
       RestartMount.self,
       DriveStatus.self,
+      // The machine layout (Time Machine over SMB) - see vm/README.md.
+      VMSetupCommand.self,
+      VMPrepareBundle.self,
+      VMGuardCommand.self,
+      VMStatusCommand.self,
     ]
   )
 }

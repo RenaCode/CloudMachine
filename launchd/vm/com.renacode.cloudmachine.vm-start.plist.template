@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.renacode.cloudmachine.vm-start</string>
+  <!--
+    Starts the machine at login. `limactl start` on a running machine only
+    says so and exits, which is why RunAtLoad without KeepAlive is enough.
+    limactl comes from Homebrew, found through PATH below.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>limactl</string>
+    <string>start</string>
+    <string>--tty=false</string>
+    <string>cmsmb</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__CM_LOG_DIR__/launchd-vm-start.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__CM_LOG_DIR__/launchd-vm-start.err.log</string>
+</dict>
+</plist>

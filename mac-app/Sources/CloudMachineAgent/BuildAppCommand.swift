@@ -130,6 +130,11 @@ struct BuildApp: AsyncParsableCommand {
     try fm.copyItem(
       at: projectRoot.appendingPathComponent("launchd"),
       to: resourcesDir.appendingPathComponent("launchd"))
+    // The machine template (`vm-setup`): cmsmb.yaml reads its files relative
+    // to itself, so the directory goes in whole.
+    try fm.copyItem(
+      at: projectRoot.appendingPathComponent("vm"),
+      to: resourcesDir.appendingPathComponent("vm"))
     let configDir = resourcesDir.appendingPathComponent("config")
     try fm.createDirectory(at: configDir, withIntermediateDirectories: true)
     try fm.copyItem(

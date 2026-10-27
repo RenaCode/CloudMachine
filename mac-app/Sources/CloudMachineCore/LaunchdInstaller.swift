@@ -156,6 +156,44 @@ public enum LaunchdInstaller {
         templates: templates, into: launchAgentsDir, agentBin: agentBin, logDir: CMPaths.logDir))
   }
 
+  /// The machine's agents (`launchd/vm/`): `vm-start` and `vm-guard`.
+  ///
+  /// A subdirectory on purpose: `install()` installs every template at the
+  /// top of `launchd/`, and a Mac on the attached-image layout must not get
+  /// an agent that starts a machine it does not have. These go in only when
+  /// asked for (`vm-setup --install-agents`). No image detach here: reloading
+  /// them does not touch the Drive mount.
+  public static func installVMAgents() async -> CMActionResult {
+    guard let templatesDir = CMPaths.launchdTemplatesDir?.appendingPathComponent("vm") else {
+      return CMActionResult(
+        succeeded: false, message: L10n.tr("Could not find the launchd/ directory with templates."))
+    }
+    guard let resolvedAgentBin = CMPaths.agentBinaryPath else {
+      return CMActionResult(
+        succeeded: false,
+        message: L10n.tr("Could not find the compiled cloudmachine-agent binary."))
+    }
+    let agentBin: URL
+    do {
+      agentBin = try stableAgentBinaryPath(resolvedFrom: resolvedAgentBin)
+    } catch {
+      return CMActionResult(
+        succeeded: false, message: L10n.tr("ABORTED: %@", error.localizedDescription))
+    }
+    guard
+      let templates = try? FileManager.default.contentsOfDirectory(
+        at: templatesDir, includingPropertiesForKeys: nil)
+    else {
+      return CMActionResult(
+        succeeded: false,
+        message: L10n.tr("Could not list the templates in %@.", templatesDir.path))
+    }
+    try? FileManager.default.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
+    return installVerdict(
+      await installAgents(
+        templates: templates, into: launchAgentsDir, agentBin: agentBin, logDir: CMPaths.logDir))
+  }
+
   /// What went in and what did NOT - with a reason, one per agent.
   ///
   /// Until 25.09.2026 we collected only `installedLabels`, and failures left no

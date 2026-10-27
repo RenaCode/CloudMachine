@@ -48,6 +48,25 @@ so they read the same whoever sends them to you.
   with an Apple Developer ID. The Homebrew cask clears the quarantine flag; a
   DMG downloaded by hand gets Gatekeeper's "unidentified developer" warning.
 
+### macOS 27: Time Machine over SMB to a local machine (preview)
+
+macOS 27 no longer accepts a disk image as a new Time Machine destination
+(`tmutil setdestination` answers error 45), so the layout above cannot be set
+up from scratch there. The replacement, being rolled out next to it: a small
+Linux machine on this Mac serves Time Machine an SMB share, and the backup's
+bands go from it to Google Drive (details in [`vm/README.md`](vm/README.md)).
+
+- Requires [Lima](https://lima-vm.io) from Homebrew (`brew install lima`) and
+  a connected Google Drive (`configure-remote`).
+- `cloudmachine-agent vm-setup` creates and starts the machine and prints
+  a `sudo tmutil setdestination smb://...` command - the one step that needs
+  an administrator, once.
+- When Time Machine has created its empty image, stop the backup and run
+  `cloudmachine-agent vm-prepare-bundle` (32 MB bands, moved to Drive).
+- `cloudmachine-agent vm-status` shows the machine; `vm-setup --install-agents`
+  adds the agents that start it at login and pause Time Machine while the
+  upload buffer is full.
+
 ---
 
 ## Getting started
@@ -176,4 +195,6 @@ repository (`renacode-infra: docs/projekty/cloudmachine/`):
 
 ## Licence
 
-MIT. FUSE-T and rclone keep their own licences.
+MIT. FUSE-T and rclone keep their own licences. One file is GPLv2:
+`vm/punchfs/punchfs.c`, based on libfuse's passthrough example (see
+`vm/punchfs/README.md`).
