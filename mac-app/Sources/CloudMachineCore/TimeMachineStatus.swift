@@ -23,9 +23,9 @@ public enum TimeMachineStatus {
   ///
   /// Until 23.09.2026 there was no limit here at all, and that was a failure
   /// waiting for its day. `tmutil destinationinfo` reaches the backup
-  /// destination, i.e. the FUSE-T mount living on Google Drive. With a dead
-  /// mount (the ENXIO incident of 22.09) the read enters uninterruptible I/O
-  /// and NEVER returns. The `backup-health` watchdog then hangs on
+  /// destination - then a FUSE-T mount on Google Drive, now an SMB share in
+  /// the machine. With a dead destination (the ENXIO incident of 22.09) the
+  /// read enters uninterruptible I/O and NEVER returns. The `backup-health` watchdog then hangs on
   /// `currentReport()`, and launchd with `StartInterval` does not start a
   /// second instance while the first one is alive - i.e. the watchdog goes
   /// silent PERMANENTLY, exactly at the moment it is supposed to speak.
@@ -96,12 +96,40 @@ public enum TimeMachineStatus {
     return result.stdout
   }
 
+  /// `sudo -n tmutil <command>` (the NOPASSWD rule, for agents without a GUI
+  /// session), then plain `tmutil` when there is no such rule. `startbackup`
+  /// and `stopbackup` need no root, so the second attempt usually works.
+  /// `true` only when one of them succeeded; failures are logged.
+  public static func control(_ command: String) async -> Bool {
+    if let viaSudo = try? await ProcessRunner.runTmutilUnattended([command], timeout: 120) {
+      if viaSudo.succeeded { return true }
+      if !viaSudo.isSudoAuthFailure {
+        CMLogger.log(
+          "sudo tmutil \(command): exit code \(viaSudo.exitCode) \(shortError(viaSudo))")
+        return false
+      }
+    }
+    guard let direct = try? await ProcessRunner.run("/usr/bin/tmutil", [command], timeout: 120)
+    else {
+      CMLogger.log("tmutil \(command): NO ANSWER within the time limit.")
+      return false
+    }
+    if !direct.succeeded {
+      CMLogger.log("tmutil \(command): exit code \(direct.exitCode) \(shortError(direct))")
+    }
+    return direct.succeeded
+  }
+
+  private static func shortError(_ result: ProcessResult) -> String {
+    let text = (result.stderr + " " + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
+    return text.isEmpty ? "(no message)" : text.replacingOccurrences(of: "\n", with: " ")
+  }
+
   /// Whether a backup is in progress. `nil` = tmutil did not answer, i.e.
   /// UNKNOWN.
   ///
-  /// The distinction matters here for the buffer guard: "not in progress"
-  /// tells it to go into standby and forget it was supervising a backup, while
-  /// "unknown" must leave the state unchanged.
+  /// The distinction matters for the machine's guard: it pauses only a backup
+  /// that is RUNNING, and "unknown" is not that.
   public static func runningState() async -> Bool? {
     guard let out = await output(["status"]) else { return nil }
     return isRunning(statusOutput: out)
@@ -172,149 +200,73 @@ public enum TimeMachineStatus {
     return running ? progress : nil
   }
 
-  /// Counterpart of `tmutil destinationinfo | awk ... -v mp="$SP_MOUNT"` -
-  /// looks for the block whose "Mount Point" contains `mountPoint`, and returns
-  /// its ID.
-  public static func destinationID(forMountPointContaining mountPoint: String) async -> String? {
-    guard let out = await output(["destinationinfo"]) else { return nil }
-    return destinationID(forMountPointContaining: mountPoint, destinationInfoOutput: out)
+  /// One block of `tmutil destinationinfo`. Fields macOS left out are `nil`:
+  /// a network destination has a `Mount Point` only while it is mounted.
+  public struct Destination: Equatable, Sendable {
+    public var name: String?
+    public var kind: String?
+    public var url: String?
+    public var mountPoint: String?
+    public var id: String?
+    /// `Quota : 300 GB` -> 300; `nil` = no quota set.
+    public var quotaGB: Double?
+
+    public init(
+      name: String? = nil, kind: String? = nil, url: String? = nil, mountPoint: String? = nil,
+      id: String? = nil, quotaGB: Double? = nil
+    ) {
+      self.name = name
+      self.kind = kind
+      self.url = url
+      self.mountPoint = mountPoint
+      self.id = id
+      self.quotaGB = quotaGB
+    }
   }
 
-  static func destinationID(
-    forMountPointContaining mountPoint: String, destinationInfoOutput: String
-  )
-    -> String?
-  {
-    var found = false
+  /// The destinations, in order. Blocks are separated by `====` lines; a
+  /// `Name` line also starts a new block, so output without separators parses
+  /// the same way. Pure, so it is tested on recorded output.
+  static func destinations(destinationInfoOutput: String) -> [Destination] {
+    var result: [Destination] = []
+    var current: Destination?
+    func flush() {
+      if let current, current != Destination() { result.append(current) }
+      current = nil
+    }
     for rawLine in destinationInfoOutput.split(separator: "\n") {
-      let line = String(rawLine)
-      if line.hasPrefix("Mount Point") {
-        found = line.contains(mountPoint)
+      let line = rawLine.trimmingCharacters(in: .whitespaces)
+      if line.hasPrefix("====") {
+        flush()
         continue
       }
-      if found, line.hasPrefix("ID") {
-        let parts = line.split(separator: ":", maxSplits: 1)
-        guard parts.count == 2 else { continue }
-        return parts[1].trimmingCharacters(in: .whitespaces)
-      }
-    }
-    return nil
-  }
-
-  /// Quota (GB) configured for the TM destination at the given mount point -
-  /// parses the "Quota" line (e.g. "300 GB") from the block found the same way
-  /// as in `destinationID`. `nil` if TM reports no quota for this destination.
-  public static func destinationQuotaGB(forMountPointContaining mountPoint: String) async
-    -> Double?
-  {
-    guard let out = await output(["destinationinfo"]) else { return nil }
-    return destinationQuotaGB(forMountPointContaining: mountPoint, destinationInfoOutput: out)
-  }
-
-  static func destinationQuotaGB(
-    forMountPointContaining mountPoint: String, destinationInfoOutput: String
-  ) -> Double? {
-    var found = false
-    for rawLine in destinationInfoOutput.split(separator: "\n") {
-      let line = String(rawLine)
-      if line.hasPrefix("Mount Point") {
-        found = line.contains(mountPoint)
-        continue
-      }
-      if found, line.hasPrefix("Quota") {
-        let parts = line.split(separator: ":", maxSplits: 1)
-        guard parts.count == 2 else { continue }
-        let valueText = parts[1].trimmingCharacters(in: .whitespaces)
-        let numberText = valueText.split(separator: " ").first.map(String.init) ?? valueText
-        return Double(numberText)
-      }
-    }
-    return nil
-  }
-
-  /// Mount point of the CURRENTLY registered Time Machine destination (the
-  /// architecture guarantees exactly one active local destination - see
-  /// LocalBackupService). Returns the real, registered path instead of
-  /// guessing it from the default volume name - the user may name the local
-  /// volume anything (e.g. a manually created "TimeMachine" partition instead
-  /// of the default "CloudMachine-Local"), and guessing by name was a real
-  /// bug: after a manual volume rename the whole GUI/watchdog status showed
-  /// "no local volume" / "TimeMachine not registered", despite a correctly
-  /// working, registered destination.
-  ///
-  /// Returns `nil` both when there is no destination and when tmutil did not
-  /// answer - whoever has to tell these two apart (the `backup-health`
-  /// watchdog: one means "someone changed the destination", the other "we know
-  /// nothing") asks `destinationReading()`.
-  public static func currentDestinationMountPoint() async -> String? {
-    if case .mountPoint(let path) = await destinationReading() { return path }
-    return nil
-  }
-
-  /// The answer of `tmutil destinationinfo` with an explicit third state: NO
-  /// ANSWER.
-  ///
-  /// The third state has to exist separately for the same reason as
-  /// `queueUnknown` in `UploadState`: without it a hung tmutil looked exactly
-  /// like an unregistered destination and the watchdog would report "Time
-  /// Machine does not point to CloudMachine" - a true-sounding and false
-  /// sentence that sends the person the wrong way.
-  public enum DestinationReading: Equatable, Sendable {
-    case mountPoint(String)
-    /// tmutil answered, but there is no destination.
-    case none
-    /// tmutil did not answer within the time limit.
-    case noAnswer
-  }
-
-  public static func destinationReading() async -> DestinationReading {
-    guard let out = await output(["destinationinfo"]) else { return .noAnswer }
-    guard let path = currentDestinationMountPoint(destinationInfoOutput: out) else { return .none }
-    return .mountPoint(path)
-  }
-
-  static func currentDestinationMountPoint(destinationInfoOutput: String) -> String? {
-    for rawLine in destinationInfoOutput.split(separator: "\n") {
-      let line = String(rawLine)
-      guard line.hasPrefix("Mount Point") else { continue }
       let parts = line.split(separator: ":", maxSplits: 1)
       guard parts.count == 2 else { continue }
-      return parts[1].trimmingCharacters(in: .whitespaces)
+      let key = parts[0].trimmingCharacters(in: .whitespaces)
+      let value = parts[1].trimmingCharacters(in: .whitespaces)
+      if key == "Name", current?.name != nil { flush() }
+      var block = current ?? Destination()
+      switch key {
+      case "Name": block.name = value
+      case "Kind": block.kind = value
+      case "URL": block.url = value
+      case "Mount Point": block.mountPoint = value
+      case "ID": block.id = value
+      case "Quota":
+        let number = value.split(separator: " ").first.map(String.init) ?? value
+        block.quotaGB = Double(number)
+      default: break
+      }
+      current = block
     }
-    return nil
+    flush()
+    return result
   }
 
-  /// All registered Time Machine destination IDs - used by
-  /// `LocalBackupService.setAsDestination` to remove previous destinations
-  /// before registering a new one (this architecture keeps exactly one active
-  /// local destination, unlike the legacy approach).
-  ///
-  /// An empty list on no answer is SAFE here, and that is the only reason it
-  /// stays: the only caller deletes the returned destinations one by one
-  /// before registering a new one, so "I do not know" ends with something not
-  /// being removed, not with the wrong thing being removed.
-  public static func allDestinationIDs() async -> [String] {
-    guard let out = await output(["destinationinfo"]) else { return [] }
-    return allDestinationIDs(destinationInfoOutput: out)
-  }
-
-  static func allDestinationIDs(destinationInfoOutput: String) -> [String] {
-    var ids: [String] = []
-    for rawLine in destinationInfoOutput.split(separator: "\n") {
-      let line = String(rawLine)
-      guard line.hasPrefix("ID") else { continue }
-      let parts = line.split(separator: ":", maxSplits: 1)
-      guard parts.count == 2 else { continue }
-      ids.append(parts[1].trimmingCharacters(in: .whitespaces))
-    }
-    return ids
-  }
-
-  /// `nil` = tmutil did not answer. Deliberately NOT `false`: "the
-  /// configuration does not contain this text" and "could not ask" are two
-  /// different answers.
-  public static func destinationInfoContains(_ needle: String) async -> Bool? {
+  /// The registered destinations; `nil` = tmutil DID NOT ANSWER, `[]` = it
+  /// answered that there are none.
+  public static func destinationsReading() async -> [Destination]? {
     guard let out = await output(["destinationinfo"]) else { return nil }
-    return out.contains(needle)
+    return destinations(destinationInfoOutput: out)
   }
 }

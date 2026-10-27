@@ -1,0 +1,21 @@
+# CloudMachine: /srv/tm (rclone) -> /srv/tm-punch. Emulates hole punching by
+# writing zeros and keeps extended attributes in /srv/tm-xattr (see punchfs/README.md).
+[Unit]
+Description=punchfs: /srv/tm (rclone) -> /srv/tm-punch, hole punch emulated with zeros
+Requires=rclone-tm.service
+After=rclone-tm.service
+Before=tm-bands-bind.service smbd.service
+ConditionPathExists=/etc/rclone/rclone.conf
+
+[Service]
+Type=simple
+# passthrough_ll keeps one descriptor open for every inode the kernel has seen;
+# a full backup has tens of thousands of bands, and the default 1024 ran out (EMFILE).
+LimitNOFILE=524288
+ExecStart=/usr/local/bin/punchfs -f -o source=/srv/tm,allow_other /srv/tm-punch
+ExecStop=/bin/fusermount3 -uz /srv/tm-punch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

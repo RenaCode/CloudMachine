@@ -292,7 +292,7 @@ final class HealthAlertTests: XCTestCase {
     func evaluated() -> BackupHealth.Report {
       BackupHealth.evaluate(
         lastSuccess: now.addingTimeInterval(-5 * 3600), lastAttempt: nil, result: 0, now: now,
-        mounted: true, attached: false, destinationRegistered: nil, erroredFiles: 3,
+        machineRunning: true, servicesHealthy: false, destinationRegistered: nil, erroredFiles: 3,
         outOfSpace: false, queueReadable: true)
     }
 

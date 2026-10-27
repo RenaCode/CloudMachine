@@ -18,70 +18,30 @@ final class BackupHealthTests: XCTestCase {
     lastSuccess: Date? = nil,
     lastAttempt: Date? = nil,
     result: Int? = 0,
-    mounted: Bool = true,
-    attached: Bool? = true,
+    machineRunning: Bool? = true,
+    servicesHealthy: Bool? = true,
     destinationRegistered: Bool = true,
     erroredFiles: Int = 0,
     outOfSpace: Bool = false,
     queueReadable: Bool = true,
-    imageProbeTimedOut: Bool = false
+    machineFreeGB: Int? = nil,
+    punchfsNearFileLimit: Bool = false,
+    remoteControlOpen: Bool = false
   ) -> BackupHealth.Report {
     BackupHealth.evaluate(
       lastSuccess: lastSuccess ?? now.addingTimeInterval(-1800),
       lastAttempt: lastAttempt ?? now.addingTimeInterval(-1800),
       result: result,
       now: now,
-      mounted: mounted,
-      attached: attached,
+      machineRunning: machineRunning,
+      servicesHealthy: servicesHealthy,
       destinationRegistered: destinationRegistered,
       erroredFiles: erroredFiles,
       outOfSpace: outOfSpace,
       queueReadable: queueReadable,
-      imageProbeTimedOut: imageProbeTimedOut)
-  }
-
-  /// The readability probe did not answer in time. This is NOT "the image is
-  /// not attached" (the image is in the mount table) and NOT "the image is
-  /// DEAD" (the device did not answer at all, rather than with an error). The
-  /// first message would send the person to attach something that is
-  /// attached; the second - to FORCE-detach a device that may be alive and
-  /// holding unsent data.
-  ///
-  /// Most important, though, is that the watchdog gets here AT ALL: before the
-  /// fix this read had no time limit, and `StartInterval 1800` without
-  /// `KeepAlive` means a single hang silenced the watchdog PERMANENTLY.
-  func testUnansweredProbeIsReportedAsLackOfKnowledge() {
-    let report = healthyInput(attached: nil, imageProbeTimedOut: true)
-    XCTAssertFalse(report.healthy, "silence about a state we do not know is a failure here")
-    XCTAssertTrue(
-      report.problems.contains { $0.summary.contains("returns data") },
-      "the watchdog must FINISH the run and report the lack of knowledge: \(report.problems)")
-    XCTAssertFalse(report.problems.contains { $0.summary.contains("is not attached") })
-    XCTAssertFalse(report.problems.contains { $0.summary.contains("DEAD") })
-  }
-
-  /// Two causes of "I do not know" send the person to two different places,
-  /// so they must not get the same sentence.
-  func testTwoCausesOfUnknownImageStateHaveDifferentMessages() {
-    let probe = healthyInput(attached: nil, imageProbeTimedOut: true).problems
-    let table = healthyInput(attached: nil).problems
-    XCTAssertNotEqual(probe, table)
-    XCTAssertFalse(probe.isEmpty)
-    XCTAssertFalse(table.isEmpty)
-  }
-
-  /// The image is in the mount table, but reading fails - on 22 Sep 2026 for
-  /// 15 h no sensor had a name for this state. Now it does.
-  func testDeadImageAlarms() {
-    let report = BackupHealth.evaluate(
-      lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
-      result: 0, now: now, mounted: true, attached: true, destinationRegistered: true,
-      erroredFiles: 0, outOfSpace: false, queueReadable: true, imageDeadErrno: ENXIO)
-    XCTAssertFalse(report.healthy)
-    XCTAssertTrue(report.problems.contains { $0.summary.contains("DEAD") })
-    XCTAssertFalse(
-      report.problems.contains { $0.summary.contains("is not attached") },
-      "Dead is a different state from detached - one alarm, not two.")
+      machineFreeGB: machineFreeGB,
+      punchfsNearFileLimit: punchfsNearFileLimit,
+      remoteControlOpen: remoteControlOpen)
   }
 
   func testWorkingCycleDoesNotAlarm() {
@@ -90,9 +50,8 @@ final class BackupHealthTests: XCTestCase {
 
   // MARK: - Known bad samples
 
-  /// THIS is the failure the whole previous system did NOT detect: the mount
-  /// is up, the image attached, the destination registered - and no backup
-  /// has been made for two days. The interface showed a green badge then.
+  /// THIS is the failure device checks do NOT detect: the machine runs, the
+  /// destination is registered - and no backup has been made for two days.
   func testSilentCycleFailureIsReported() {
     let report = healthyInput(
       lastSuccess: now.addingTimeInterval(-48 * 3600),
@@ -120,7 +79,7 @@ final class BackupHealthTests: XCTestCase {
     XCTAssertTrue(report.problems.contains { $0.summary.contains("RESULT=27") })
   }
 
-  /// Bands rclone did not upload exist only on this Mac. The backup on the
+  /// Bands rclone did not upload exist only in the machine. The backup on the
   /// Drive is then INCOMPLETE and may not open.
   func testUnsentFilesAreReported() {
     let report = healthyInput(erroredFiles: 12)
@@ -128,14 +87,48 @@ final class BackupHealthTests: XCTestCase {
     XCTAssertTrue(report.problems.contains { $0.summary.contains("12 files") })
   }
 
-  func testMissingMountIsReported() {
+  func testStoppedMachineIsReported() {
     XCTAssertTrue(
-      healthyInput(mounted: false).problems.contains { $0.summary.contains("mount") })
+      healthyInput(machineRunning: false, servicesHealthy: nil).problems.contains {
+        $0.code == "machine-stopped"
+      })
   }
 
-  func testDetachedImageIsReported() {
+  func testServiceDownIsReported() {
     XCTAssertTrue(
-      healthyInput(attached: false).problems.contains { $0.summary.contains("is not attached") })
+      healthyInput(servicesHealthy: false).problems.contains { $0.code == "machine-service-down" })
+  }
+
+  /// A queue nobody could read in a machine that does not answer at all is
+  /// ONE problem (the machine), not two.
+  func testSilentMachineIsNotAlsoReportedAsSilentRclone() {
+    let report = healthyInput(servicesHealthy: nil, queueReadable: false)
+    XCTAssertTrue(report.problems.contains { $0.code == "machine-no-answer" })
+    XCTAssertFalse(report.problems.contains { $0.code == "rclone-rc-no-answer" })
+  }
+
+  func testMachineLowOnSpaceIsReportedBeforeTheGuardBrakes() {
+    XCTAssertGreaterThan(BackupHealth.machineFreeWarningGB, VMGuard.Thresholds().minFreeGiB)
+    XCTAssertTrue(
+      healthyInput(machineFreeGB: BackupHealth.machineFreeWarningGB - 1).problems.contains {
+        $0.code == "machine-low-space"
+      })
+    XCTAssertTrue(healthyInput(machineFreeGB: BackupHealth.machineFreeWarningGB).healthy)
+  }
+
+  func testPunchfsNearItsFileLimitIsReported() {
+    XCTAssertTrue(
+      healthyInput(punchfsNearFileLimit: true).problems.contains {
+        $0.code == "punchfs-file-limit"
+      })
+  }
+
+  /// Any web page can delete the backup through it - a failure even on a day
+  /// when every backup completes.
+  func testOpenRemoteControlIsReported() {
+    let report = healthyInput(remoteControlOpen: true)
+    XCTAssertFalse(report.healthy)
+    XCTAssertTrue(report.problems.contains { $0.code == "rc-port-open" })
   }
 
   func testChangedTimeMachineDestinationIsReported() {
@@ -163,8 +156,9 @@ final class BackupHealthTests: XCTestCase {
   /// exceeded".
   func testAbsenceOfAnyBackupIsReported() {
     let report = BackupHealth.evaluate(
-      lastSuccess: nil, lastAttempt: nil, result: 0, now: now, mounted: true, attached: true,
-      destinationRegistered: true, erroredFiles: 0, outOfSpace: false, queueReadable: true)
+      lastSuccess: nil, lastAttempt: nil, result: 0, now: now, machineRunning: true,
+      servicesHealthy: true, destinationRegistered: true, erroredFiles: 0, outOfSpace: false,
+      queueReadable: true)
     XCTAssertFalse(report.healthy)
     XCTAssertTrue(report.problems.contains { $0.summary.contains("NOT A SINGLE") })
   }
@@ -174,7 +168,8 @@ final class BackupHealthTests: XCTestCase {
   /// The shape mirrored from the real
   /// `/Library/Preferences/com.apple.TimeMachine.plist` on a working
   /// installation: `SnapshotDates` gets an entry only after a COMPLETED
-  /// backup, `AttemptDates` also counts the ones that failed.
+  /// backup, `AttemptDates` also counts the ones that failed. The machine's
+  /// destination carries its `NetworkURL`.
   private func preferences(volumeName: String = "CloudMachine") -> [String: Any] {
     [
       "Destinations": [
@@ -186,6 +181,7 @@ final class BackupHealthTests: XCTestCase {
         ],
         [
           "LastKnownVolumeName": volumeName,
+          "NetworkURL": "smb://tm@192.168.64.10/CloudMachine",
           "SnapshotDates": [
             Date(timeIntervalSince1970: 1_757_600_000),
             Date(timeIntervalSince1970: 1_757_698_000),
@@ -215,9 +211,21 @@ final class BackupHealthTests: XCTestCase {
     XCTAssertEqual(result, 5)
   }
 
+  /// The machine's share is found by its URL, whatever its volume is called.
+  func testReadingFindsTheMachineByItsURL() {
+    let (lastSuccess, _, result) = BackupHealth.dates(
+      inPreferences: preferences(volumeName: "Renamed"))
+    XCTAssertEqual(lastSuccess, Date(timeIntervalSince1970: 1_757_698_000))
+    XCTAssertEqual(result, 0)
+  }
+
   func testReadingDoesNotGuessWhenOurDestinationIsMissing() {
+    var plist = preferences()
+    plist["Destinations"] = (plist["Destinations"] as! [[String: Any]]).map {
+      $0.filter { $0.key != "NetworkURL" }
+    }
     let (lastSuccess, lastAttempt, result) = BackupHealth.dates(
-      inPreferences: preferences(), volumeNamed: "SomethingElseEntirely")
+      inPreferences: plist, volumeNamed: "SomethingElseEntirely")
     XCTAssertNil(lastSuccess)
     XCTAssertNil(lastAttempt)
     XCTAssertNil(result)
@@ -372,30 +380,29 @@ final class BackupHealthTests: XCTestCase {
   // MARK: - Startup grace period
 
   /// KNOWN BAD SAMPLE from 21.09, 25.09 and 01.10.2026: the watchdog starts
-  /// together with the session, a few seconds after rclone starts - nothing is
-  /// up yet.
+  /// together with the session - nothing is up yet.
   private func rightAfterStartup(grace: Bool, lastSuccessAgo: TimeInterval = 1800)
     -> BackupHealth.Report
   {
     BackupHealth.evaluate(
       lastSuccess: now.addingTimeInterval(-lastSuccessAgo),
       lastAttempt: now.addingTimeInterval(-lastSuccessAgo),
-      result: 0, now: now, mounted: false, attached: false, destinationRegistered: false,
-      erroredFiles: 0, outOfSpace: false, queueReadable: false,
+      result: 0, now: now, machineRunning: true, servicesHealthy: false,
+      destinationRegistered: false, erroredFiles: 0, outOfSpace: false, queueReadable: false,
       withinStartupGrace: grace)
   }
 
   func testRightAfterStartupDevicesNotReadyAreNotAFailure() {
     let report = rightAfterStartup(grace: true)
     XCTAssertTrue(report.healthy, "\(report.problems)")
-    XCTAssertEqual(report.deferred.count, 3, "deferred, not lost: \(report.deferred)")
+    XCTAssertEqual(report.deferred.count, 2, "deferred, not lost: \(report.deferred)")
   }
 
   /// The same state AFTER the grace period must alarm - otherwise the previous
   /// test would also pass for a watchdog that is always silent.
   func testAfterTheGracePeriodTheSameStateAlarms() {
     let report = rightAfterStartup(grace: false)
-    XCTAssertEqual(report.problems.count, 3, "\(report.problems)")
+    XCTAssertEqual(report.problems.count, 2, "\(report.problems)")
     XCTAssertTrue(report.deferred.isEmpty)
   }
 
@@ -406,12 +413,24 @@ final class BackupHealthTests: XCTestCase {
     XCTAssertTrue(report.problems.contains { $0.summary.contains("No successful backup") })
   }
 
+  /// A machine that has not booted yet is a normal startup state too.
+  func testRightAfterStartupAStoppedMachineIsDeferred() {
+    let report = BackupHealth.evaluate(
+      lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
+      result: 0, now: now, machineRunning: false, servicesHealthy: nil,
+      destinationRegistered: true, erroredFiles: 0, outOfSpace: false, queueReadable: false,
+      withinStartupGrace: true)
+    XCTAssertTrue(report.healthy, "\(report.problems)")
+    XCTAssertEqual(report.deferred.map(\.code), ["machine-stopped"])
+  }
+
   /// "I do not know" (a hung tmutil) is not a normal startup state.
   func testGracePeriodDoesNotSilenceLackOfKnowledge() {
     let report = BackupHealth.evaluate(
       lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
-      result: 0, now: now, mounted: true, attached: true, destinationRegistered: nil,
-      erroredFiles: 0, outOfSpace: false, queueReadable: true, withinStartupGrace: true)
+      result: 0, now: now, machineRunning: true, servicesHealthy: true,
+      destinationRegistered: nil, erroredFiles: 0, outOfSpace: false, queueReadable: true,
+      withinStartupGrace: true)
     XCTAssertFalse(report.healthy)
   }
 
@@ -427,13 +446,13 @@ final class BackupHealthTests: XCTestCase {
     BackupHealth.evaluate(
       lastSuccess: now.addingTimeInterval(-2.5 * 3600),
       lastAttempt: now.addingTimeInterval(-2 * 3600),
-      result: 0, now: now, mounted: true, attached: true, destinationRegistered: true,
-      erroredFiles: 0, outOfSpace: false, queueReadable: true, backupRunning: running)
+      result: 0, now: now, machineRunning: true, servicesHealthy: true,
+      destinationRegistered: true, erroredFiles: 0, outOfSpace: false, queueReadable: true,
+      backupRunning: running)
   }
 
-  /// KNOWN BAD SAMPLE from 01.10.2026 17:02: walking the whole disk after a
-  /// restart takes hours, and the watchdog reported an attempt that was still
-  /// in progress.
+  /// KNOWN BAD SAMPLE from 01.10.2026 17:02: a long run takes hours, and the
+  /// watchdog reported an attempt that was still in progress.
   func testRunInProgressIsNotAFailedAttempt() {
     XCTAssertTrue(attemptTwoHoursAgo(running: true).healthy)
   }
@@ -455,16 +474,26 @@ final class BackupHealthTests: XCTestCase {
   /// `evaluate` can produce must carry its own stable code - not the
   /// translated summary it falls back to.
   func testEveryProblemHasALanguageIndependentCode() {
-    let report = BackupHealth.evaluate(
-      lastSuccess: now.addingTimeInterval(-5 * 3600), lastAttempt: nil, result: 3, now: now,
-      mounted: false, attached: nil, destinationRegistered: nil, erroredFiles: 2,
-      outOfSpace: true, queueReadable: false, driveFreeBytes: 1_073_741_824, localFreeGB: 1)
-    XCTAssertFalse(report.problems.isEmpty)
-    for problem in report.problems {
-      XCTAssertNotEqual(problem.code, problem.summary, "no own code: \(problem.summary)")
+    var seen: [String: String] = [:]
+    for (running, services) in [(true, false), (true, nil), (false, nil), (nil, nil)]
+      as [(Bool?, Bool?)]
+    {
+      let report = BackupHealth.evaluate(
+        lastSuccess: now.addingTimeInterval(-5 * 3600), lastAttempt: nil, result: 3, now: now,
+        machineRunning: running, servicesHealthy: services, destinationRegistered: nil,
+        erroredFiles: 2, outOfSpace: true, queueReadable: false, driveFreeBytes: 1_073_741_824,
+        localFreeGB: 1, machineFreeGB: 1, punchfsNearFileLimit: true, remoteControlOpen: true)
+      XCTAssertFalse(report.problems.isEmpty)
+      XCTAssertEqual(
+        Set(report.problems.map(\.code)).count, report.problems.count,
+        "two problems in one report share a code: \(report.problems.map(\.code))")
+      for problem in report.problems {
+        XCTAssertNotEqual(problem.code, problem.summary, "no own code: \(problem.summary)")
+        if let earlier = seen[problem.code] {
+          XCTAssertEqual(earlier, problem.summary, "one code for two problems: \(problem.code)")
+        }
+        seen[problem.code] = problem.summary
+      }
     }
-    XCTAssertEqual(
-      Set(report.problems.map(\.code)).count, report.problems.count,
-      "two different problems must not share a code: \(report.problems.map(\.code))")
   }
 }

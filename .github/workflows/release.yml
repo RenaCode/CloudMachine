@@ -47,6 +47,7 @@ on:
       - "mac-app/Sources/**"
       - "mac-app/Resources/**"
       - "launchd/**"
+      - "vm/**"
       - "config/**"
       - "packaging/homebrew/**"
   workflow_dispatch:

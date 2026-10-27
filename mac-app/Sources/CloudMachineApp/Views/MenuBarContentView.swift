@@ -42,21 +42,7 @@ private struct MenuBarPanel: View {
 
   /// Green only for a really good state - the same rule as the window's
   /// health card.
-  private var tone: StatusTone {
-    if status.healthy { return .success }
-    if case .missing = status.dependencyState { return .danger }
-    // Detached on purpose before a restart - amber, not "action needed".
-    if status.detachedForRestart && status.remoteConfigured && status.buffer.mounted {
-      return .warning
-    }
-    if !status.remoteConfigured || !status.buffer.mounted || !status.buffer.imageAttached {
-      return .danger
-    }
-    if case .notRegistered = status.timeMachineState { return .danger }
-    if status.buffer.uploadState.needsAttention { return .danger }
-    if status.backupCycle.known && !status.backupCycle.isFresh() { return .danger }
-    return .warning
-  }
+  private var tone: StatusTone { status.overallTone }
 
   private var cycleTone: StatusTone {
     if status.backupCycle.isFresh() { return .success }
@@ -86,7 +72,7 @@ private struct MenuBarPanel: View {
 
       // The one-sentence answer to "is my data safe", in the verdict's color.
       HStack(alignment: .firstTextBaseline, spacing: 8) {
-        StatusDot(tone, live: status.buffer.uploadState.isMovingData)
+        StatusDot(tone, live: status.machine.uploadState.isMovingData)
         Text(status.headline)
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(tone == .success ? RenaCodeTheme.textMain : tone.color)
@@ -97,11 +83,11 @@ private struct MenuBarPanel: View {
       // The headline says it only while nothing worse is going on; this row
       // stays as long as the port is open.
       if status.remoteControlOpen,
-        status.headline != L10n.tr("Drive remote control is open - restart the mount")
+        status.headline != L10n.tr("rclone's remote control is open on this Mac")
       {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           StatusDot(.danger)
-          Text(L10n.tr("Drive remote control is open - restart the mount"))
+          Text(L10n.tr("rclone's remote control is open on this Mac"))
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(StatusTone.danger.color)
             .fixedSize(horizontal: false, vertical: true)
@@ -129,21 +115,21 @@ private struct MenuBarPanel: View {
         .accessibilityElement(children: .combine)
       }
 
-      // Queue and buffer state, as two tiles like the window's cards
+      // The machine's upload buffer, as two tiles like the window's cards
       HStack(spacing: 8) {
         tile(
           L10n.tr("Waiting to upload"),
-          !status.buffer.queueKnown
-            ? "?"
-            : (status.buffer.draining
-              ? L10n.tr("%@ files", "\(status.buffer.uploadsQueued)") : L10n.tr("nothing")),
+          status.machine.unsentGiB.map {
+            status.machine.draining ? L10n.tr("%@ GiB", "\($0)") : L10n.tr("nothing")
+          } ?? "?",
           // Cyan while draining - the normal state during a backup; amber only
           // when the queue could not be read.
-          valueColor: !status.buffer.queueKnown
+          valueColor: !status.machine.queueKnown
             ? RenaCodeTheme.colorWarning
-            : (status.buffer.draining ? RenaCodeTheme.colorCyan : RenaCodeTheme.textMain))
+            : (status.machine.draining ? RenaCodeTheme.colorCyan : RenaCodeTheme.textMain))
         tile(
-          L10n.tr("SSD buffer"), L10n.tr("%@ GB", "\(status.buffer.sizeGB)"),
+          L10n.tr("Free in the machine"),
+          status.machine.freeGiB.map { L10n.tr("%@ GiB", "\($0)") } ?? "?",
           valueColor: RenaCodeTheme.textMain)
       }
 
@@ -208,7 +194,7 @@ private struct MenuBarPanel: View {
         if confirmingRestartPrep {
           Text(
             L10n.tr(
-              "The backup is paused, the image is detached and everything waits until it has reached Google Drive. It can take several minutes."
+              "The backup is stopped, the upload gets up to 30 minutes, then the machine shuts down cleanly. It starts again at the next login."
             )
           )
           .font(.system(size: 11))
@@ -231,6 +217,15 @@ private struct MenuBarPanel: View {
             }
             .buttonStyle(SecondaryGlassButtonStyle())
           }
+        } else if status.canStartMachine {
+          Button(action: { Task { await controller.startMachine() } }) {
+            HStack {
+              Image(systemName: "power.circle")
+              Text(L10n.tr("Start the machine"))
+              Spacer()
+            }
+          }
+          .buttonStyle(SecondaryGlassButtonStyle())
         } else {
           Button(action: { confirmingRestartPrep = true }) {
             HStack {
@@ -240,10 +235,10 @@ private struct MenuBarPanel: View {
             }
           }
           .buttonStyle(SecondaryGlassButtonStyle())
-          .disabled(status.isBusy)
+          .disabled(status.isBusy || !status.machine.isRunning)
           .help(
             L10n.tr(
-              "Prepares for a restart: pauses the backup, detaches the image and waits for the upload."
+              "Prepares for a restart: stops the backup, waits a while for the upload, then stops the machine cleanly."
             ))
         }
 

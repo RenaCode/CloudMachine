@@ -2,10 +2,10 @@ import Foundation
 
 /// Answers one question: is the hourly cycle STILL working.
 ///
-/// The rest of this project measures the momentary state - whether the mount
-/// is up, whether the image is attached, how much is waiting in the queue. None
-/// of these measurements detects the most dangerous failure of this system:
-/// everything looks mounted and attached, and Time Machine has not finished a
+/// The rest of this project measures the momentary state - whether the
+/// machine runs, whether its services are up, how much is waiting in the
+/// queue. None of these measurements detects the most dangerous failure of
+/// this system: everything looks up, and Time Machine has not finished a
 /// single backup for two days. The interface then shows a green badge and the
 /// word "Ready".
 ///
@@ -18,18 +18,12 @@ import Foundation
 /// are looking for.
 ///
 /// We read the local file, not `tmutil latestbackup`. This is not an
-/// optimization: `tmutil latestbackup` mounts a snapshot on the volume that
-/// lives on Google Drive and, with a sick mount, can hang in uninterruptible
-/// I/O. A watchdog that hangs exactly when it should raise the alarm is worse
-/// than none.
-///
-/// Until 23.09.2026 that sentence was a declaration, not a fact:
-/// `currentReport()` calls `tmutil destinationinfo` (for the Time Machine
-/// destination), and that read reaches the mount and hung WITHOUT A TIME LIMIT
-/// in uninterruptible I/O exactly like `latestbackup`, which this comment warns
-/// against. Since that date every tmutil call has a hard limit
-/// (`TimeMachineStatus.commandTimeout`), and no answer is reported as a FAILURE
-/// - not as "destination changed" and not as silence.
+/// optimization: `tmutil latestbackup` mounts the backup volume and, with a
+/// sick destination, can hang in uninterruptible I/O. A watchdog that hangs
+/// exactly when it should raise the alarm is worse than none. Every tmutil
+/// call has a hard limit (`TimeMachineStatus.commandTimeout`), and so does
+/// every question to the machine; no answer is reported as a FAILURE - not as
+/// "destination changed" and not as silence.
 public enum BackupHealth {
 
   public static let preferencesPath = "/Library/Preferences/com.apple.TimeMachine.plist"
@@ -39,28 +33,26 @@ public enum BackupHealth {
   ///
   /// The cycle is hourly, so three hours are three missed runs in a row - too
   /// many to be chance. At the same time it leaves headroom for a backup that
-  /// takes long, and for the buffer guard, which deliberately pauses Time
+  /// takes long, and for the machine's guard, which deliberately pauses Time
   /// Machine while the upload catches up.
   public static let maxAgeHours = 3.0
 
-  /// For this many minutes after system startup "the mount / image /
-  /// destination is not up yet" is NOT a failure.
+  /// For this many minutes after system startup "the machine / its services /
+  /// the destination is not up yet" is NOT a failure.
   ///
   /// The `backup-health` agent has `RunAtLoad`, so it starts together with the
-  /// session - a few seconds after rclone has only just started. After every
-  /// restart (21.09, 25.09, 01.10.2026) the watchdog then reported "BACKUP
-  /// FAILURE: Google Drive mount is not working" 4-8 s after login, before
-  /// anything had a chance to come up. An alarm that fires on every startup
-  /// teaches people to ignore it - and then the one real alarm is lost.
+  /// session - the same moment `vm-start` boots the machine. With the old
+  /// layout the watchdog reported a failure 4-8 s after every login (21.09,
+  /// 25.09, 01.10.2026), before anything had a chance to come up. An alarm
+  /// that fires on every startup teaches people to ignore it - and then the
+  /// one real alarm is lost.
   ///
-  /// 20 min, because that is what was measured in the worst case: on
-  /// 01.10.2026, after a restart with ~19 GB of unsent bands, rclone was loading
-  /// and uploading the backlog until 15:42, and the image attached at 15:49 -
-  /// 17 min after the agents started. ONLY the devices' `false` states are
-  /// deferred. The age of the last successful backup, RESULT, upload errors and
-  /// "unknown" (a hung read) alarm from the first second, and the next
-  /// watchdog run (every 30 min) already falls after this window and will
-  /// report every state that did not fix itself.
+  /// 20 min: a boot of the machine with a backlog in rclone's buffer takes
+  /// minutes before Samba answers. ONLY the `false` states are deferred. The
+  /// age of the last successful backup, RESULT, upload errors and "unknown"
+  /// (a hung read) alarm from the first second, and the next watchdog run
+  /// (every 30 min) already falls after this window and will report every
+  /// state that did not fix itself.
   public static let startupGraceMinutes = 20.0
 
   /// How many seconds have passed since system startup (`kern.boottime`).
@@ -131,23 +123,29 @@ public enum BackupHealth {
 
   // MARK: - Reading the counter of successful backups
 
-  /// Dates from the Time Machine preferences for the destination at the given
-  /// mount point. Pure function - takes an already read dictionary, so it can
+  /// Dates from the Time Machine preferences for this Mac's CloudMachine
+  /// destination. Pure function - takes an already read dictionary, so it can
   /// be tested without the system file and without Time Machine.
+  ///
+  /// The destination is the one named after the share (`LastKnownVolumeName`),
+  /// else the one whose `NetworkURL` is the machine's share, else the only one
+  /// there is.
   ///
   /// `result` is the `RESULT` field from the same block: 0 means the last run
   /// ended well, anything else - that it did not.
   public static func dates(
-    inPreferences plist: [String: Any], volumeNamed volumeName: String
+    inPreferences plist: [String: Any], volumeNamed volumeName: String = VMLayout.shareName
   ) -> (lastSuccess: Date?, lastAttempt: Date?, result: Int?) {
     guard let destinations = plist["Destinations"] as? [[String: Any]] else {
       return (nil, nil, nil)
     }
-    // We pick the destination by volume name, not by index 0 - a Mac can have
-    // several Time Machine destinations registered, and we care only about
-    // this one.
+    // We pick the destination, not index 0 - a Mac can have several Time
+    // Machine destinations registered, and we care only about this one.
     let destination =
       destinations.first { ($0["LastKnownVolumeName"] as? String) == volumeName }
+      ?? destinations.first {
+        ($0["NetworkURL"] as? String).map { VMStatus.isMachineShare($0, address: nil) } ?? false
+      }
       ?? (destinations.count == 1 ? destinations[0] : nil)
     guard let destination else { return (nil, nil, nil) }
 
@@ -160,25 +158,26 @@ public enum BackupHealth {
 
   /// Assessment of the state. Pure function - every input is passed in
   /// directly, so injecting a KNOWN BAD sample (an old date, a non-zero
-  /// RESULT, a dead mount) is one call in a test, not breaking production.
+  /// RESULT, a stopped machine) is one call in a test, not breaking production.
+  ///
+  /// `nil` means "no answer" for every three-state input: it is reported as
+  /// its own problem, never folded into "fine" or into "broken".
   public static func evaluate(
     lastSuccess: Date?,
     lastAttempt: Date?,
     result: Int?,
     now: Date,
-    mounted: Bool?,
-    attached: Bool?,
+    machineRunning: Bool?,
+    servicesHealthy: Bool?,
     destinationRegistered: Bool?,
     erroredFiles: Int,
     outOfSpace: Bool,
     queueReadable: Bool,
     driveFreeBytes: UInt64? = nil,
     localFreeGB: Int? = nil,
-    imageDeadErrno: Int32? = nil,
-    // The image IS in the mount table, but the readability probe did not
-    // return. Goes together with `attached: nil` and serves ONLY to tell the
-    // person exactly what we do not know - the decision is the same.
-    imageProbeTimedOut: Bool = false,
+    machineFreeGB: Int? = nil,
+    punchfsNearFileLimit: Bool = false,
+    remoteControlOpen: Bool = false,
     maxAgeHours: Double = BackupHealth.maxAgeHours,
     // Whether the startup grace period is in progress - see `startupGraceMinutes`.
     withinStartupGrace: Bool = false,
@@ -187,99 +186,57 @@ public enum BackupHealth {
   ) -> Report {
     var problems: [Problem] = []
     var deferred: [Problem] = []
-    // A device state that is NORMAL right after startup, because nothing has
-    // had time to come up yet. After the grace period it is an ordinary
-    // failure.
+    // A state that is NORMAL right after startup, because nothing has had
+    // time to come up yet. After the grace period it is an ordinary failure.
     func notReadyYet(_ problem: Problem) {
       if withinStartupGrace { deferred.append(problem) } else { problems.append(problem) }
     }
 
-    // Order from cause to effect: if the mount is down, the backup age will
-    // grow anyway, but it is the mount that has to be fixed.
-    //
-    // `mounted` and `attached` are THREE-STATE for the same reason as
-    // `destinationRegistered` below: reading the mount table can fail, and
-    // then we know neither that it is there nor that it is not. Collapsing
-    // that into a `Bool` ended in one of two ways and both were wrong -
-    // `?? false` produced an alarm about an unmounted Drive that may be
-    // mounted, and `!= .detached` produced SILENCE about an image we know
-    // nothing about.
-    switch mounted {
+    // Order from cause to effect: if the machine is down, the backup age will
+    // grow anyway, but it is the machine that has to be fixed.
+    switch machineRunning {
     case .some(true):
-      break
+      switch servicesHealthy {
+      case .some(true):
+        break
+      case .some(false):
+        notReadyYet(
+          Problem(
+            summary: L10n.tr("A service in the CloudMachine machine is not running"),
+            detail: L10n.tr(
+              "Samba, rclone or punchfs in the machine is not active, so Time Machine has nowhere to write or the bands do not reach Google Drive. Check: cloudmachine-agent vm-status"
+            ),
+            code: "machine-service-down"))
+      case .none:
+        problems.append(
+          Problem(
+            summary: L10n.tr("The CloudMachine machine does not answer"),
+            detail: L10n.tr(
+              "Lima says the machine is running, but a command in it did not return. Without it nothing is known about Samba, rclone or the upload. Check: cloudmachine-agent vm-status"
+            ),
+            code: "machine-no-answer"))
+      }
     case .some(false):
       notReadyYet(
         Problem(
-          summary: L10n.tr("Google Drive mount is not working"),
+          summary: L10n.tr("The CloudMachine machine is not running"),
           detail: L10n.tr(
-            "Without it the backup image is unreachable and Time Machine has nowhere to write."),
-          code: "drive-not-mounted"))
+            "Time Machine backs up to the machine, so without it no backup is made. Start it: limactl start %@ (or the Start button in the app).",
+            VMLayout.instanceName),
+          code: "machine-stopped"))
     case .none:
       problems.append(
         Problem(
-          summary: L10n.tr("Unknown whether the Google Drive mount is working"),
+          summary: L10n.tr("Unknown whether the CloudMachine machine is running"),
           detail: L10n.tr(
-            "Could not read the mount table. That does not mean the Drive is unmounted - it means nobody has checked. Without this answer there is no way to tell whether backups have anywhere to go."
+            "limactl did not answer (or is not installed). That does not mean the machine is down - it means nobody has checked."
           ),
-          code: "drive-mount-unknown"))
+          code: "machine-unknown"))
     }
 
-    switch attached {
-    case .some(true):
-      if let errno = imageDeadErrno {
-        // Attached but dead - a state that until 22 Sep 2026 did not exist for
-        // any sensor and therefore lasted 15 hours. See `ImageProbe`.
-        problems.append(
-          Problem(
-            summary: L10n.tr("The backup image is attached, but DEAD (errno %@)", "\(errno)"),
-            detail: L10n.tr(
-              "The image device stopped returning data - Time Machine sees it as a disconnected disk. Fix: cloudmachine-agent attach-image (force-detaches and attaches again)."
-            ),
-            code: "image-dead"))
-      }
-    case .some(false):
-      notReadyYet(
-        Problem(
-          summary: L10n.tr("The backup image is not attached"),
-          detail: L10n.tr(
-            "Time Machine cannot see the destination %@.", BackupImageService.targetPath.path),
-          code: "image-detached"))
-    case .none:
-      // THAT silence. Until 23.09.2026 the caller passed `attachment !=
-      // .detached` here, so the new `.unknown` case ("the mount table could
-      // not be read") fell into `true` - i.e. "attached". The watchdog, whose
-      // ONLY job is not to claim things it does not know, stayed silent about
-      // a state it did not know. The message must be DIFFERENT from a real
-      // detachment: "is not attached" sends the person off to attach an image
-      // that may be attached correctly.
-      // Two causes of "I do not know" and TWO different messages, because they
-      // send the person to two different places. The third point at which the
-      // same distinction saves this report - see `mounted` above and
-      // `destinationRegistered` below.
-      if imageProbeTimedOut {
-        problems.append(
-          Problem(
-            summary: L10n.tr("Unknown whether the backup image returns data"),
-            detail: L10n.tr(
-              "The image %@ is listed in the mount table, but the readability probe did not answer within %@ s - that is how a read blocked on a dead FUSE-T mount behaves. This is NOT proof that the image is dead, so do NOT force-detach it: `attach-image` deliberately does nothing in that case, because detaching a live device abandons data waiting to be uploaded. First check whether rclone responds (cloudmachine-agent drive-status) and whether the gdrive-buffer agent is alive.",
-              BackupImageService.targetPath.path, "\(Int(ImageProbe.probeTimeout))"),
-            code: "image-probe-timed-out"))
-      } else {
-        problems.append(
-          Problem(
-            summary: L10n.tr("Unknown whether the backup image is attached"),
-            detail: L10n.tr(
-              "Could not read the mount table, so the state of the image %@ is UNKNOWN. Do not attach it blindly - first check whether `mount` responds at all (with a dead FUSE-T mount it can hang).",
-              BackupImageService.targetPath.path),
-            code: "image-attachment-unknown"))
-      }
-    }
-    // `nil` is NOT the same as `false`. Since 23.09.2026 `tmutil` has a time
-    // limit (see `TimeMachineStatus.commandTimeout`), so with a dead mount the
-    // watchdog comes back with no answer instead of hanging. No answer is a
-    // FAILURE - but a different one from a changed destination, and it has to
-    // sound different, so as not to send the person off to change something
-    // that is set correctly.
+    // `nil` is NOT the same as `false`: no answer from tmutil has to sound
+    // different from a changed destination, so as not to send the person off
+    // to change something that is set correctly.
     switch destinationRegistered {
     case .some(true):
       break
@@ -288,14 +245,15 @@ public enum BackupHealth {
         Problem(
           summary: L10n.tr("Time Machine does not point to CloudMachine"),
           detail: L10n.tr(
-            "The backup destination was changed or unregistered - backups are not being made."),
+            "No Time Machine destination is the machine's share (smb://tm@<address>/CloudMachine) - backups are not being made there. The command is printed by: cloudmachine-agent vm-setup"
+          ),
           code: "destination-not-registered"))
     case .none:
       problems.append(
         Problem(
           summary: L10n.tr("tmutil is not responding - unknown where the backup goes"),
           detail: L10n.tr(
-            "Reading the Time Machine destination did not return within %@ s. That is how tmutil behaves when blocked on a dead Google Drive mount. Fix: cloudmachine-agent attach-image, and if that does not help - restart the gdrive-buffer agent.",
+            "Reading the Time Machine destination did not return within %@ s. That is how tmutil behaves when its destination hangs.",
             "\(Int(TimeMachineStatus.commandTimeout))"),
           code: "tmutil-no-answer"))
     }
@@ -326,12 +284,10 @@ public enum BackupHealth {
     // The age of the last success alone will not show that until it crosses
     // the threshold.
     //
-    // Exception: a run that is STILL IN PROGRESS. After a restart Time Machine
-    // can walk the whole disk (01.10.2026: 882 GB, 3.6 million files, ~4 h),
-    // and after an hour the watchdog then reported "the attempt did not end
-    // in a backup" about an attempt that simply had not finished yet. A run
-    // stuck forever will be caught by the last-successful-backup age
-    // threshold above anyway.
+    // Exception: a run that is STILL IN PROGRESS. A first or a long backup can
+    // take hours, and after an hour the watchdog then reported "the attempt did
+    // not end in a backup" about an attempt that simply had not finished yet.
+    // A run stuck forever will be caught by the age threshold above anyway.
     if let lastAttempt, let lastSuccess, lastAttempt > lastSuccess,
       now.timeIntervalSince(lastAttempt) > 3600, backupRunning != true
     {
@@ -359,7 +315,7 @@ public enum BackupHealth {
         Problem(
           summary: L10n.tr("rclone failed to upload %@ files", "\(erroredFiles)"),
           detail: L10n.tr(
-            "These image bands exist only locally. The backup on Google Drive is INCOMPLETE and may not open."
+            "These bands exist only in the machine's buffer. The backup on Google Drive is INCOMPLETE and may not open."
           ),
           code: "upload-errors"))
     }
@@ -372,24 +328,41 @@ public enum BackupHealth {
           ),
           code: "buffer-out-of-space"))
     }
-    // `mounted == true`, not `mounted != false`: when there is no mount OR it
-    // is unknown whether there is one, harder messages above already say so,
-    // and a second message about the same thing only dilutes the first.
-    if !queueReadable && mounted == true {
+    // Only for a machine whose services answered: when it is down or silent,
+    // harder messages above already say so, and a second message about the
+    // same thing only dilutes the first.
+    if !queueReadable && machineRunning == true && servicesHealthy == true {
       problems.append(
         Problem(
           summary: L10n.tr("The rclone control interface is not responding"),
           detail: L10n.tr(
-            "Without it there is no way to check whether anything reached the Drive - the buffer guard is blind then."
+            "Without it there is no way to check whether anything reached the Drive - the machine's guard is blind then."
           ),
           code: "rclone-rc-no-answer"))
     }
+    if punchfsNearFileLimit {
+      problems.append(
+        Problem(
+          summary: L10n.tr("punchfs is close to its open-file limit"),
+          detail: L10n.tr(
+            "At the limit every new band fails with EMFILE and the backup stops. Check: cloudmachine-agent vm-status"
+          ),
+          code: "punchfs-file-limit"))
+    }
+    if remoteControlOpen {
+      problems.append(
+        Problem(
+          summary: L10n.tr("rclone's remote control is open on this Mac"),
+          detail: L10n.tr(
+            "127.0.0.1:5572 answers on the Mac: Lima forwards the machine's rclone remote control, which has no password. Any web page open in a browser can send it commands - including deleting the backup on Google Drive. Add the portForwards rule from vm/cmsmb.yaml to the machine and restart it (see vm/README.md)."
+          ),
+          code: "rc-port-open"))
+    }
 
-    // Space on the Drive. Running out of it is a FATAL error for rclone, so
-    // the mount disappears and Time Machine loses its destination - this has
-    // to be known EARLIER, not from a failure. The threshold is counted in
-    // cycles, not in percent: at a growth of ~600 MB per hour, 30 GB is about
-    // two weeks of headroom.
+    // Space on the Drive. Running out of it stops every upload, and the
+    // machine's buffer then fills up - this has to be known EARLIER, not from
+    // a failure. The threshold is counted in cycles, not in percent: at a
+    // growth of ~600 MB per hour, 30 GB is about two weeks of headroom.
     if let driveFreeBytes {
       let freeGB = Int(driveFreeBytes / 1_073_741_824)
       if freeGB < driveFreeWarningGB {
@@ -397,10 +370,21 @@ public enum BackupHealth {
           Problem(
             summary: L10n.tr("Google Drive is running out of space (%@ GB)", "\(freeGB)"),
             detail: L10n.tr(
-              "Once it runs out, rclone exits with a storageQuotaExceeded error, the mount disappears and backups stop being made. At a growth of ~600 MB per hourly cycle that is about %@ days.",
+              "Once it runs out, rclone stops uploading, the machine's buffer fills up and backups stop being made. At a growth of ~600 MB per hourly cycle that is about %@ days.",
               "\(max(1, freeGB * 1024 / 600 / 24))"),
             code: "drive-low-space"))
       }
+    }
+
+    if let machineFreeGB, machineFreeGB < machineFreeWarningGB {
+      problems.append(
+        Problem(
+          summary: L10n.tr(
+            "The machine's disk is running out of space (%@ GB)", "\(machineFreeGB)"),
+          detail: L10n.tr(
+            "The upload buffer lives on this disk. The guard pauses Time Machine before it fills; if the upload does not catch up, backups stay paused."
+          ),
+          code: "machine-low-space"))
     }
 
     if let localFreeGB, localFreeGB < localFreeWarningGB {
@@ -408,7 +392,7 @@ public enum BackupHealth {
         Problem(
           summary: L10n.tr("The Mac's disk is running out of space (%@ GB)", "\(localFreeGB)"),
           detail: L10n.tr(
-            "The upload buffer lives on this disk. When it fills up, the guard pauses Time Machine, and with no space left at all rclone has nowhere to put data waiting to be uploaded."
+            "The machine's disk is a file on this disk and grows as the upload buffer fills. With no space left the machine cannot write the buffer, and Time Machine's local snapshots have nowhere to go either."
           ),
           code: "local-low-space"))
     }
@@ -419,10 +403,13 @@ public enum BackupHealth {
 
   /// Below this many GB free on Google Drive we report a problem.
   public static let driveFreeWarningGB = 30
-  /// Below this many GB free locally we report a problem. Higher than the
-  /// buffer guard's pause threshold - the watchdog should warn before the
-  /// guard starts braking.
+  /// Below this many GB free on the Mac we report a problem: the machine's
+  /// disk file can still grow by most of its 200 GiB buffer.
   public static let localFreeWarningGB = 120
+  /// Below this many GB free in the machine we report a problem. Above the
+  /// guard's pause threshold (`VMGuard.Thresholds.minFreeGiB`), so the
+  /// watchdog warns before the guard starts braking.
+  public static let machineFreeWarningGB = 50
 
   // MARK: - Live reading
 
@@ -535,71 +522,48 @@ public enum BackupHealth {
         ], lastSuccess: nil, lastAttempt: nil, preferencesReadable: false)
     }
 
-    let (lastSuccess, lastAttempt, result) = dates(
-      inPreferences: plist, volumeNamed: BackupImageService.volumeName)
+    let (lastSuccess, lastAttempt, result) = dates(inPreferences: plist)
 
-    let stats = await DriveBufferService.queueStats()
-    // `attachmentReading()`, not `attachment()`: the readability probe has a
-    // time limit and, once it is exceeded, returns `.unknown`. The watchdog
-    // then FINISHES the run and reports the lack of knowledge - that is the
-    // whole difference compared with the state until 26.09.2026, in which
-    // this read had no limit, and `StartInterval 1800` without `KeepAlive`
-    // means launchd will NOT start a second instance while the first one is
-    // alive. A single hang therefore silenced the watchdog PERMANENTLY, and
-    // silence in this system looks identical to health.
-    let reading = await BackupImageService.attachmentReading()
-    let attachment = reading.attachment
-    var deadErrno: Int32?
-    if case .dead(let errno) = attachment { deadErrno = errno }
-
-    // Three states, just like for the Time Machine destination below.
-    //
-    // We derive them from `attachment`, not from a second call to
-    // `BackupImageService.attachedState()` - the same mount-table read already
-    // gave `deadErrno` above, and two separate reads could diverge and
-    // produce a report describing two different moments.
-    let attached: Bool?
-    switch attachment {
-    // `.dead` is still an ATTACHED image - just a dead one, and that is a
-    // separate problem reported via `imageDeadErrno`.
-    case .attached, .dead: attached = true
-    case .detached: attached = false
-    case .unknown: attached = nil
+    // The machine first: everything below it is asked through it.
+    let machineRunning: Bool?
+    do {
+      machineRunning = (try await VMLayout.instanceStatus()) == "Running"
+    } catch {
+      machineRunning = nil
     }
-    // Three states, not two: `noAnswer` (a hung tmutil) has no right to
-    // pretend to be "destination changed" - see `evaluate`.
-    let registered: Bool?
-    switch await TimeMachineStatus.destinationReading() {
-    case .mountPoint(let path): registered = (path == BackupImageService.targetPath.path)
-    case .none: registered = false
-    case .noAnswer: registered = nil
+    let report = machineRunning == true ? await VMStatus.currentReport() : nil
+    let reading = report?.reading
+    let servicesHealthy = report.flatMap { VMStatus.servicesHealthy($0.services) }
+    let address = machineRunning == true ? await VMLayout.currentAddress() : nil
+    let registered = await VMStatus.timeMachineTargetsMachine(address: address)
+
+    var nearFileLimit = false
+    if let open = report?.punchfsOpenFiles, let limit = report?.punchfsFileLimit {
+      nearFileLimit = Double(open) > Double(limit) * VMStatus.fileWarningRatio
     }
 
     // Measuring free space can FAIL (statfs returns an error), and then
-    // `freeGB()` returns `nil`, not a made-up zero - see the comment on it.
-    let localFree = BufferGuardService.freeGB()
+    // `macFreeGB()` returns `nil`, not a made-up zero.
+    let localFree = macFreeGB()
 
-    var report = evaluate(
+    var health = evaluate(
       lastSuccess: lastSuccess,
       lastAttempt: lastAttempt,
       result: result,
       now: now,
-      // `mountedState()`, and NOT `isMounted` - the latter is
-      // `mountedState() ?? false`, i.e. it turns "I do not know" into "not
-      // working" and tells the person to fix a mount that may be fine.
-      mounted: DriveBufferService.mountedState(),
-      attached: attached,
+      machineRunning: machineRunning,
+      servicesHealthy: machineRunning == true ? servicesHealthy : nil,
       destinationRegistered: registered,
-      erroredFiles: stats?.erroredFiles ?? 0,
-      outOfSpace: stats?.outOfSpace ?? false,
-      queueReadable: stats != nil,
+      erroredFiles: reading?.buffer.erroredFiles ?? 0,
+      outOfSpace: reading?.buffer.outOfSpace ?? false,
+      queueReadable: reading?.buffer.unsentBytes != nil,
       // An unreadable Drive quota is NOT a separate alarm here: when rclone
-      // does not respond, harder signals above already say so, and a second
-      // message about the same thing only dilutes the first.
-      driveFreeBytes: (await DriveBufferService.remoteQuota())?.free,
+      // does not respond, harder signals above already say so.
+      driveFreeBytes: await driveFreeBytes(),
       localFreeGB: localFree,
-      imageDeadErrno: deadErrno,
-      imageProbeTimedOut: reading.probeTimedOut,
+      machineFreeGB: reading.map { Int($0.freeBytes / VMGuard.gib) },
+      punchfsNearFileLimit: nearFileLimit,
+      remoteControlOpen: VMStatus.remoteControlOpenOnMac(),
       maxAgeHours: maxAgeHours,
       // The REAL clock, not `now`: tests substitute a `now` from the past, and
       // uptime computed from it would come out negative, i.e. "startup in
@@ -607,9 +571,43 @@ public enum BackupHealth {
       withinStartupGrace: (systemUptime() ?? .infinity) < startupGraceMinutes * 60,
       backupRunning: await TimeMachineStatus.runningState())
 
-    report.problems.append(contentsOf: unmeasuredLocalDiskProblems(localFreeGB: localFree))
-    report.problems.append(contentsOf: await MachineBudget.currentProblems())
-    return report
+    health.problems.append(contentsOf: unmeasuredLocalDiskProblems(localFreeGB: localFree))
+    health.problems.append(contentsOf: await MachineBudget.currentProblems())
+    return health
+  }
+
+  /// Free space on the Mac's data volume, in GB. `nil` = NOT MEASURED (statfs
+  /// failed) - never a made-up zero, which would read as "the disk is full".
+  public static func macFreeGB() -> Int? {
+    var stats = statfs()
+    guard statfs("/System/Volumes/Data", &stats) == 0 else { return nil }
+    let available = UInt64(stats.f_bavail) * UInt64(stats.f_bsize)
+    return Int(available / 1_073_741_824)
+  }
+
+  /// Free space on the Google account (`rclone about`), through the Mac's
+  /// rclone. `nil` = no answer, or an account without a limit.
+  static func driveFreeBytes() async -> UInt64? {
+    guard
+      let result = try? await CMTooling.runRclone(
+        ["about", "--json", "\(DriveFolder.remoteName):"], timeout: 120),
+      result.succeeded
+    else { return nil }
+    return driveFreeBytes(aboutJSON: result.stdout)
+  }
+
+  static func driveFreeBytes(aboutJSON: String) -> UInt64? {
+    guard let data = aboutJSON.data(using: .utf8),
+      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+    func bytes(_ key: String) -> UInt64? {
+      if let v = json[key] as? NSNumber, v.int64Value >= 0 { return UInt64(v.int64Value) }
+      return nil
+    }
+    // `total` is sometimes absent (accounts without a limit) - then there is nothing to watch.
+    guard let total = bytes("total"), total > 0 else { return nil }
+    let used = bytes("used") ?? 0
+    return bytes("free") ?? (total > used ? total - used : 0)
   }
 
   /// Problem reported when the free-space measurement CANNOT be made.
@@ -617,23 +615,18 @@ public enum BackupHealth {
   /// `evaluate` treats `localFreeGB: nil` as "not asked" (that has been its
   /// contract from the start, and a dozen or so tests rely on it), but
   /// `currentReport` KNOWS it asked and it did not work. That is a separate
-  /// failure: the buffer guard decides on pausing Time Machine precisely on
-  /// this number, so when it is missing, it no longer protects the disk from
-  /// filling up.
+  /// failure: the machine's disk is a file on this disk, and nobody then
+  /// knows whether it still has room to grow.
   ///
   /// Split out of `currentReport()` SOLELY so that it can be tested:
-  /// `currentReport()` touches rclone, tmutil and hdiutil, so this branch
-  /// would otherwise be untestable - and an "I do not know" branch nobody has
-  /// checked is exactly the kind of dead code the review asked about (the
-  /// compiler warned earlier that an `Int` compared to `nil` always yields
-  /// false, i.e. that the branch was dead).
+  /// `currentReport()` touches rclone, tmutil and the machine.
   static func unmeasuredLocalDiskProblems(localFreeGB: Int?) -> [Problem] {
     guard localFreeGB == nil else { return [] }
     return [
       Problem(
         summary: L10n.tr("Cannot measure free space on the Mac's disk"),
         detail: L10n.tr(
-          "statfs('/System/Volumes/Data') returned an error. The buffer guard will then not pause Time Machine before the disk fills up, because it does not know the number it bases that decision on."
+          "statfs('/System/Volumes/Data') returned an error, so nobody knows whether the machine's disk can still grow on this Mac."
         ),
         code: "local-space-unmeasured")
     ]

@@ -1,0 +1,27 @@
+# CloudMachine: the Google Drive folder that holds the Time Machine bands.
+# /etc/cloudmachine/vm.env (CM_REMOTE) is written by `cloudmachine-agent vm-setup`;
+# /etc/cloudmachine/tm-ids.env (TM_UID, TM_GID) by the provisioning script.
+[Unit]
+Description=rclone: Google Drive -> /srv/tm
+After=network-online.target
+Wants=network-online.target
+Before=smbd.service
+ConditionPathExists=/etc/rclone/rclone.conf
+ConditionPathExists=/etc/cloudmachine/vm.env
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/cloudmachine/vm.env
+EnvironmentFile=/etc/cloudmachine/tm-ids.env
+ExecStart=/usr/local/bin/rclone mount ${CM_REMOTE} /srv/tm \
+  --config /etc/rclone/rclone.conf --allow-other --uid ${TM_UID} --gid ${TM_GID} --umask 002 \
+  --vfs-cache-mode full --vfs-cache-max-size 120G --vfs-cache-max-age 9999h --vfs-write-back 600s \
+  --cache-dir /var/cache/rclone --dir-cache-time 9999h --poll-interval 0 --attr-timeout 5m \
+  --transfers 8 --drive-chunk-size 32M --drive-use-trash=false --drive-stop-on-upload-limit \
+  --rc --rc-addr 127.0.0.1:5572 --rc-no-auth --log-file /var/log/rclone-tm.log --log-level INFO
+ExecStop=/bin/fusermount3 -uz /srv/tm
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

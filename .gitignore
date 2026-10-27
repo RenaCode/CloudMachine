@@ -8,6 +8,10 @@ logs/
 # rclone config (contains OAuth tokens) - never commit
 rclone.conf
 *.conf
+# ...except the machine's templates (Samba, FUSE, systemd drop-ins) - no
+# secrets in them; rclone.conf stays ignored there too.
+!vm/**/*.conf
+vm/**/rclone.conf
 
 # Generated launchd files (contain the user's local paths)
 launchd/*.plist

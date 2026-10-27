@@ -67,59 +67,47 @@ final class TimeMachineStatusTests: XCTestCase {
 
   // Regression for the bug of 2026-07-29: the code used to guess the mount
   // point from a hard-coded volume name instead of asking for the actual
-  // registered destination - after a manual volume rename (e.g. to
-  // "TimeMachine") the GUI/watchdogs wrongly showed "no volume". One entry in
-  // destinationinfo, because the function assumes exactly one active
-  // destination (an architectural guarantee, see its doc comment) - not "the
-  // first of many".
-  func testCurrentDestinationMountPoint_returnsRealMountPoint() {
-    let singleDestinationInfo = """
-      ====================================================
-      Name          : TimeMachine
-      Kind          : Local
-      Mount Point   : /Volumes/TimeMachine
-      ID            : C4B0056F-6CE8-486E-8726-75B45E2E7A56
-      """
+  /// The machine's share as this Mac's tmutil prints it (27.10.2026): a
+  /// network destination has no Mount Point while it is not mounted.
+  private let networkInfo = """
+    ====================================================
+    Name          : CloudMachine
+    Kind          : Network
+    URL           : smb://tm@192.168.64.10/CloudMachine
+    ID            : 469C129A-962F-4353-BD32-C8E797B4D20B
+    """
+
+  func testBlocksAreParsedInOrder() {
+    let destinations = TimeMachineStatus.destinations(destinationInfoOutput: twoDestinationsInfo)
     XCTAssertEqual(
-      TimeMachineStatus.currentDestinationMountPoint(
-        destinationInfoOutput: singleDestinationInfo),
-      "/Volumes/TimeMachine")
+      destinations.map(\.id),
+      [
+        "DEAD2007-8BC5-4D7B-BCF3-A5646B636CCD", "C4B0056F-6CE8-486E-8726-75B45E2E7A56",
+      ])
+    XCTAssertEqual(destinations.map(\.mountPoint), ["/Volumes/Mac", "/Volumes/TimeMachine"])
+    XCTAssertEqual(destinations.map(\.quotaGB), [300, nil])
   }
 
-  func testCurrentDestinationMountPoint_noDestinations_returnsNil() {
-    XCTAssertNil(TimeMachineStatus.currentDestinationMountPoint(destinationInfoOutput: ""))
+  func testNetworkDestinationHasURLAndNoMountPoint() {
+    let destinations = TimeMachineStatus.destinations(destinationInfoOutput: networkInfo)
+    XCTAssertEqual(
+      destinations,
+      [
+        TimeMachineStatus.Destination(
+          name: "CloudMachine", kind: "Network", url: "smb://tm@192.168.64.10/CloudMachine",
+          id: "469C129A-962F-4353-BD32-C8E797B4D20B")
+      ])
   }
 
-  func testDestinationID_matchesCorrectBlock() {
-    XCTAssertEqual(
-      TimeMachineStatus.destinationID(
-        forMountPointContaining: "/Volumes/TimeMachine", destinationInfoOutput: twoDestinationsInfo
-      ),
-      "C4B0056F-6CE8-486E-8726-75B45E2E7A56")
-    XCTAssertEqual(
-      TimeMachineStatus.destinationID(
-        forMountPointContaining: "/Volumes/Mac", destinationInfoOutput: twoDestinationsInfo),
-      "DEAD2007-8BC5-4D7B-BCF3-A5646B636CCD")
+  /// A `Name` line starts a new destination even without the separator.
+  func testBlocksWithoutSeparatorsStillSplit() {
+    let text = twoDestinationsInfo.replacingOccurrences(
+      of: "====================================================\n", with: "")
+    XCTAssertEqual(TimeMachineStatus.destinations(destinationInfoOutput: text).count, 2)
   }
 
-  func testDestinationQuotaGB_parsesGBValue() {
-    XCTAssertEqual(
-      TimeMachineStatus.destinationQuotaGB(
-        forMountPointContaining: "/Volumes/Mac", destinationInfoOutput: twoDestinationsInfo),
-      300)
-  }
-
-  func testDestinationQuotaGB_missingQuota_returnsNil() {
-    XCTAssertNil(
-      TimeMachineStatus.destinationQuotaGB(
-        forMountPointContaining: "/Volumes/TimeMachine", destinationInfoOutput: twoDestinationsInfo)
-    )
-  }
-
-  func testAllDestinationIDs_returnsBothIDs() {
-    XCTAssertEqual(
-      TimeMachineStatus.allDestinationIDs(destinationInfoOutput: twoDestinationsInfo),
-      ["DEAD2007-8BC5-4D7B-BCF3-A5646B636CCD", "C4B0056F-6CE8-486E-8726-75B45E2E7A56"])
+  func testNoDestinationsParseToNone() {
+    XCTAssertEqual(TimeMachineStatus.destinations(destinationInfoOutput: ""), [])
   }
 
   // MARK: - What counts as an answer
@@ -154,7 +142,7 @@ final class TimeMachineStatusTests: XCTestCase {
         from: ProcessResult(
           stdout: "tmutil: No destinations configured.\n", stderr: "", exitCode: code))
       XCTAssertNotNil(answer)
-      XCTAssertNil(TimeMachineStatus.currentDestinationMountPoint(destinationInfoOutput: answer!))
+      XCTAssertEqual(TimeMachineStatus.destinations(destinationInfoOutput: answer!), [])
     }
   }
 }

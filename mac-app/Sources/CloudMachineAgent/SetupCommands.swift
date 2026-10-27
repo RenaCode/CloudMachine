@@ -7,7 +7,8 @@ struct InstallLaunchd: AsyncParsableCommand {
     commandName: "install-launchd",
     abstract:
       L10n.tr(
-        "Generates and installs the launchd agents (Drive buffer, image attach, buffer guard).")
+        "Generates and installs the launchd agents (app, backup watchdog, machine start, machine guard)."
+      )
   )
 
   func run() async throws {
@@ -38,7 +39,7 @@ struct ConfigureRemote: AsyncParsableCommand {
     help:
       ArgumentHelp(
         L10n.tr(
-          "With --replace-existing: confirms that the new sign-in (scope 'drive.file') may not see the existing backup. The new token is still checked against the image first."
+          "With --replace-existing: confirms that the new sign-in (scope 'drive.file') may not see the existing backup. The new token is still checked against the backup first."
         ))
   )
   var acceptScopeChange = false
@@ -66,7 +67,7 @@ struct InstallDependencies: AsyncParsableCommand {
     commandName: "install-dependencies",
     abstract:
       L10n.tr(
-        "Installs rclone through Homebrew - WARNING: this build CANNOT mount, see install-rclone."
+        "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone."
       ))
 
   func run() async throws {
@@ -93,8 +94,8 @@ struct SetLimit: AsyncParsableCommand {
       throw ExitCode.failure
     }
     print(L10n.tr("Limit for this Mac: %@ GB.", "\(gb)"))
-    if let id = await TimeMachineStatus.destinationID(
-      forMountPointContaining: BackupImageService.targetPath.path)
+    if let destinations = await TimeMachineStatus.destinationsReading(),
+      let id = VMStatus.machineDestination(in: destinations, address: nil)?.id
     {
       print(L10n.tr("Now set the Time Machine quota (needs an administrator password):"))
       print("  " + MachineBudget.setQuotaCommand(destinationID: id, limitGB: gb))

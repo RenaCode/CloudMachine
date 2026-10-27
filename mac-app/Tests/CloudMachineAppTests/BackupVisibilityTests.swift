@@ -7,8 +7,7 @@ import XCTest
 ///
 /// - N-W1: the panel suggested `configure-remote --replace-existing` after
 ///   every credential change. The new sign-in (`drive.file`, another
-///   `client_id`) does not see the existing image; `create-image` then sees
-///   nothing to protect.
+///   `client_id`) does not see the existing backup.
 /// - S4: without `rclone.conf`, `rclone listremotes` exits 0 with nothing,
 ///   which read as "no remote" - and a Mac whose backup lives in
 ///   `mac-studio` got a new folder for good.
@@ -26,49 +25,6 @@ final class BackupVisibilityTests: XCTestCase {
   override func tearDownWithError() throws {
     try? FileManager.default.removeItem(at: directory)
     try super.tearDownWithError()
-  }
-
-  private func makeDirectory(_ path: String) throws {
-    try FileManager.default.createDirectory(
-      at: directory.appendingPathComponent(path), withIntermediateDirectories: true)
-  }
-
-  // MARK: - Traces on the local disk
-
-  /// The cache directory carries a suffix when the mount overrides backend
-  /// options - `gdrive{hekjD}` on this project's own Mac.
-  func testCachedFoldersAreFoundUnderTheSuffixedRemoteOnly() throws {
-    try makeDirectory("vfs/gdrive{hekjD}/CloudMachine/mac-studio/mac-studio.sparsebundle")
-    try makeDirectory("vfs/gdrive2/CloudMachine/someone-else")
-    try makeDirectory("vfs/gdrive/Other/not-ours")
-
-    XCTAssertEqual(InstallationTraces.cachedFolders(cacheDir: directory), ["mac-studio"])
-    XCTAssertEqual(
-      InstallationTraces.cachedImage(
-        folder: "mac-studio", imageName: "mac-studio", cacheDir: directory)?.lastPathComponent,
-      "mac-studio.sparsebundle")
-    XCTAssertNil(
-      InstallationTraces.cachedImage(
-        folder: "home-mac-studio-3", imageName: "home-mac-studio-3", cacheDir: directory))
-  }
-
-  func testNoCacheMeansNoTraces() {
-    XCTAssertEqual(InstallationTraces.cachedFolders(cacheDir: directory), [])
-  }
-
-  func testRememberedImageIsATraceOnlyForTheSameRemotePath() throws {
-    let marker = directory.appendingPathComponent("known-image")
-    InstallationTraces.rememberImage(remotePath: "CloudMachine/mac-studio", file: marker)
-
-    XCTAssertEqual(
-      InstallationTraces.knownImageTrace(
-        folder: "mac-studio", imageName: "mac-studio", remotePath: "CloudMachine/mac-studio",
-        knownImageFile: marker, cacheDir: directory),
-      marker.path)
-    XCTAssertNil(
-      InstallationTraces.knownImageTrace(
-        folder: "other", imageName: "other", remotePath: "CloudMachine/other",
-        knownImageFile: marker, cacheDir: directory))
   }
 
   // MARK: - S4: a missing rclone.conf is not "no remote"
@@ -91,39 +47,38 @@ final class BackupVisibilityTests: XCTestCase {
       RemoteConfigurer.configFileExists(in: ProcessResult(stdout: "", stderr: "x", exitCode: 1)))
   }
 
-  /// THE case: no file, and a mount of this remote has run here.
+  /// THE case: no file, and this Mac has already set up the machine.
   func testMissingConfigNextToABackupIsUnknown() {
-    XCTAssertNil(
-      RemoteConfigurer.absentAnswer(configFileExists: false, cachedFolders: ["mac-studio"]))
-    XCTAssertNil(
-      RemoteConfigurer.absentAnswer(configFileExists: nil, cachedFolders: ["mac-studio"]))
+    XCTAssertNil(RemoteConfigurer.absentAnswer(configFileExists: false, machineSetUp: true))
+    XCTAssertNil(RemoteConfigurer.absentAnswer(configFileExists: nil, machineSetUp: true))
   }
 
   func testNewMacWithoutConfigHasNoRemote() {
-    XCTAssertEqual(RemoteConfigurer.absentAnswer(configFileExists: false, cachedFolders: []), false)
-    XCTAssertEqual(RemoteConfigurer.absentAnswer(configFileExists: nil, cachedFolders: []), false)
-    // A file rclone read and found no remote in is an answer.
     XCTAssertEqual(
-      RemoteConfigurer.absentAnswer(configFileExists: true, cachedFolders: ["mac-studio"]), false)
+      RemoteConfigurer.absentAnswer(configFileExists: false, machineSetUp: false), false)
+    XCTAssertEqual(RemoteConfigurer.absentAnswer(configFileExists: nil, machineSetUp: false), false)
+    // A file rclone read and found no remote in is an answer.
+    XCTAssertEqual(RemoteConfigurer.absentAnswer(configFileExists: true, machineSetUp: true), false)
   }
 
-  /// Whatever rclone says, a cached `mac-studio` keeps this Mac in it.
-  func testCachedLegacyFolderKeepsTheLegacyName() {
-    for remote in [false, nil] as [Bool?] {
-      let evidence = DriveFolder.legacyEvidence(
-        remoteConfigured: remote, cachedFolders: ["mac-studio"])
-      XCTAssertEqual(evidence, true)
-      XCTAssertEqual(
-        DriveFolder.decide(
-          existing: nil, requested: nil, legacyEvidence: evidence,
-          machineKey: "home-mac-studio-3"),
-        .assign("mac-studio"))
-    }
-    XCTAssertEqual(DriveFolder.legacyEvidence(remoteConfigured: false, cachedFolders: []), false)
-    XCTAssertNil(DriveFolder.legacyEvidence(remoteConfigured: nil, cachedFolders: []))
+  /// What the old and the new token see is `bands/` in the machine's folder.
+  func testBackupPresenceIsTheBandsDirectory() {
     XCTAssertEqual(
-      DriveFolder.legacyEvidence(remoteConfigured: false, cachedFolders: ["home-mac-studio-3"]),
-      false)
+      RemoteConfigurer.classifyRemoteListing(succeeded: true, stdout: "bands/\n", stderr: ""),
+      .present)
+    XCTAssertEqual(
+      RemoteConfigurer.classifyRemoteListing(succeeded: true, stdout: "other/\n", stderr: ""),
+      .absent)
+    XCTAssertEqual(
+      RemoteConfigurer.classifyRemoteListing(
+        succeeded: false, stdout: "", stderr: "error: directory not found"),
+      .absent)
+    if case .unknown = RemoteConfigurer.classifyRemoteListing(
+      succeeded: false, stdout: "", stderr: "couldn't connect")
+    {
+    } else {
+      XCTFail("an error other than a missing folder is not an answer")
+    }
   }
 
   // MARK: - N-W1: replacing the connection
@@ -157,8 +112,8 @@ final class BackupVisibilityTests: XCTestCase {
         configured: true, replaceExisting: true, acceptScopeChange: true, remoteName: "gdrive"))
   }
 
-  func testNewTokenMustSeeTheImageTheOldOneSaw() {
-    // The old token saw the image: the new one has to as well.
+  func testNewTokenMustSeeTheBackupTheOldOneSaw() {
+    // The old token saw the backup: the new one has to as well.
     XCTAssertNil(
       RemoteConfigurer.replacementVerdict(before: .present, after: .present, remoteName: "gdrive"))
     XCTAssertEqual(
@@ -172,11 +127,4 @@ final class BackupVisibilityTests: XCTestCase {
       RemoteConfigurer.replacementVerdict(before: .absent, after: .absent, remoteName: "gdrive"))
   }
 
-  /// `create-image` with an image this Mac remembers but Drive does not show.
-  func testRememberedButInvisibleImageIsNotCreatedAgain() {
-    XCTAssertNil(BackupImageService.absentImageVerdict(trace: nil))
-    let refusal = BackupImageService.absentImageVerdict(trace: "/tmp/known-image")
-    XCTAssertEqual(refusal?.succeeded, false)
-    XCTAssertTrue(refusal?.message.contains("/tmp/known-image") == true)
-  }
 }
