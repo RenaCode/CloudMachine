@@ -58,10 +58,14 @@ public enum VMSetup {
         return fail(L10n.tr("limactl create failed: %@", VMLayout.errorTail(created)))
       }
     }
+    // The first boot of a new machine takes ~30 min on Ubuntu 24.04 (27.10.2026):
+    // Lima copies every `mode: data` file with `sudo -iu root`, and while
+    // cloud-final runs logind cannot open the session - pam_systemd waits 2 min
+    // per file. Lima gives up after 10 min by default; later boots take seconds.
     if status != "Running" {
       CMLogger.log("vm-setup: starting \(VMLayout.instanceName)")
       let started = try? await VMLayout.limactl(
-        ["start", "--tty=false", VMLayout.instanceName], timeout: 3600)
+        ["start", "--tty=false", "--timeout", "50m", VMLayout.instanceName], timeout: 3600)
       guard started?.succeeded == true else {
         return fail(
           L10n.tr(
