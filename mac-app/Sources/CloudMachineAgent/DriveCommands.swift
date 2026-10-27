@@ -15,6 +15,9 @@ struct MountDrive: AsyncParsableCommand {
       "Mounts Google Drive with a write buffer. Stays in the foreground (for launchd)."))
 
   func run() async throws {
+    // A mount left behind by an rclone that quit (27.10) would otherwise be
+    // "already mounted" forever - see `OrphanMount`.
+    await OrphanMount.clearBeforeMount()
     if DriveBufferService.isMounted {
       print(L10n.tr("Already mounted: %@", DriveBufferService.mountPoint.path))
       return
@@ -234,6 +237,10 @@ struct BufferGuard: AsyncParsableCommand {
     CMLogger.log(
       "Buffer guard: pause above \(highGB) GB backlog / resume below \(lowGB) GB / min. free on disk \(minFreeGB) GB"
     )
+
+    // Beside the loop, not in it: a probe of the loop hanging on a dead mount
+    // must not hold up the one check that clears it.
+    Task.detached { await OrphanMount.watch() }
 
     // Forever: the guard has to outlive every backup, not just the first one.
     while true {
