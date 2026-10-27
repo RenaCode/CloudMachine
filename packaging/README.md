@@ -6,8 +6,14 @@ brew install --cask renacode/tap/cloudmachine
 
 The cask lives in [RenaCode/homebrew-tap](https://github.com/RenaCode/homebrew-tap)
 and is generated: `.github/workflows/release.yml` fills
-`homebrew/cloudmachine.rb.in` with the version and the DMG's sha256 and pushes
-it to the tap. Edit the template here, never the copy in the tap.
+`homebrew/cloudmachine.rb.in` with the version and the DMG's sha256 and tries
+to push it to the tap. Edit the template here, never the copy in the tap.
+
+**Current state:** the release publishes the DMG, but the push of the cask to
+the tap is rejected - `homebrew-tap` protects `main` with a ruleset that
+requires a pull request (`GH013`). After each release the cask goes into the
+tap through a pull request opened by hand (1.3.13 and 1.3.14 went that way), so
+until it is merged the tap can be a version behind the latest release.
 
 ## Releases
 
@@ -95,7 +101,11 @@ grant Full Disk Access again.
    is `renacode-tap` (since 2026-10-23; before that a fine-grained PAT).
 
 Without the app the release is still published, but the job fails and
-prints the cask, so a missing tap update cannot go unnoticed.
+prints the cask, so a missing tap update cannot go unnoticed. The job also
+fails while the tap's `main` ruleset rejects the push (`GH013`, see the top of this
+file): the release and its DMG are there, only the tap is stale. Fill the
+template with the release's version and the sha256 from its `.sha256` file and
+open a pull request to `homebrew-tap` with the result.
 
 ## What the cask does and deliberately does not do
 
