@@ -283,7 +283,9 @@ public enum MachineBudget {
   /// Whether the Time Machine quota matches the limit. `nil` quota = none set.
   public static func quotaMatches(currentQuotaGB: Double?, limitGB: Int) -> Bool {
     guard let currentQuotaGB else { return false }
-    return Int(currentQuotaGB.rounded()) == timeMachineQuotaGB(forLimitGB: limitGB)
+    // tmutil rounds what it prints (`2,45 TB` = anything from 2445 to 2455).
+    let wanted = Double(timeMachineQuotaGB(forLimitGB: limitGB))
+    return abs(currentQuotaGB - wanted) <= max(1, wanted * 0.005)
   }
 
   /// One status line: usage against the limit, or why there is none.
