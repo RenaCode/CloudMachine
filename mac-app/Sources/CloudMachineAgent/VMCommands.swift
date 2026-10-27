@@ -86,10 +86,40 @@ struct VMGuardCommand: AsyncParsableCommand {
   )
   var minFreeGiB: Int = VMGuard.Thresholds().minFreeGiB
 
+  @Flag(
+    name: .long,
+    help: ArgumentHelp(
+      L10n.tr(
+        "Only print what the guard would decide - for trying thresholds on a throwaway machine.")))
+  var dryRun = false
+
   func run() async throws {
-    let guardian = VMGuard(
-      thresholds: .init(highGiB: highGiB, lowGiB: lowGiB, minFreeGiB: minFreeGiB))
-    await guardian.step()
+    let thresholds = VMGuard.Thresholds(highGiB: highGiB, lowGiB: lowGiB, minFreeGiB: minFreeGiB)
+    guard dryRun else {
+      await VMGuard(thresholds: thresholds).step()
+      return
+    }
+    // Time Machine is global: a guard tried on `cmtest` would pause the live
+    // machine's backup. Print the decision for every state it depends on.
+    guard let reading = await VMLayout.currentReading() else {
+      print(L10n.tr("No answer from the machine (rclone rc) - the guard would do nothing."))
+      throw ExitCode.failure
+    }
+    let unsent = reading.buffer.unsentBytes.map { "\($0 / VMGuard.gib)" } ?? "?"
+    print(
+      L10n.tr(
+        "Unsent %@ GiB, free %@ GiB (pause above %@ GiB unsent or below %@ GiB free, resume below %@ GiB).",
+        unsent, "\(reading.freeBytes / VMGuard.gib)", "\(highGiB)", "\(minFreeGiB)",
+        "\(lowGiB)"))
+    for (running, paused) in [(true, false), (true, true), (false, true)] {
+      let action = VMGuard.decide(
+        reading: reading, backupRunning: running, pausedByGuard: paused, thresholds: thresholds)
+      print(
+        L10n.tr(
+          "Backup %@, paused by the guard %@: %@",
+          running ? L10n.tr("running") : L10n.tr("stopped"),
+          paused ? L10n.tr("yes") : L10n.tr("no"), "\(action)"))
+    }
   }
 }
 

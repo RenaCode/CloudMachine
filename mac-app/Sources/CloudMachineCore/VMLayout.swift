@@ -38,6 +38,7 @@ public enum VMLayout {
     public static let rcAddress = "127.0.0.1:5572"
     /// Touched by `tm-meta-sync.service` after every successful sync.
     public static let metaSyncStamp = "/var/lib/cloudmachine/tm-meta-sync.ok"
+    public static let rcloneLog = "/var/log/rclone-tm.log"
   }
 
   /// The systemd units the share depends on, in start order, then the timer

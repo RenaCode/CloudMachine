@@ -252,6 +252,15 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertEqual(VMLayout.metaRemote, VMLayout.remote + "-meta")
   }
 
+  /// A refusal newer than the last upload means the limit still holds; `0`
+  /// from the machine means it does not; no line means not read.
+  func testUploadLimitIsReadFromTheEndOfTheLog() {
+    XCTAssertEqual(VMStatus.report(scriptOutput: "UPLOADLIMIT 1000 1600").uploadLimitAge, 600)
+    XCTAssertEqual(VMStatus.report(scriptOutput: "UPLOADLIMIT 0 1600").uploadLimitAge, 0)
+    XCTAssertNil(VMStatus.report(scriptOutput: "BUNDLEENV 1").uploadLimitAge)
+    XCTAssertTrue(VMStatus.script.contains("Received upload limit error"))
+  }
+
   /// 27.10.2026: the image's Info.plist, token and mapped/ were only on the
   /// machine's disk, so the bands on Drive could not be restored. The template
   /// must install the copy, and the copy must neither carry the bands nor

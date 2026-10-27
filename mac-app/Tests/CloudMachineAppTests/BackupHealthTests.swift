@@ -456,6 +456,21 @@ final class BackupHealthTests: XCTestCase {
     XCTAssertEqual(afterBoot.deferred.map(\.code), ["metadata-sync-stale"])
   }
 
+  /// While Google's daily limit holds, backups "succeed" into the machine's
+  /// buffer only - every other light is green, so this one must not be.
+  func testDailyUploadLimitIsReported() {
+    func health(_ age: TimeInterval?) -> BackupHealth.Report {
+      BackupHealth.evaluate(
+        lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
+        result: 0, now: now, machineRunning: true, servicesHealthy: true,
+        destinationRegistered: true, erroredFiles: 0, outOfSpace: false, queueReadable: true,
+        uploadLimitAge: age)
+    }
+    XCTAssertTrue(health(nil).healthy)
+    XCTAssertTrue(health(0).healthy)
+    XCTAssertEqual(health(1200).problems.map(\.code), ["drive-upload-limit"])
+  }
+
   func testUptimeCanBeRead() {
     let uptime = BackupHealth.systemUptime()
     XCTAssertNotNil(uptime)

@@ -181,6 +181,9 @@ public enum BackupHealth {
     // Seconds since the last copy of the image's metadata to Drive
     // (`.infinity` = never); `nil` = not known or nothing to copy yet.
     metaSyncAge: TimeInterval? = nil,
+    // Seconds since Google's daily upload limit last refused an upload, while
+    // it still holds (`VMStatus.Report.uploadLimitAge`); `nil`/0 = it does not.
+    uploadLimitAge: TimeInterval? = nil,
     maxAgeHours: Double = BackupHealth.maxAgeHours,
     // Whether the startup grace period is in progress - see `startupGraceMinutes`.
     withinStartupGrace: Bool = false,
@@ -379,6 +382,20 @@ public enum BackupHealth {
             "Info.plist, token and mapped/ of the backup image exist only on the machine's disk; without them the bands in %@ cannot be restored. The copy (tm-meta-sync, every 15 min) goes to %@. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u tm-meta-sync",
             VMLayout.remote, VMLayout.metaRemote),
           code: "metadata-sync-stale"))
+    }
+
+    // Not a failure that needs fixing - it passes by itself - but while it
+    // lasts every "successful" backup exists only on this Mac. Without this
+    // the panel stayed green: Time Machine finishes into the machine's
+    // buffer, and the guard pauses only at 110 GiB.
+    if let uploadLimitAge, uploadLimitAge > 0 {
+      problems.append(
+        Problem(
+          summary: L10n.tr("Google Drive's daily upload limit stops the upload"),
+          detail: L10n.tr(
+            "Google last refused an upload %@ ago (750 GB a day). Backups since then are only in the machine's buffer on this Mac. rclone retries every 5 min and resumes by itself when the limit passes; the guard pauses Time Machine if more than %@ GiB waits.",
+            formatAge(uploadLimitAge), "\(VMGuard.Thresholds().highGiB)"),
+          code: "drive-upload-limit"))
     }
 
     // Space on the Drive. Running out of it stops every upload, and the
@@ -589,6 +606,7 @@ public enum BackupHealth {
       metaSyncAge: report.flatMap {
         VMStatus.metaSyncOverdue($0) != nil ? $0.metaSync?.ageSeconds : nil
       },
+      uploadLimitAge: report?.uploadLimitAge,
       maxAgeHours: maxAgeHours,
       // The REAL clock, not `now`: tests substitute a `now` from the past, and
       // uptime computed from it would come out negative, i.e. "startup in

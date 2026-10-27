@@ -178,5 +178,9 @@ extension L10nPolish {
       "Zdalne sterowanie rclone jest otwarte na tym Macu",
     "statfs('/System/Volumes/Data') returned an error, so nobody knows whether the machine's disk can still grow on this Mac.":
       "statfs('/System/Volumes/Data') zwrócił błąd, więc nikt nie wie, czy dysk maszyny może jeszcze rosnąć na tym Macu.",
+    "Google Drive's daily upload limit stops the upload":
+      "Dzienny limit wysyłki Google Drive zatrzymał wysyłkę",
+    "Google last refused an upload %@ ago (750 GB a day). Backups since then are only in the machine's buffer on this Mac. rclone retries every 5 min and resumes by itself when the limit passes; the guard pauses Time Machine if more than %@ GiB waits.":
+      "Google ostatnio odrzucił wysyłkę %@ temu (750 GB na dobę). Kopie od tego czasu są tylko w buforze maszyny na tym Macu. rclone ponawia co 5 min i sam wznowi, gdy limit minie; strażnik wstrzyma Time Machine, jeśli czeka więcej niż %@ GiB.",
   ]
 }

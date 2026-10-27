@@ -58,6 +58,8 @@ extension L10nPolish {
       "Metadane obrazu:  ostatnia kopia %@ temu - ZALEGŁA (%@)",
     "Image metadata:   not copied yet - waits for vm-prepare-bundle":
       "Metadane obrazu:  jeszcze bez kopii - czeka na vm-prepare-bundle",
+    "Backup %@, paused by the guard %@: %@":
+      "Kopia %@, wstrzymana przez strażnika %@: %@",
     "Free in machine:  %@ GiB":
       "Wolne w maszynie: %@ GiB",
     "fsck_apfs -n found problems: %@":
@@ -106,6 +108,10 @@ extension L10nPolish {
       "Pakowanie przerobionego obrazu nie powiodło się: %@",
     "Packing the image failed: %@":
       "Pakowanie obrazu nie powiodło się: %@",
+    "No answer from the machine (rclone rc) - the guard would do nothing.":
+      "Brak odpowiedzi maszyny (rclone rc) - strażnik nic by nie zrobił.",
+    "Only print what the guard would decide - for trying thresholds on a throwaway machine.":
+      "Tylko wypisz, co strażnik by zdecydował - do prób progów na jednorazowej maszynie.",
     "Pause above this many GiB in the buffer.":
       "Wstrzymaj powyżej tylu GiB w buforze.",
     "Pause when the machine has less free than this, in GiB.":
@@ -170,5 +176,17 @@ extension L10nPolish {
       "Bufor wysyłki:    brak odpowiedzi rclone (rc %@)",
     "When Time Machine has created its empty image, stop the backup (tmutil stopbackup) and run: cloudmachine-agent vm-prepare-bundle":
       "Gdy Time Machine utworzy pusty obraz, zatrzymaj kopię (tmutil stopbackup) i uruchom: cloudmachine-agent vm-prepare-bundle",
+    "Unsent %@ GiB, free %@ GiB (pause above %@ GiB unsent or below %@ GiB free, resume below %@ GiB).":
+      "Niewysłane %@ GiB, wolne %@ GiB (pauza powyżej %@ GiB niewysłanych lub poniżej %@ GiB wolnego, wznowienie poniżej %@ GiB).",
+    "Upload:           Google's daily limit refused an upload %@ ago - rclone retries every 5 min and resumes by itself":
+      "Wysyłka:          dzienny limit Google odrzucił wysyłkę %@ temu - rclone ponawia co 5 min i sam wznowi",
+    "no":
+      "nie",
+    "running":
+      "trwa",
+    "stopped":
+      "zatrzymana",
+    "yes":
+      "tak",
   ]
 }
