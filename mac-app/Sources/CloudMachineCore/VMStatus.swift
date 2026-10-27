@@ -12,6 +12,12 @@ public enum VMStatus {
     public var punchfsOpenFiles: Int?
     public var punchfsFileLimit: Int?
     public var reading: VMLayout.Reading?
+    /// `vm-prepare-bundle` has run (`bundle.env` exists); `nil` = not read.
+    public var bundlePrepared: Bool?
+    /// How many images Time Machine has created in the machine; `nil` = not read.
+    public var imageCount: Int?
+
+    public init() {}
   }
 
   static let script =
@@ -19,6 +25,8 @@ public enum VMStatus {
     + "; pid=$(systemctl show -p MainPID --value punchfs); "
     + "if [ \"${pid:-0}\" -gt 0 ]; then echo FD $(ls /proc/$pid/fd | wc -l) "
     + "$(awk '/Max open files/{print $4}' /proc/$pid/limits); fi; "
+    + "echo BUNDLEENV $([ -s \(VMLayout.Guest.bundleEnv) ] && echo 1 || echo 0); "
+    + "echo IMAGES $(ls -d \(VMLayout.Guest.localRoot)/*.sparsebundle 2>/dev/null | wc -l); "
     + VMLayout.readingScript
 
   static func report(scriptOutput: String) -> Report {
@@ -30,41 +38,102 @@ public enum VMStatus {
       } else if fields.first == "FD", fields.count >= 2 {
         report.punchfsOpenFiles = Int(fields[1])
         if fields.count >= 3 { report.punchfsFileLimit = Int(fields[2]) }
+      } else if fields.first == "BUNDLEENV", fields.count >= 2 {
+        report.bundlePrepared = fields[1] == "1"
+      } else if fields.first == "IMAGES", fields.count >= 2 {
+        report.imageCount = Int(fields[1])
       }
     }
     report.reading = VMLayout.reading(scriptOutput: scriptOutput)
     return report
   }
 
-  /// Whether Time Machine's destinations include this machine; `nil` = unknown
-  /// (no address, or `tmutil` did not answer).
-  public static func timeMachineTargetsMachine() async -> Bool? {
-    guard let address = await VMLayout.currentAddress(),
-      let info = try? await ProcessRunner.run(
-        "/usr/bin/tmutil", ["destinationinfo"], timeout: TimeMachineStatus.commandTimeout),
-      info.succeeded || info.stdout.contains("No destinations")
-    else { return nil }
-    return targets(urls: destinationURLs(destinationInfo: info.stdout), address: address)
-  }
-
-  /// `smb://tm@<address>/...` among the destinations. The `@` and `/` keep
-  /// 192.168.64.1 from matching 192.168.64.10.
-  static func targets(urls: [String], address: String) -> Bool {
-    urls.contains { $0.contains("@\(address)/") }
-  }
-
-  /// `URL : smb://...` lines of `tmutil destinationinfo`.
-  static func destinationURLs(destinationInfo: String) -> [String] {
-    destinationInfo.split(separator: "\n").compactMap { raw in
-      let line = raw.trimmingCharacters(in: .whitespaces)
-      guard line.hasPrefix("URL") else { return nil }
-      let parts = line.split(separator: ":", maxSplits: 1)
-      return parts.count == 2 ? parts[1].trimmingCharacters(in: .whitespaces) : nil
+  /// The machine's services, as a verdict: every one `active`, except
+  /// `tm-bands-bind`, which is legitimately `inactive` until
+  /// `vm-prepare-bundle` (its condition skips it). `failed` is never fine: a
+  /// bind that failed after the image was prepared sends the bands to the
+  /// machine's local disk instead of Drive. `nil` = no answer for some unit.
+  public static func servicesHealthy(_ services: [String: String]) -> Bool? {
+    var unknown = false
+    for service in VMLayout.services {
+      guard let state = services[service] else {
+        unknown = true
+        continue
+      }
+      if state == "active" { continue }
+      if service == "tm-bands-bind" && state == "inactive" { continue }
+      return false
     }
+    return unknown ? nil : true
+  }
+
+  /// One run of the status script in the machine. `nil` = no answer (machine
+  /// down, limactl stuck); a report whose `reading` is `nil` means rclone in
+  /// the machine did not answer.
+  public static func currentReport() async -> Report? {
+    guard let result = try? await VMLayout.rootShell(script, timeout: 60), result.succeeded
+    else { return nil }
+    return report(scriptOutput: result.stdout)
+  }
+
+  /// Whether a destination is this machine's share: `smb://tm@<address>/CloudMachine`.
+  /// Without an address (the machine did not answer) any `tm@.../CloudMachine`
+  /// share counts - the question is then "does Time Machine point at a
+  /// CloudMachine at all". The `@` and `/` keep 192.168.64.1 from matching
+  /// 192.168.64.10.
+  public static func isMachineShare(_ url: String, address: String?) -> Bool {
+    guard url.hasPrefix("smb://"), url.hasSuffix("/\(VMLayout.shareName)"),
+      url.contains("\(VMLayout.smbUser)@") || url.contains("\(VMLayout.smbUser):")
+    else { return false }
+    guard let address else { return true }
+    return url.contains("@\(address)/")
+  }
+
+  /// This machine's destination among Time Machine's; `nil` when none is.
+  public static func machineDestination(
+    in destinations: [TimeMachineStatus.Destination], address: String?
+  ) -> TimeMachineStatus.Destination? {
+    destinations.first { $0.url.map { isMachineShare($0, address: address) } ?? false }
+  }
+
+  /// Whether Time Machine points at the machine; `nil` = `tmutil` did not answer.
+  public static func timeMachineTargetsMachine(address: String?) async -> Bool? {
+    guard let destinations = await TimeMachineStatus.destinationsReading() else { return nil }
+    return machineDestination(in: destinations, address: address) != nil
+  }
+
+  /// rclone's remote control in the machine listens on 127.0.0.1:5572 without
+  /// a password. Lima forwards the guest's localhost ports to the Mac's unless
+  /// the template says otherwise (`portForwards` in `vm/cmsmb.yaml`), and on
+  /// the Mac's localhost any web page can send it commands - including
+  /// deleting the backup, with no trash. `true` = something answers there.
+  public static func remoteControlOpenOnMac() -> Bool {
+    tcpPortAnswers(port: 5572)
+  }
+
+  /// A plain TCP connect to 127.0.0.1, with a short timeout.
+  static func tcpPortAnswers(port: UInt16, timeoutSeconds: Int = 1) -> Bool {
+    let socketFD = socket(AF_INET, SOCK_STREAM, 0)
+    guard socketFD >= 0 else { return false }
+    defer { close(socketFD) }
+    var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
+    setsockopt(
+      socketFD, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = port.bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let result = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        connect(socketFD, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    }
+    return result == 0
   }
 
   /// Above this share of the limit the status warns about descriptors.
-  static let fileWarningRatio = 0.8
+  public static let fileWarningRatio = 0.8
 
   public static func lines() async -> (lines: [String], healthy: Bool) {
     var out: [String] = []
@@ -87,16 +156,14 @@ public enum VMStatus {
     out.append(L10n.tr("Address:          %@", address ?? L10n.tr("unknown")))
     if address == nil { healthy = false }
 
-    let result = try? await VMLayout.rootShell(script, timeout: 60)
-    let report = report(scriptOutput: result?.stdout ?? "")
+    let report = await currentReport() ?? Report()
     for service in VMLayout.services {
       let state = report.services[service] ?? L10n.tr("unknown")
       out.append(
         L10n.tr("Service %@: %@", service.padding(toLength: 14, withPad: " ", startingAt: 0), state)
       )
-      // tm-bands-bind is legitimately inactive until vm-prepare-bundle.
-      if state != "active" && service != "tm-bands-bind" { healthy = false }
     }
+    if servicesHealthy(report.services) != true { healthy = false }
     if let reading = report.reading {
       out.append(
         L10n.tr(
@@ -121,24 +188,42 @@ public enum VMStatus {
       }
     }
 
-    let destination = try? await ProcessRunner.run(
-      "/usr/bin/tmutil", ["destinationinfo"], timeout: TimeMachineStatus.commandTimeout)
-    if let destination, destination.succeeded || destination.stdout.contains("No destinations") {
-      let urls = destinationURLs(destinationInfo: destination.stdout)
-      let ours = urls.first { url in address.map { url.contains("\($0)/") } ?? false }
-      if let ours {
-        out.append(L10n.tr("Time Machine:     %@", ours))
+    if let destinations = await TimeMachineStatus.destinationsReading() {
+      let urls = destinations.compactMap(\.url)
+      if let ours = address.flatMap({ machineDestination(in: destinations, address: $0)?.url }) {
+        out.append(L10n.tr("Time Machine:     %@", redactedPassword(ours)))
       } else {
         out.append(
           L10n.tr(
             "Time Machine:     NOT pointing at the machine (%@)",
-            urls.isEmpty ? L10n.tr("no SMB destination") : urls.joined(separator: ", ")))
+            urls.isEmpty
+              ? L10n.tr("no SMB destination")
+              : urls.map(redactedPassword).joined(separator: ", ")))
         healthy = false
       }
     } else {
       out.append(L10n.tr("Time Machine:     tmutil did not answer"))
       healthy = false
     }
+    if remoteControlOpenOnMac() {
+      out.append(
+        L10n.tr(
+          "Remote control:   OPEN on the Mac at 127.0.0.1:5572 - any web page can send rclone commands; see vm/README.md (portForwards)"
+        ))
+      healthy = false
+    }
     return (out, healthy)
+  }
+
+  /// `smb://tm:secret@host/...` -> `smb://tm:***@host/...`. tmutil prints
+  /// the URL without the password, but a status line must never be the one
+  /// place it leaks from.
+  static func redactedPassword(_ url: String) -> String {
+    guard let scheme = url.range(of: "://"), let at = url.range(of: "@"),
+      scheme.upperBound < at.lowerBound
+    else { return url }
+    let userInfo = url[scheme.upperBound..<at.lowerBound]
+    guard let colon = userInfo.firstIndex(of: ":") else { return url }
+    return url.replacingCharacters(in: url.index(after: colon)..<at.lowerBound, with: "***")
   }
 }

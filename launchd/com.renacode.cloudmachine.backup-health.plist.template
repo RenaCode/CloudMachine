@@ -23,8 +23,9 @@
     Every 30 minutes, with an hourly cycle and a 3 h threshold - often enough
     that a broken cycle does not sit unnoticed for a day, and rarely enough to
     cost nothing. The watchdog reads the local Time Machine preferences file,
-    NOT the Google Drive mount: a supervisor that hangs together with what it
-    supervises goes silent exactly when it should speak.
+    not the backup destination, and every question to the machine has a time
+    limit: a supervisor that hangs together with what it supervises goes
+    silent exactly when it should speak.
   -->
   <key>StartInterval</key>
   <integer>1800</integer>

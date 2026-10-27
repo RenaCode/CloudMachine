@@ -40,10 +40,8 @@ public enum ProcessRunnerError: LocalizedError {
 /// still fires later, it MUST do nothing instead of causing a fatal error with
 /// a second `continuation.resume`.
 ///
-/// Internal rather than private: since 26.09.2026 `ImageProbe` gives up on a
-/// deadline in exactly the same way (a probe stuck in the kernel may answer
-/// later or never), so both paths must share the same, proven semantics of
-/// "whoever was first resumes".
+/// Internal rather than private, so its "whoever was first resumes" semantics
+/// can be tested on their own.
 final class ContinuationGuard: @unchecked Sendable {
   private let lock = NSLock()
   private var done = false

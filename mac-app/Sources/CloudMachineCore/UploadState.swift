@@ -101,7 +101,7 @@ public enum UploadState: Equatable, Sendable {
   }
 
   /// What it means and what to do about it. Written for reading, not for
-  /// diagnosis - whoever needs numbers has `cloudmachine-agent drive-status`.
+  /// diagnosis - whoever needs numbers has `cloudmachine-agent vm-status`.
   public var explanation: String {
     switch self {
     case .mountDown:

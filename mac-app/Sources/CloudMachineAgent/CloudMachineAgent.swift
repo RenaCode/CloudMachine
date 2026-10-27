@@ -11,32 +11,24 @@ struct CloudMachineAgent: AsyncParsableCommand {
         "CloudMachine - verification, Google Drive setup and installation. Called by launchd on a schedule, or by hand from Terminal."
       ),
     subcommands: [
-      InstallLaunchd.self,
+      // Setup, in the order it is done.
+      InstallRclone.self,
       ConfigureRemote.self,
+      VMSetupCommand.self,
+      VMPrepareBundle.self,
+      InstallLaunchd.self,
+      // Running.
+      VMStatusCommand.self,
+      VMGuardCommand.self,
+      BackupHealthCommand.self,
+      PrepareShutdown.self,
       SetLimit.self,
+      // Building and the rest.
       InstallDependencies.self,
       BuildApp.self,
       MakeDmg.self,
       SetupSigningCert.self,
-      // The Google Drive layer - replaced the scripts in gdrive/.
-      InstallRclone.self,
-      InstallFuse.self,
-      MountDrive.self,
-      CreateImage.self,
-      AttachImage.self,
       Version.self,
-      DetachImage.self,
-      VerifyImage.self,
-      BufferGuard.self,
-      BackupHealthCommand.self,
-      PrepareShutdown.self,
-      RestartMount.self,
-      DriveStatus.self,
-      // The machine layout (Time Machine over SMB) - see vm/README.md.
-      VMSetupCommand.self,
-      VMPrepareBundle.self,
-      VMGuardCommand.self,
-      VMStatusCommand.self,
     ]
   )
 }

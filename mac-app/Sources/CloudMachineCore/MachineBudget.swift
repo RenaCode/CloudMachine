@@ -7,9 +7,9 @@ import Foundation
 ///
 /// - **Time Machine quota.** Time Machine keeps a destination under its quota
 ///   by deleting the oldest backups. The quota is set below the limit, because
-///   the image on Drive is larger than the backup inside it: freed blocks are
-///   never returned to the band files (29 Sep 2026: 417 GiB of data in 589 GiB
-///   of bands, 71%). Setting it needs root, so the app offers the command.
+///   the bands on Drive take more than the backup inside them (29 Sep 2026,
+///   with the disk-image layout: 417 GiB of data in 589 GiB of bands, 71%).
+///   Setting it needs root, so the app offers the command.
 /// - **An alarm on the real usage**: the size of this Mac's folder on Drive,
 ///   measured with `rclone size`, compared with the limit. The watchdog warns
 ///   from 90% and reports a failure above 100%. Nothing is deleted by it.
@@ -142,7 +142,7 @@ public enum MachineBudget {
   /// rclone did not answer - never zero, which would read as "empty".
   @discardableResult
   public static func measureUsage(now: Date = Date()) async -> Usage? {
-    let path = "\(DriveBufferService.remoteName):\(DriveBufferService.remotePath)"
+    let path = VMLayout.remote
     guard let result = try? await CMTooling.runRclone(["size", "--json", path], timeout: 300),
       result.succeeded, let bytes = bytes(fromSizeJSON: result.stdout)
     else {
@@ -204,7 +204,7 @@ public enum MachineBudget {
         BackupHealth.Problem(
           summary: L10n.tr("This Mac is close to its space limit on Google Drive"),
           detail: L10n.tr(
-            "%@ GB of %@ GB used. Time Machine deletes the oldest backups to stay within its quota; check that the quota is set (drive-status).",
+            "%@ GB of %@ GB used. Time Machine deletes the oldest backups to stay within its quota; check that the quota is set (vm-status).",
             used, "\(limitGB)"),
           code: "drive-budget-near")
       ]
@@ -213,7 +213,7 @@ public enum MachineBudget {
         BackupHealth.Problem(
           summary: L10n.tr("This Mac is over its space limit on Google Drive"),
           detail: L10n.tr(
-            "%@ GB of %@ GB used. Set the Time Machine quota (command in the app window or drive-status), or raise the limit.",
+            "%@ GB of %@ GB used. Set the Time Machine quota (command in the app window or vm-status), or raise the limit.",
             used, "\(limitGB)"),
           code: "drive-budget-exceeded")
       ]
@@ -224,12 +224,12 @@ public enum MachineBudget {
     let detail: String
     if let usage {
       detail = L10n.tr(
-        "The last measurement (%@ GB) is from %@, %@ ago - rclone size has not answered since. Until it does, nothing watches the %@ GB limit: the 90%% and 100%% alarms stay silent. Check drive-status, or press Measure now in the window.",
+        "The last measurement (%@ GB) is from %@, %@ ago - rclone size has not answered since. Until it does, nothing watches the %@ GB limit: the 90%% and 100%% alarms stay silent. Check vm-status, or press Measure now in the window.",
         String(format: "%.0f", usage.gb), BackupHealth.stamp(usage.measuredAt),
         BackupHealth.formatAge(now.timeIntervalSince(usage.measuredAt)), "\(limitGB)")
     } else {
       detail = L10n.tr(
-        "rclone size has not answered even once. Until it does, nothing watches the %@ GB limit: the 90%% and 100%% alarms stay silent. Check drive-status, or press Measure now in the window.",
+        "rclone size has not answered even once. Until it does, nothing watches the %@ GB limit: the 90%% and 100%% alarms stay silent. Check vm-status, or press Measure now in the window.",
         "\(limitGB)")
     }
     return BackupHealth.Problem(

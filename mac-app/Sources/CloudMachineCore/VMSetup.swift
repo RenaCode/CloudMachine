@@ -150,8 +150,21 @@ public enum VMSetup {
     return Result(succeeded: true, messages: messages, destinationCommand: command)
   }
 
+  /// The SMB password `vm-setup` stored, if it did. Never creates one.
+  public static func storedPassword(file: URL = VMLayout.passwordFile) -> String? {
+    guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  /// The same command with the password masked - for showing on screen; the
+  /// real one goes only to the clipboard.
+  public static func maskedDestinationCommand(address: String) -> String {
+    "sudo tmutil setdestination 'smb://\(VMLayout.smbUser):••••••@\(address)/\(VMLayout.shareName)'"
+  }
+
   /// `sudo tmutil setdestination smb://tm:<password>@<address>/CloudMachine`.
-  static func destinationCommand(password: String, address: String) -> String {
+  public static func destinationCommand(password: String, address: String) -> String {
     let allowed = CharacterSet.alphanumerics
     let user = VMLayout.smbUser
     let encoded = password.addingPercentEncoding(withAllowedCharacters: allowed) ?? password

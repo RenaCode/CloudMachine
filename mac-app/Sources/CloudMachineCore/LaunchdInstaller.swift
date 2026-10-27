@@ -3,9 +3,9 @@ import Foundation
 /// Generates `.plist` files with the path to the compiled `cloudmachine-agent`
 /// binary substituted in and installs them as LaunchAgents (the logged-in
 /// user's session) - generically installs EVERY `*.plist.template` template
-/// found in `launchd/` (currently `verify-watchdog` and `archive-watchdog`).
-/// The removed earlier network NFS mount architecture additionally had
-/// templates for mount/backup/quota here, which went away with it.
+/// found in `launchd/`: `app` (the menu bar), `backup-health` (the watchdog),
+/// `vm-start` (boots the machine at login) and `vm-guard` (the machine's
+/// upload-buffer guard).
 public enum LaunchdInstaller {
   public static var launchAgentsDir: URL {
     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
@@ -50,39 +50,8 @@ public enum LaunchdInstaller {
     // app bundle.
     CMTooling.linkCommandIntoPath()
 
-    // Installation reloads the agents, including the one holding the mount.
-    // Doing that with the image attached pulls the floor out from under it
-    // mid-way - and detaching is a write that still has to reach the Drive. I
-    // made this mistake three times in a row, so we no longer rely on
-    // remembering it.
-    if BackupImageService.isAttached {
-      // A dead image (see `ImageProbe`) cannot be detached politely -
-      // `hdiutil detach` without `-force` refuses, and the installation would
-      // get stuck on exactly the state it is meant to fix.
-      // ONLY `.dead`, not `!isUsable`. `.unknown` is not "usable" either, but
-      // it means "I do not know" - and `detach -force` on a device that may be
-      // alive abandons writes waiting to be uploaded to the Drive. Since
-      // 26.09.2026 `.unknown` is REACHABLE here (the readability probe has a
-      // time limit and, once it is exceeded, returns exactly this state), so
-      // the difference is no longer theoretical. Without `-force`,
-      // `hdiutil detach` simply refuses, the installation aborts with a
-      // message and nobody loses data.
-      var force = false
-      if case .dead = await BackupImageService.attachment() { force = true }
-      CMLogger.log(
-        "Agent installation: detaching the image first\(force ? " (dead - forcefully)" : "") and waiting for the upload"
-      )
-      let detached = await BackupImageService.detach(force: force)
-      CMLogger.log("Agent installation: \(detached.message)")
-      if !detached.succeeded {
-        return CMActionResult(
-          succeeded: false,
-          message: L10n.tr(
-            "The image was not detached before reloading the agents - aborting, so as not to lose data waiting in the buffer.\n%@",
-            detached.message))
-      }
-    }
-
+    // Reloading touches nothing that holds data: `vm-start` on a running
+    // machine only says so, the others are one-shot checks.
     guard let templatesDir = CMPaths.launchdTemplatesDir else {
       return CMActionResult(
         succeeded: false, message: L10n.tr("Could not find the launchd/ directory with templates."))
@@ -115,18 +84,8 @@ public enum LaunchdInstaller {
 
     try? FileManager.default.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
 
-    // Migration: an older version installed a separate agent
-    // "com.renacode.cloudmachine.mount", long since replaced by
-    // mount-watchdog - remove it if it is still loaded on someone's Mac.
-    let oldMountPlist = launchAgentsDir.appendingPathComponent(
-      "com.renacode.cloudmachine.mount.plist")
-    if FileManager.default.fileExists(atPath: oldMountPlist.path) {
-      CMLogger.log(
-        "Removing the obsolete agent com.renacode.cloudmachine.mount (replaced by mount-watchdog)."
-      )
-      _ = try? await ProcessRunner.run("/bin/launchctl", ["unload", oldMountPlist.path])
-      try? FileManager.default.removeItem(at: oldMountPlist)
-    }
+    // The disk-image layout's agents go first - see `AgentRepair.retired`.
+    await AgentRepair.removeRetiredAgents()
 
     // The interface has to be KILLED before launchd starts it again.
     //
@@ -151,44 +110,6 @@ public enum LaunchdInstaller {
         message: L10n.tr("Could not list the templates in %@.", templatesDir.path))
     }
 
-    return installVerdict(
-      await installAgents(
-        templates: templates, into: launchAgentsDir, agentBin: agentBin, logDir: CMPaths.logDir))
-  }
-
-  /// The machine's agents (`launchd/vm/`): `vm-start` and `vm-guard`.
-  ///
-  /// A subdirectory on purpose: `install()` installs every template at the
-  /// top of `launchd/`, and a Mac on the attached-image layout must not get
-  /// an agent that starts a machine it does not have. These go in only when
-  /// asked for (`vm-setup --install-agents`). No image detach here: reloading
-  /// them does not touch the Drive mount.
-  public static func installVMAgents() async -> CMActionResult {
-    guard let templatesDir = CMPaths.launchdTemplatesDir?.appendingPathComponent("vm") else {
-      return CMActionResult(
-        succeeded: false, message: L10n.tr("Could not find the launchd/ directory with templates."))
-    }
-    guard let resolvedAgentBin = CMPaths.agentBinaryPath else {
-      return CMActionResult(
-        succeeded: false,
-        message: L10n.tr("Could not find the compiled cloudmachine-agent binary."))
-    }
-    let agentBin: URL
-    do {
-      agentBin = try stableAgentBinaryPath(resolvedFrom: resolvedAgentBin)
-    } catch {
-      return CMActionResult(
-        succeeded: false, message: L10n.tr("ABORTED: %@", error.localizedDescription))
-    }
-    guard
-      let templates = try? FileManager.default.contentsOfDirectory(
-        at: templatesDir, includingPropertiesForKeys: nil)
-    else {
-      return CMActionResult(
-        succeeded: false,
-        message: L10n.tr("Could not list the templates in %@.", templatesDir.path))
-    }
-    try? FileManager.default.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true)
     return installVerdict(
       await installAgents(
         templates: templates, into: launchAgentsDir, agentBin: agentBin, logDir: CMPaths.logDir))
@@ -244,8 +165,8 @@ public enum LaunchdInstaller {
       } catch {
         // Previously: `guard ... else { continue }`. A template that could not
         // be read dropped out of the installation WITHOUT A TRACE - neither in
-        // the log nor in the result - and `buffer-guard` is the only protection
-        // of the disk on this machine.
+        // the log nor in the result - and `vm-guard` is the only protection of
+        // the machine's disk.
         let reason = L10n.tr("could not read the template %@", template.lastPathComponent)
         outcome.failed.append(.init(label: label, reason: reason))
         log("NOT installed \(label): \(reason)")
@@ -288,7 +209,7 @@ public enum LaunchdInstaller {
   ///
   /// ONE successful agent was enough for `succeeded: true` and for the message
   /// "Installed agents: ...", which listed only the successful ones. The
-  /// observed result: `buffer-guard` did not load, the installer reported
+  /// observed result: the buffer guard did not load, the installer reported
   /// success, the only protection of the disk was not working and nobody knew
   /// - and nobody who does not know the list by heart sees a name missing from
   /// it.
@@ -305,7 +226,7 @@ public enum LaunchdInstaller {
       return CMActionResult(
         succeeded: false,
         message: L10n.tr(
-          "Agent installation INCOMPLETE - %@ of %@ did not go in:\n%@\n%@\nEvery missing agent is a function that has silently stopped working (buffer-guard watches the disk, backup-health reports failures). Fix the cause and repeat the installation.",
+          "Agent installation INCOMPLETE - %@ of %@ did not go in:\n%@\n%@\nEvery missing agent is a function that has silently stopped working (vm-guard watches the machine's buffer, backup-health reports failures). Fix the cause and repeat the installation.",
           "\(outcome.failed.count)", "\(outcome.failed.count + outcome.installed.count)", list,
           wentIn))
     }

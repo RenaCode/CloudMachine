@@ -57,7 +57,7 @@ public struct VMGuard: Sendable {
     return .nothing
   }
 
-  static let gib: Int64 = 1 << 30
+  public static let gib: Int64 = 1 << 30
 
   /// What the guard reads and does - replaceable, so the tests walk the whole
   /// step (marker included) without a machine or tmutil.
@@ -85,7 +85,7 @@ public struct VMGuard: Sendable {
           try? FileManager.default.removeItem(at: VMLayout.guardMarker)
         }
       },
-      tmutil: { await BufferGuardService.tmutil($0) },
+      tmutil: { await TimeMachineStatus.control($0) },
       log: { CMLogger.log($0) },
       minute: { Calendar.current.component(.minute, from: Date()) },
       excludeMachine: { await VMLayout.excludeMachineFromTimeMachine() })

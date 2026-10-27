@@ -18,7 +18,7 @@ import Foundation
 ///
 /// The marker is NOT an alert channel. An external channel (mail, push) is the
 /// owner's architectural decision, not a fix - here we only record a fact that
-/// `drive-status` and the panel SHOW when a person looks for themselves.
+/// `vm-status` and the panel SHOW when a person looks for themselves.
 ///
 /// The file lives in `appSupportDir`, next to the alert state
 /// (`health-alert.json`), not in the buffer or in the image - the watchdog must

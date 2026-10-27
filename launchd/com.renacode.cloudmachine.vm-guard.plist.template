@@ -6,8 +6,8 @@
   <string>com.renacode.cloudmachine.vm-guard</string>
   <!--
     The machine's buffer guard (`vm-guard`): one check per run, so
-    StartInterval rather than KeepAlive. Installed only by
-    `cloudmachine-agent vm-setup --install-agents`, never by install-launchd.
+    StartInterval rather than KeepAlive. Installed by install-launchd
+    (also run by `vm-setup --install-agents`).
   -->
   <key>ProgramArguments</key>
   <array>

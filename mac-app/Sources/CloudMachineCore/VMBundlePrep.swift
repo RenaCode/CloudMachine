@@ -46,7 +46,9 @@ public enum VMBundlePrep {
     case .some(true):
       // A backup to another destination does not write this image (a second
       // machine, or a throwaway one next to `cmsmb`); one that may is stopped.
-      guard await VMStatus.timeMachineTargetsMachine() == false else {
+      let address = await VMLayout.currentAddress()
+      guard let address, await VMStatus.timeMachineTargetsMachine(address: address) == false
+      else {
         return fail(L10n.tr("Time Machine is backing up - stop it first: tmutil stopbackup"))
       }
       step("Time Machine is backing up, but not to \(VMLayout.instanceName) - going on")

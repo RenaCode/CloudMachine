@@ -7,9 +7,6 @@ import Foundation
 /// destination (`tmutil setdestination` -> error 45, even for a local
 /// sparsebundle), and NetFS refuses SMB to the Mac's own address. A share
 /// served from a VM on the Mac is what Time Machine still accepts.
-///
-/// This is the new path, next to the attached-image one; neither touches the
-/// other.
 public enum VMLayout {
   /// Lima instance name: `cmsmb`, which the launchd agents look up.
   /// `CLOUDMACHINE_VM_INSTANCE` points the commands at another machine -
@@ -46,19 +43,20 @@ public enum VMLayout {
 
   /// Host-side state: `~/.cloudmachine/vm`.
   public static var hostDir: URL {
-    DriveBufferService.root.appendingPathComponent("vm")
+    CMPaths.stateDir.appendingPathComponent("vm")
   }
   /// The SMB password of `tm`, mode 600. Never logged.
   public static var passwordFile: URL { hostDir.appendingPathComponent("tm-smb.pass") }
   /// Present while the guard holds Time Machine paused; it resumes only then.
   public static var guardMarker: URL { hostDir.appendingPathComponent("guard-paused") }
 
-  /// `gdrive:CloudMachine/<folder>-tm`: a folder of its own, next to the
-  /// attached image's folder, so the two layouts never share bands.
+  /// `gdrive:CloudMachine/<folder>-tm`. The `-tm` suffix keeps it apart from
+  /// `CloudMachine/<folder>`, where the retired disk-image layout kept its
+  /// image - the two never share bands.
   /// `CLOUDMACHINE_VM_REMOTE` replaces it whole (see `instanceName`).
   public static var remote: String {
     override("CLOUDMACHINE_VM_REMOTE")
-      ?? "\(DriveBufferService.remoteName):\(DriveBufferService.remoteRoot)/\(DriveFolder.name)-tm"
+      ?? "\(DriveFolder.remoteName):\(DriveFolder.remoteRoot)/\(DriveFolder.name)-tm"
   }
 
   /// Lima's directory with the machine's disk (`LIMA_HOME`, else `~/.lima`).
@@ -71,8 +69,7 @@ public enum VMLayout {
   }
 
   /// Keeps `limaHome` out of Time Machine. The exclusion is an xattr on the
-  /// directory, so it is renewed rather than set once (as for the old buffer,
-  /// `DriveBufferService.excludeBufferFromTimeMachine`).
+  /// directory, so it is renewed rather than set once.
   @discardableResult
   public static func excludeMachineFromTimeMachine() async -> Bool {
     let result = try? await ProcessRunner.run(
@@ -198,14 +195,22 @@ public enum VMLayout {
     public var uploadsInProgress: Int
     /// Bytes still to upload; `nil` = `vfs/queue` did not answer.
     public var unsentBytes: Int64?
+    /// Bands rclone gave up on: they exist only in the machine's buffer, so
+    /// the backup on Drive is incomplete until they are uploaded.
+    public var erroredFiles: Int
+    /// rclone has nothing left to evict - the buffer holds only unsent data.
+    public var outOfSpace: Bool
 
     public init(
-      bytesUsed: Int64, uploadsQueued: Int, uploadsInProgress: Int, unsentBytes: Int64? = nil
+      bytesUsed: Int64, uploadsQueued: Int, uploadsInProgress: Int, unsentBytes: Int64? = nil,
+      erroredFiles: Int = 0, outOfSpace: Bool = false
     ) {
       self.bytesUsed = bytesUsed
       self.uploadsQueued = uploadsQueued
       self.uploadsInProgress = uploadsInProgress
       self.unsentBytes = unsentBytes
+      self.erroredFiles = erroredFiles
+      self.outOfSpace = outOfSpace
     }
   }
 
@@ -227,7 +232,11 @@ public enum VMLayout {
     return BufferStats(
       bytesUsed: used,
       uploadsQueued: (cache["uploadsQueued"] as? NSNumber)?.intValue ?? 0,
-      uploadsInProgress: (cache["uploadsInProgress"] as? NSNumber)?.intValue ?? 0)
+      uploadsInProgress: (cache["uploadsInProgress"] as? NSNumber)?.intValue ?? 0,
+      erroredFiles: (cache["erroredFiles"] as? NSNumber)?.intValue ?? 0,
+      // A flag, not a counter: older rclone does not report it, and its
+      // absence cannot be mistaken for "buffer full".
+      outOfSpace: (cache["outOfSpace"] as? Bool) ?? false)
   }
 
   /// One reading of the machine for the guard and the status: the rclone
@@ -235,6 +244,11 @@ public enum VMLayout {
   public struct Reading: Equatable, Sendable {
     public var buffer: BufferStats
     public var freeBytes: Int64
+
+    public init(buffer: BufferStats, freeBytes: Int64) {
+      self.buffer = buffer
+      self.freeBytes = freeBytes
+    }
   }
 
   /// The script prints `vfs/stats` JSON on one line, `CMQUEUE <vfs/queue JSON>`
@@ -282,6 +296,20 @@ public enum VMLayout {
       result.succeeded
     else { return nil }
     return vmAddress(ipAddrOutput: result.stdout)
+  }
+
+  /// Starts a stopped machine (`limactl start`); on a running one Lima only
+  /// says so. The first start after a Mac restart can take minutes: rclone
+  /// re-reads its buffer before it serves anything.
+  public static func start() async -> CMActionResult {
+    let started = try? await limactl(["start", "--tty=false", instanceName], timeout: 1800)
+    guard started?.succeeded == true else {
+      return CMActionResult(
+        succeeded: false,
+        message: L10n.tr("limactl start failed: %@", errorTail(started)))
+    }
+    return CMActionResult(
+      succeeded: true, message: L10n.tr("Machine %@ is running.", instanceName))
   }
 
   /// `Running`, `Stopped`, ... or `nil` when there is no instance. Throws

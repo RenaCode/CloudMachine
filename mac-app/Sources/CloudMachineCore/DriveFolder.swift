@@ -1,24 +1,29 @@
 import Foundation
 
-/// The folder on Google Drive that holds THIS Mac's backup image:
-/// `gdrive:CloudMachine/<name>`, with the image `<name>.sparsebundle` inside.
+/// The name of THIS Mac on Google Drive. The machine keeps the backup's bands
+/// in `gdrive:CloudMachine/<name>-tm` (`VMLayout.remote`).
 ///
 /// It used to be the constant `mac-studio` on every Mac, so two Macs on one
-/// Google account would have shared one folder and one image. Each Mac now
+/// Google account would have shared one folder and one backup. Each Mac now
 /// keeps its own name in `~/Library/Application Support/CloudMachine/drive-folder`,
 /// chosen once by `configure-remote` and never changed afterwards.
 ///
 /// "Never changed" is the point. A different name is a different, empty
 /// folder: Time Machine starts from zero and the old backup sits orphaned on
 /// Drive, still using quota. So the name is decided once, and an installation
-/// that predates this file keeps `mac-studio` - it is where its backup lives.
+/// that predates this file keeps `mac-studio`.
 public enum DriveFolder {
+  /// The rclone remote every command uses.
+  public static let remoteName = "gdrive"
+  /// Top-level folder on Drive; each Mac has its own folder in it.
+  public static let remoteRoot = "CloudMachine"
+
   /// The name every installation used before names were per Mac.
   public static let legacyName = "mac-studio"
 
   static var file: URL { CMPaths.appSupportDir.appendingPathComponent("drive-folder") }
 
-  /// The name the mount, the image and the status use.
+  /// The name the machine's Drive folder and the status use.
   ///
   /// No file means an installation from before this setting existed (a new
   /// one gets the file from `configure-remote` before anything is mounted),
@@ -43,32 +48,11 @@ public enum DriveFolder {
   ///
   /// The evidence is the rclone remote itself. `configure-remote` decides the
   /// folder BEFORE it creates the remote, so on a new Mac the remote is not
-  /// there yet; on an installation that predates `drive-folder` it is, and its
-  /// backup lives under the legacy name. Weaker traces were rejected: the
-  /// buffer directory appears after any mount attempt, and the old
-  /// `mount-desired.state` is no longer written by anything. The cached
-  /// legacy folder is not such a weak trace - rclone writes it only once the
-  /// remote was opened, i.e. after a mount that worked.
+  /// there yet; on an installation that predates `drive-folder` it is.
   ///
   /// `nil` = rclone did not answer; `decide` then refuses rather than guess.
-  ///
-  /// A cached `mac-studio` folder is evidence on its own (see
-  /// `InstallationTraces`): only an installation from before `drive-folder`
-  /// ever mounted that folder, because a new one gets its file before its
-  /// first mount. Until 11.10.2026 the remote was the only witness, and a Mac
-  /// whose `rclone.conf` was lost or replaced got a new, empty folder.
   static func hasLegacyInstallation() async -> Bool? {
-    legacyEvidence(
-      remoteConfigured: await RemoteConfigurer.isConfigured(
-        remoteName: DriveBufferService.remoteName),
-      cachedFolders: InstallationTraces.cachedFolders())
-  }
-
-  /// Pure: the cache trace of the legacy folder outweighs the remote's answer,
-  /// including "I do not know".
-  static func legacyEvidence(remoteConfigured: Bool?, cachedFolders: [String]) -> Bool? {
-    if cachedFolders.contains(legacyName) { return true }
-    return remoteConfigured
+    await RemoteConfigurer.isConfigured(remoteName: remoteName)
   }
 
   public enum Decision: Equatable {
