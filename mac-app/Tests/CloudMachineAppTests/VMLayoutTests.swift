@@ -331,4 +331,37 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertNil(noQueue?.buffer.unsentBytes, "an empty queue answer is unknown, not zero")
     XCTAssertEqual(VMLayout.unsentBytes(vfsQueueJSON: #"{"queue":[]}"#), 0)
   }
+
+  /// 27.10.2026, the machine's network cut: eight uploads "in progress" for
+  /// 47 min, no error line. In progress + nothing uploaded for 15 min = hangs;
+  /// nothing in progress, or a log with no upload yet, is not.
+  func testUploadThatHangsIsTold() {
+    func report(inProgress: Int, lastUpload: String) -> VMStatus.Report {
+      var report = VMStatus.report(scriptOutput: "LASTUPLOAD \(lastUpload)")
+      report.reading = VMLayout.Reading(
+        buffer: VMLayout.BufferStats(
+          bytesUsed: 0, uploadsQueued: 8, uploadsInProgress: inProgress, unsentBytes: 0),
+        freeBytes: 0)
+      return report
+    }
+    XCTAssertEqual(VMStatus.uploadStalledFor(report(inProgress: 8, lastUpload: "1000 3820")), 2820)
+    XCTAssertNil(VMStatus.uploadStalledFor(report(inProgress: 8, lastUpload: "1000 1600")))
+    XCTAssertNil(VMStatus.uploadStalledFor(report(inProgress: 0, lastUpload: "1000 9000")))
+    XCTAssertNil(VMStatus.uploadStalledFor(report(inProgress: 8, lastUpload: "0 9000")))
+    XCTAssertNil(VMStatus.uploadStalledFor(VMStatus.report(scriptOutput: "")))
+  }
+
+  /// vm-update replaces only what a template may change: never the disk or
+  /// the VM type of an existing machine.
+  func testUpdateRefusesToChangeTheMachineItself() {
+    let current =
+      "vmType: vz\narch: aarch64\ncpus: 2\nmemory: 2GiB\ndisk: 200GiB\nprovision:\n- mode: data\n"
+    XCTAssertEqual(
+      VMUpdate.fixedDifferences(current: current, new: current + "- mode: system\n"), [])
+    XCTAssertEqual(
+      VMUpdate.fixedDifferences(
+        current: current, new: current.replacingOccurrences(of: "200GiB", with: "300GiB")),
+      ["disk: 200GiB -> 300GiB"])
+    XCTAssertEqual(VMUpdate.topLevel("# disk: 1\ndisk: 200GiB\n  cpus: 9\n"), ["disk": "200GiB"])
+  }
 }

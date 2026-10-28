@@ -3,9 +3,10 @@
 # (`limactl create --name cmsmb vm/cmsmb.yaml`); see vm/README.md.
 #
 # Every provisioning step below runs again on every boot, so each one checks
-# before it acts. The `data` files are rewritten on every boot (Lima's
-# default), which is how a changed template reaches an existing machine.
-# Files are read relative to this template when the machine is created.
+# before it acts. Files are read relative to this template and EMBEDDED into
+# ~/.lima/<machine>/lima.yaml when the machine is created; the machine boots
+# from that copy, so a newer template reaches an existing machine only through
+# `cloudmachine-agent vm-update` (vm-status says when it is older).
 vmType: vz
 arch: aarch64
 cpus: 2

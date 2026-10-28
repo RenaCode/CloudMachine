@@ -471,6 +471,15 @@ final class BackupHealthTests: XCTestCase {
     XCTAssertEqual(health(1200).problems.map(\.code), ["drive-upload-limit"])
   }
 
+  func testHangingUploadIsReported() {
+    let report = BackupHealth.evaluate(
+      lastSuccess: now.addingTimeInterval(-1800), lastAttempt: now.addingTimeInterval(-1800),
+      result: 0, now: now, machineRunning: true, servicesHealthy: true,
+      destinationRegistered: true, erroredFiles: 0, outOfSpace: false, queueReadable: true,
+      uploadStalledFor: 2820)
+    XCTAssertEqual(report.problems.map(\.code), ["upload-stalled"])
+  }
+
   func testUptimeCanBeRead() {
     let uptime = BackupHealth.systemUptime()
     XCTAssertNotNil(uptime)

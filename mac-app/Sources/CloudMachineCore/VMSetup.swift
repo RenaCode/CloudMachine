@@ -58,7 +58,7 @@ public enum VMSetup {
         return fail(L10n.tr("limactl create failed: %@", VMLayout.errorTail(created)))
       }
     }
-    // The first boot of a new machine takes ~30 min on Ubuntu 24.04 (27.10.2026):
+    // The first boot of a new machine can take ~30 min on Ubuntu 24.04 (27.10.2026; 1 min on 28.10):
     // Lima copies every `mode: data` file with `sudo -iu root`, and while
     // cloud-final runs logind cannot open the session - pam_systemd waits 2 min
     // per file. Lima gives up after 10 min by default; later boots take seconds.

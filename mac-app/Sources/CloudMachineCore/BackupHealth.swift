@@ -184,6 +184,9 @@ public enum BackupHealth {
     // Seconds since Google's daily upload limit last refused an upload, while
     // it still holds (`VMStatus.Report.uploadLimitAge`); `nil`/0 = it does not.
     uploadLimitAge: TimeInterval? = nil,
+    // Seconds uploads have been "in progress" with none going through
+    // (`VMStatus.uploadStalledFor`); `nil` = they do not hang.
+    uploadStalledFor: TimeInterval? = nil,
     maxAgeHours: Double = BackupHealth.maxAgeHours,
     // Whether the startup grace period is in progress - see `startupGraceMinutes`.
     withinStartupGrace: Bool = false,
@@ -398,6 +401,16 @@ public enum BackupHealth {
           code: "drive-upload-limit"))
     }
 
+    if let uploadStalledFor {
+      problems.append(
+        Problem(
+          summary: L10n.tr("The upload to Google Drive hangs"),
+          detail: L10n.tr(
+            "rclone has bands in progress, but none has been uploaded for %@ - usually a broken network connection, which rclone does not report as an error. Backups since then are only in the machine's buffer. When the network comes back the upload resumes by itself (on 28.10.2026 within 80 s); if it does not, restarting the machine (prepare-shutdown, limactl start) drops the dead connections.",
+            formatAge(uploadStalledFor)),
+          code: "upload-stalled"))
+    }
+
     // Space on the Drive. Running out of it stops every upload, and the
     // machine's buffer then fills up - this has to be known EARLIER, not from
     // a failure. The threshold is counted in cycles, not in percent: at a
@@ -607,6 +620,7 @@ public enum BackupHealth {
         VMStatus.metaSyncOverdue($0) != nil ? $0.metaSync?.ageSeconds : nil
       },
       uploadLimitAge: report?.uploadLimitAge,
+      uploadStalledFor: report.flatMap(VMStatus.uploadStalledFor),
       maxAgeHours: maxAgeHours,
       // The REAL clock, not `now`: tests substitute a `now` from the past, and
       // uptime computed from it would come out negative, i.e. "startup in
