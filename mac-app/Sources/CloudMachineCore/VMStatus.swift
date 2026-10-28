@@ -22,6 +22,9 @@ public enum VMStatus {
     /// when that is newer than the last upload that went through: the limit
     /// still holds. `0` = it does not; `nil` = not read.
     public var uploadLimitAge: TimeInterval?
+    /// Seconds since the last upload that went through, by the machine's
+    /// clock; `.infinity` = none in rclone's log; `nil` = not read.
+    public var lastUploadAge: TimeInterval?
 
     public init() {}
   }
@@ -38,6 +41,21 @@ public enum VMStatus {
       case .age(let seconds): return seconds
       }
     }
+  }
+
+  /// Uploads in progress, and none has gone through for this long: they hang.
+  /// A 32 MB band takes seconds; on 27.10.2026, with the machine's network
+  /// cut, eight uploads stayed "in progress" for 47 min on dead connections
+  /// and nothing - no error line, no counter - said so.
+  public static let uploadStallSeconds: TimeInterval = 15 * 60
+
+  /// Seconds the upload has hung, or `nil` when it does not (or not known).
+  /// A log without a single upload says nothing: a new machine has none yet.
+  public static func uploadStalledFor(_ report: Report) -> TimeInterval? {
+    guard let inProgress = report.reading?.buffer.uploadsInProgress, inProgress > 0,
+      let age = report.lastUploadAge, age.isFinite, age > uploadStallSeconds
+    else { return nil }
+    return age
   }
 
   /// Whether the metadata copy is overdue. Only for an image that went
@@ -57,6 +75,9 @@ public enum VMStatus {
     + "echo IMAGES $(ls -d \(VMLayout.Guest.localRoot)/*.sparsebundle 2>/dev/null | wc -l); "
     + "echo METASYNC $(stat -c %Y \(VMLayout.Guest.metaSyncStamp) 2>/dev/null || echo 0) $(date +%s); "
     + uploadLimitScript
+    + "l=$(tac \(VMLayout.Guest.rcloneLog) 2>/dev/null | grep -m1 'vfs cache: upload succeeded'); "
+    + "if [ -n \"$l\" ]; then echo LASTUPLOAD $(date -d \"$(echo \"$l\" | cut -c1-19 | tr / -)\" +%s) $(date +%s); "
+    + "else echo LASTUPLOAD 0 $(date +%s); fi; "
     + VMLayout.readingScript
 
   /// Google's daily upload limit (750 GB) is not an error rclone gives up
@@ -90,6 +111,10 @@ public enum VMStatus {
         let now = Int(fields[2])
       {
         report.metaSync = last == 0 ? .never : .age(TimeInterval(max(0, now - last)))
+      } else if fields.first == "LASTUPLOAD", fields.count >= 3, let last = Int(fields[1]),
+        let now = Int(fields[2])
+      {
+        report.lastUploadAge = last == 0 ? .infinity : TimeInterval(max(0, now - last))
       } else if fields.first == "UPLOADLIMIT", fields.count >= 3, let last = Int(fields[1]),
         let now = Int(fields[2])
       {
@@ -217,6 +242,13 @@ public enum VMStatus {
     }
     if servicesHealthy(report.services) != true { healthy = false }
     if let line = metaSyncLine(report) { out.append(line) }
+    if let stalled = uploadStalledFor(report) {
+      out.append(
+        L10n.tr(
+          "Upload:           HANGS - bands in progress, none uploaded for %@ (network?); see /var/log/rclone-tm.log in the machine",
+          BackupHealth.formatAge(stalled)))
+      healthy = false
+    }
     if let age = report.uploadLimitAge, age > 0 {
       out.append(
         L10n.tr(

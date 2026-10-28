@@ -324,7 +324,8 @@ public enum VMLayout {
   /// says so. The first start after a Mac restart can take minutes: rclone
   /// re-reads its buffer before it serves anything.
   public static func start() async -> CMActionResult {
-    let started = try? await limactl(["start", "--tty=false", instanceName], timeout: 1800)
+    let started = try? await limactl(
+      ["start", "--tty=false", "--timeout", "50m", instanceName], timeout: 3600)
     guard started?.succeeded == true else {
       return CMActionResult(
         succeeded: false,

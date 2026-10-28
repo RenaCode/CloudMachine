@@ -19,6 +19,7 @@ struct CloudMachineAgent: AsyncParsableCommand {
       InstallLaunchd.self,
       // Running.
       VMStatusCommand.self,
+      VMUpdateCommand.self,
       VMGuardCommand.self,
       BackupHealthCommand.self,
       PrepareShutdown.self,

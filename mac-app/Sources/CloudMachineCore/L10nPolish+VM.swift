@@ -188,5 +188,43 @@ extension L10nPolish {
       "zatrzymana",
     "yes":
       "tak",
+    "%@\nThe previous template is in %@ - copy it back over lima.yaml and run limactl start %@.":
+      "%@\nPoprzedni szablon jest w %@ - skopiuj go z powrotem na lima.yaml i uruchom limactl start %@.",
+    "Could not read this app's machine template (limactl template copy).":
+      "Nie udało się odczytać szablonu maszyny z tej aplikacji (limactl template copy).",
+    "Could not replace %@: %@":
+      "Nie udało się podmienić %@: %@",
+    "Machine %@ already runs this app's template.":
+      "Maszyna %@ już działa na szablonie z tej aplikacji.",
+    "Machine %@ now runs this app's template; the previous one is in %@.":
+      "Maszyna %@ działa teraz na szablonie z tej aplikacji; poprzedni jest w %@.",
+    "Moves the machine onto this app's template (two restarts, never during a backup).":
+      "Przenosi maszynę na szablon z tej aplikacji (dwa restarty, nigdy w trakcie kopii).",
+    "No machine %@ - create it with: cloudmachine-agent vm-setup":
+      "Brak maszyny %@ - utwórz ją: cloudmachine-agent vm-setup",
+    "Template:         OLDER than this app's - run: cloudmachine-agent vm-update":
+      "Szablon:          STARSZY niż w tej aplikacji - uruchom: cloudmachine-agent vm-update",
+    "Template:         not compared":
+      "Szablon:          nie porównany",
+    "Template:         this app's":
+      "Szablon:          z tej aplikacji",
+    "The machine has no %@ - run cloudmachine-agent vm-setup first.":
+      "Maszyna nie ma %@ - najpierw uruchom cloudmachine-agent vm-setup.",
+    "The machine restarted, but not every service is running - check: cloudmachine-agent vm-status. The previous template is in %@.":
+      "Maszyna wstała, ale nie wszystkie usługi działają - sprawdź: cloudmachine-agent vm-status. Poprzedni szablon jest w %@.",
+    "The template changes the machine itself (%@) - that needs a new machine, not an update.":
+      "Szablon zmienia samą maszynę (%@) - to wymaga nowej maszyny, nie aktualizacji.",
+    "The upload to Google Drive hangs":
+      "Wysyłka na Google Drive wisi",
+    "Time Machine is backing up - try again when it has finished.":
+      "Time Machine robi kopię - spróbuj ponownie po jej zakończeniu.",
+    "Upload:           HANGS - bands in progress, none uploaded for %@ (network?); see /var/log/rclone-tm.log in the machine":
+      "Wysyłka:          WISI - pasma w toku, żadne wysłane od %@ (sieć?); patrz /var/log/rclone-tm.log w maszynie",
+    "limactl stop failed - nothing was changed.":
+      "limactl stop się nie udał - nic nie zostało zmienione.",
+    "rclone has bands in progress, but none has been uploaded for %@ - usually a broken network connection, which rclone does not report as an error. Backups since then are only in the machine's buffer. Check the network, then: cloudmachine-agent vm-status; restarting the machine (prepare-shutdown, limactl start) drops the dead connections.":
+      "rclone ma pasma w trakcie wysyłki, ale od %@ żadne nie zostało wysłane - zwykle to zerwane połączenie sieciowe, którego rclone nie zgłasza jako błędu. Kopie od tego czasu są tylko w buforze maszyny. Sprawdź sieć, potem: cloudmachine-agent vm-status; restart maszyny (prepare-shutdown, limactl start) zrywa martwe połączenia.",
+    "tmutil did not answer - not restarting the machine while its state is unknown.":
+      "tmutil nie odpowiedział - nie restartuję maszyny, póki jej stan jest nieznany.",
   ]
 }

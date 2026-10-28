@@ -123,6 +123,19 @@ struct VMGuardCommand: AsyncParsableCommand {
   }
 }
 
+struct VMUpdateCommand: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "vm-update",
+    abstract: L10n.tr(
+      "Moves the machine onto this app's template (two restarts, never during a backup)."))
+
+  func run() async throws {
+    let outcome = await VMUpdate.run()
+    print(outcome.message)
+    if !outcome.succeeded { throw ExitCode.failure }
+  }
+}
+
 struct VMStatusCommand: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "vm-status",
@@ -134,6 +147,12 @@ struct VMStatusCommand: AsyncParsableCommand {
     let (lines, healthy) = await VMStatus.lines()
     for line in lines { print(line) }
     print(L10n.tr("Drive folder:     %@", VMLayout.remote))
+    switch await VMUpdate.templateCurrent() {
+    case .some(true): print(L10n.tr("Template:         this app's"))
+    case .some(false):
+      print(L10n.tr("Template:         OLDER than this app's - run: cloudmachine-agent vm-update"))
+    case .none: print(L10n.tr("Template:         not compared"))
+    }
 
     let limit = MachineBudget.limitGB()
     print(

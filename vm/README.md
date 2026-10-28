@@ -47,11 +47,28 @@ Each layer is there for a reason:
     cloudmachine-agent vm-status
     cloudmachine-agent vm-guard            # one check; the launchd agent runs it every minute
     cloudmachine-agent prepare-shutdown    # before a restart: stop the backup, drain, limactl stop
+    cloudmachine-agent vm-update           # after an app upgrade: move the machine onto its template
 
 `install-launchd` (also run by `--install-agents`) installs four agents:
 `app`, `backup-health`, `vm-start` (boots the machine at login) and `vm-guard`
 (pauses Time Machine when more than 110 GiB waits to be uploaded or the
 machine has less than 40 GiB free, resumes below 40 GiB - only what it paused).
+
+## Updating the machine
+
+Lima copies the template's files into `~/.lima/cmsmb/lima.yaml` when the
+machine is created and boots from that copy, so an app upgrade does not change
+an existing machine. `vm-status` shows `Template: OLDER than this app's` when
+the app ships a newer one; `cloudmachine-agent vm-update` then replaces the
+copy (the old one stays next to it as `lima.yaml.before-<date>`) and restarts
+the machine twice - the first boot rewrites the units, the second runs them.
+It refuses during a backup and when the template would change the disk, CPU
+or memory. The rclone buffer stays on the machine's disk and its upload
+resumes after the restart.
+
+The first boot of a NEW machine takes about 30 minutes on Ubuntu 24.04: Lima
+copies each `mode: data` file with `sudo -iu root`, and while cloud-init
+finishes, logind makes each of those wait 2 minutes. Later boots take seconds.
 
 ## Restoring
 
