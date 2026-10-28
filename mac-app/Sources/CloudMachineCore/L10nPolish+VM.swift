@@ -222,8 +222,8 @@ extension L10nPolish {
       "Wysyłka:          WISI - pasma w toku, żadne wysłane od %@ (sieć?); patrz /var/log/rclone-tm.log w maszynie",
     "limactl stop failed - nothing was changed.":
       "limactl stop się nie udał - nic nie zostało zmienione.",
-    "rclone has bands in progress, but none has been uploaded for %@ - usually a broken network connection, which rclone does not report as an error. Backups since then are only in the machine's buffer. Check the network, then: cloudmachine-agent vm-status; restarting the machine (prepare-shutdown, limactl start) drops the dead connections.":
-      "rclone ma pasma w trakcie wysyłki, ale od %@ żadne nie zostało wysłane - zwykle to zerwane połączenie sieciowe, którego rclone nie zgłasza jako błędu. Kopie od tego czasu są tylko w buforze maszyny. Sprawdź sieć, potem: cloudmachine-agent vm-status; restart maszyny (prepare-shutdown, limactl start) zrywa martwe połączenia.",
+    "rclone has bands in progress, but none has been uploaded for %@ - usually a broken network connection, which rclone does not report as an error. Backups since then are only in the machine's buffer. When the network comes back the upload resumes by itself (on 28.10.2026 within 80 s); if it does not, restarting the machine (prepare-shutdown, limactl start) drops the dead connections.":
+      "rclone ma pasma w trakcie wysyłki, ale od %@ żadne nie zostało wysłane - zwykle to zerwane połączenie sieciowe, którego rclone nie zgłasza jako błędu. Kopie od tego czasu są tylko w buforze maszyny. Gdy sieć wróci, wysyłka wznowi się sama (28.10.2026 w 80 s); jeśli nie, restart maszyny (prepare-shutdown, limactl start) zrywa martwe połączenia.",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "tmutil nie odpowiedział - nie restartuję maszyny, póki jej stan jest nieznany.",
   ]

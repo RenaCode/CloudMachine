@@ -406,7 +406,7 @@ public enum BackupHealth {
         Problem(
           summary: L10n.tr("The upload to Google Drive hangs"),
           detail: L10n.tr(
-            "rclone has bands in progress, but none has been uploaded for %@ - usually a broken network connection, which rclone does not report as an error. Backups since then are only in the machine's buffer. Check the network, then: cloudmachine-agent vm-status; restarting the machine (prepare-shutdown, limactl start) drops the dead connections.",
+            "rclone has bands in progress, but none has been uploaded for %@ - usually a broken network connection, which rclone does not report as an error. Backups since then are only in the machine's buffer. When the network comes back the upload resumes by itself (on 28.10.2026 within 80 s); if it does not, restarting the machine (prepare-shutdown, limactl start) drops the dead connections.",
             formatAge(uploadStalledFor)),
           code: "upload-stalled"))
     }

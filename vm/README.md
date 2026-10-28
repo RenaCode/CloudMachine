@@ -66,9 +66,11 @@ It refuses during a backup and when the template would change the disk, CPU
 or memory. The rclone buffer stays on the machine's disk and its upload
 resumes after the restart.
 
-The first boot of a NEW machine takes about 30 minutes on Ubuntu 24.04: Lima
-copies each `mode: data` file with `sudo -iu root`, and while cloud-init
-finishes, logind makes each of those wait 2 minutes. Later boots take seconds.
+The first boot of a NEW machine can take up to about 30 minutes on Ubuntu
+24.04: Lima copies each `mode: data` file with `sudo -iu root`, and when
+logind cannot open sessions while cloud-init finishes, each of those waits
+2 minutes (27.10.2026: 30 min; 28.10.2026, same template: 1 min). Later boots
+take seconds.
 
 ## Restoring
 
