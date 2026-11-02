@@ -183,8 +183,11 @@ repository (`renacode-infra: docs/projekty/cloudmachine/`):
 - Running CloudMachine (`operations.md`) — checking from Terminal,
   knowing when backups stop, reading the logs, before rebooting.
 - Restoring (`restoring.md`) — getting files back.
-- How it works, and what it costs (`design.md`) — measured traffic and
-  storage, and why each piece is the way it is.
+- How it works today (`architektura-vm.md`) — the machine, the upload
+  buffer, the guard and the agents of the current layout.
+- How it worked, and what it costs (`design.md`) — the earlier disk-image
+  layout, kept as an archive; its measurements of traffic and storage still
+  explain the 70% quota.
 - Setting up from Terminal (`setup-cli.md`) — the same setup without the app.
 - Building from source (`building.md`) — local builds, tests, releases.
 
