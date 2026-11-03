@@ -211,6 +211,19 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(smbConf.contains("max open files = 500000"))
   }
 
+  /// 03.11.2026: after restarts rclone scanned a 120 GB VFS cache (~4.5 min)
+  /// before mounting; systemd's default 90 s start limit killed it in a loop
+  /// and punchfs/smbd never came up. The start limit must outlast that scan.
+  func testRcloneStartLimitOutlastsTheCacheScan() throws {
+    let unit = try String(
+      contentsOf: Self.repoRoot.appendingPathComponent("vm/systemd/rclone-tm.service"),
+      encoding: .utf8)
+    // An uncommented line inside [Service]; a comment or [Unit] would do nothing.
+    let afterService = try XCTUnwrap(unit.components(separatedBy: "[Service]").last)
+    let service = try XCTUnwrap(afterService.components(separatedBy: "\n[").first)
+    XCTAssertTrue(service.contains("\nTimeoutStartSec=45min\n"))
+  }
+
   /// 27.10.2026: policing (`police ... drop`) held SMB at ~2.7 MB/s; the
   /// shaper must stay a queue (ifb + htb), and the template must install it.
   func testSMBShaperQueuesInsteadOfDropping() throws {
