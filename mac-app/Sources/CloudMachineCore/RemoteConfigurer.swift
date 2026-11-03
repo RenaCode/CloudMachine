@@ -380,7 +380,7 @@ public enum RemoteConfigurer {
     // `:drive:` cannot decrypt, so with encryption the question is whether
     // the encrypted folder has anything in it - its names are not readable.
     let encrypted = DriveEncryption.isEnabled
-    let folder = encrypted ? DriveEncryption.cryptRoot(folder: DriveFolder.name) : VMLayout.remote
+    let folder = encrypted ? DriveEncryption.cryptRoot : VMLayout.remote
     let path = folder.split(separator: ":", maxSplits: 1).last.map(String.init) ?? ""
     guard
       let result = try? await ProcessRunner.run(

@@ -20,6 +20,8 @@ extension L10nPolish {
       "Kopiuje niezaszyfrowaną kopię do zaszyfrowanego folderu, w tle; kopie trwają dalej.",
     "Copy:             %@":
       "Kopiowanie:      %@",
+    "CLOUDMACHINE_VM_INSTANCE=%@ without CLOUDMACHINE_VM_REMOTE would use the live backup's folder - set both.":
+      "CLOUDMACHINE_VM_INSTANCE=%@ bez CLOUDMACHINE_VM_REMOTE użyłby folderu działającej kopii - ustaw oba.",
     "Could not add the remote to %@: %@":
       "Nie udało się dodać remote do %@: %@",
     "Could not add the remote to the machine's rclone.conf.":

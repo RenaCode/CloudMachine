@@ -11,16 +11,25 @@ final class DriveEncryptionTests: XCTestCase {
   /// An installation that never ran `vm-encrypt` keeps its folder: a release
   /// with this code must not move a live machine anywhere.
   func testWithoutEncryptionTheFolderIsUnchanged() {
+    let plain = VMLayout.plainRemote(override: nil, folder: "mac-studio")
+    XCTAssertEqual(plain, "gdrive:CloudMachine/mac-studio-tm")
+    XCTAssertEqual(VMLayout.remote(plain: plain, encrypted: false), plain)
+    XCTAssertEqual(VMLayout.remote(plain: plain, encrypted: true), "gdrive-crypt:tm")
     XCTAssertEqual(
-      VMLayout.remote(override: nil, encrypted: false, folder: "mac-studio"),
-      "gdrive:CloudMachine/mac-studio-tm")
-    XCTAssertEqual(
-      VMLayout.remote(override: nil, encrypted: true, folder: "mac-studio"), "gdrive-crypt:tm")
-    XCTAssertEqual(
-      VMLayout.remote(override: "gdrive:test-tm", encrypted: true, folder: "mac-studio"),
-      "gdrive:test-tm")
-    XCTAssertEqual(
-      DriveEncryption.cryptRoot(folder: "mac-studio"), "gdrive:CloudMachine/mac-studio-crypt")
+      VMLayout.plainRemote(override: "gdrive:test-tm", folder: "mac-studio"), "gdrive:test-tm")
+    XCTAssertEqual(DriveEncryption.cryptRoot(plain: plain), "gdrive:CloudMachine/mac-studio-crypt")
+    XCTAssertEqual(DriveEncryption.cryptRoot(plain: "gdrive:test-tm"), "gdrive:test-crypt")
+  }
+
+  /// A throwaway machine never shares the live marker or the live folder:
+  /// `delete-plain` there must not reach the real backup.
+  func testThrowawayMachineIsIsolated() {
+    XCTAssertEqual(DriveEncryption.markerName(instance: "cmsmb"), "drive-encryption")
+    XCTAssertEqual(DriveEncryption.markerName(instance: "cmtest"), "drive-encryption-cmtest")
+    XCTAssertNil(DriveEncryption.throwawayRefusal(instance: "cmsmb", remoteOverride: nil))
+    XCTAssertNotNil(DriveEncryption.throwawayRefusal(instance: "cmtest", remoteOverride: nil))
+    XCTAssertNil(
+      DriveEncryption.throwawayRefusal(instance: "cmtest", remoteOverride: "gdrive:test-tm"))
   }
 
   /// Only a complete marker moves the machine; a half-written file is none.

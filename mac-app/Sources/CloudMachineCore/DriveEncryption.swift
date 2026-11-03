@@ -41,7 +41,30 @@ public enum DriveEncryption {
 
   /// `~/Library/Application Support/CloudMachine/drive-encryption`: written by
   /// `switch` LAST, after the machine has moved; `VMLayout.remote` follows it.
-  static var markerFile: URL { CMPaths.appSupportDir.appendingPathComponent("drive-encryption") }
+  /// A throwaway machine has its own, so trying `switch` on `cmtest` cannot
+  /// move what `cmsmb`'s agents use.
+  static var markerFile: URL {
+    CMPaths.appSupportDir.appendingPathComponent(markerName(instance: VMLayout.instanceName))
+  }
+
+  static func markerName(instance: String) -> String {
+    instance == "cmsmb" ? "drive-encryption" : "drive-encryption-\(instance)"
+  }
+
+  /// A throwaway machine must name its own Drive folder: everything here
+  /// derives from `VMLayout.plainRemote`, and `delete-plain` on `cmtest`
+  /// with the default folder would delete the live backup.
+  static func throwawayRefusal(instance: String, remoteOverride: String?) -> String? {
+    guard instance != "cmsmb", remoteOverride == nil else { return nil }
+    return L10n.tr(
+      "CLOUDMACHINE_VM_INSTANCE=%@ without CLOUDMACHINE_VM_REMOTE would use the live backup's folder - set both.",
+      instance)
+  }
+
+  static var currentThrowawayRefusal: String? {
+    throwawayRefusal(
+      instance: VMLayout.instanceName, remoteOverride: VMLayout.override("CLOUDMACHINE_VM_REMOTE"))
+  }
 
   public static var isEnabled: Bool { marker(in: markerFile) != nil }
   /// When the machine moved to the encrypted folder; `nil` = it has not.
@@ -66,10 +89,13 @@ public enum DriveEncryption {
     "\(markerTag) \(Int(switchedAt.timeIntervalSince1970))\n"
   }
 
-  /// `gdrive:CloudMachine/<folder>-crypt`, what the `crypt` remote wraps. Its
-  /// own folder: `crypt` cannot list a folder that also holds plain names.
-  public static func cryptRoot(folder: String) -> String {
-    "\(DriveFolder.remoteName):\(DriveFolder.remoteRoot)/\(folder)-crypt"
+  /// `gdrive:CloudMachine/<folder>-crypt`, what the `crypt` remote wraps (the
+  /// plain folder with `-crypt` instead of `-tm`). Its own folder: `crypt`
+  /// cannot list a folder that also holds plain names.
+  public static var cryptRoot: String { cryptRoot(plain: VMLayout.plainRemote) }
+
+  static func cryptRoot(plain: String) -> String {
+    (plain.hasSuffix("-tm") ? String(plain.dropLast(3)) : plain) + "-crypt"
   }
 
   /// The section added to `rclone.conf`. Names are encrypted too: band
@@ -422,6 +448,7 @@ public enum DriveEncryption {
   /// Refuses if the remote exists anywhere: a second password would make the
   /// first copy unreadable.
   public static func setup(password: String) async -> Outcome {
+    if let refusal = currentThrowawayRefusal { return fail(refusal) }
     guard password.count >= 12 else {
       return fail(L10n.tr("The password must have at least 12 characters."))
     }
@@ -452,7 +479,7 @@ public enum DriveEncryption {
       let obscuredSalt = await obscure(salt)
     else { return fail(L10n.tr("rclone obscure failed.")) }
     let section = configSection(
-      cryptRoot: cryptRoot(folder: DriveFolder.name), obscuredPassword: obscuredPassword,
+      cryptRoot: cryptRoot, obscuredPassword: obscuredPassword,
       obscuredSalt: obscuredSalt)
 
     // The Keychain first: a remote whose password exists nowhere else is
@@ -488,18 +515,19 @@ public enum DriveEncryption {
         L10n.tr("Could not add the remote to %@: %@", hostConfig.path, error.localizedDescription))
     }
     CMLogger.log(
-      "vm-encrypt: setup - \(cryptRemoteName) over \(cryptRoot(folder: DriveFolder.name))")
+      "vm-encrypt: setup - \(cryptRemoteName) over \(cryptRoot)")
     return Outcome(
       succeeded: true,
       message: L10n.tr(
         "Added '%@' (%@) on the Mac and in the machine; password and salt are in the Keychain (service %@).\nSALT: %@\nKeep the password AND this salt outside this Mac now - without both the encrypted backup cannot be read. Next: cloudmachine-agent vm-encrypt copy",
-        cryptRemoteName, cryptRoot(folder: DriveFolder.name), keychainService, salt))
+        cryptRemoteName, cryptRoot, keychainService, salt))
   }
 
   static var remotes: Remotes { Remotes(plain: VMLayout.plainRemote) }
 
   /// Step 2. Starts the background copy in the machine and returns.
   public static func copy() async -> Outcome {
+    if let refusal = currentThrowawayRefusal { return fail(refusal) }
     if isEnabled { return fail(L10n.tr("The machine already uses the encrypted folder.")) }
     let shown = try? await VMLayout.rootShell(copyStateScript, timeout: 60)
     if shown.map({ copyState(showOutput: $0.stdout) }) == .running {
@@ -519,6 +547,7 @@ public enum DriveEncryption {
 
   /// Steps 3 and `rollback`.
   public static func move(_ direction: Direction) async -> Outcome {
+    if let refusal = currentThrowawayRefusal { return fail(refusal) }
     let inMachine = try? await VMLayout.rootShell(
       "grep -qx '\\[\(cryptRemoteName)\\]' \(VMLayout.Guest.rcloneConfig) && echo YES || echo NO",
       timeout: 60)
@@ -589,6 +618,7 @@ public enum DriveEncryption {
   public static func deletePlain(secretsSavedElsewhere: Bool, restoreChecked: Bool) async
     -> Outcome
   {
+    if let refusal = currentThrowawayRefusal { return fail(refusal) }
     let plist = BackupHealth.loadPreferences(BackupHealth.preferencesPath)
     let meta = try? await VMLayout.rootShell(
       "stat -c %Y \(VMLayout.Guest.metaSyncStamp)", timeout: 60)
@@ -621,7 +651,7 @@ public enum DriveEncryption {
   public static func status() async -> [String] {
     var out = [
       L10n.tr("Machine uses:     %@", isEnabled ? encryptedRemote : VMLayout.plainRemote),
-      L10n.tr("Encrypted folder: %@", cryptRoot(folder: DriveFolder.name)),
+      L10n.tr("Encrypted folder: %@", cryptRoot),
     ]
     if let switchedAt {
       out.append(L10n.tr("Switched:         %@", BackupHealth.stamp(switchedAt)))
