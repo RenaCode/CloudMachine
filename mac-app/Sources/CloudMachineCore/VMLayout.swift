@@ -66,9 +66,23 @@ public enum VMLayout {
   /// `CloudMachine/<folder>`, where the retired disk-image layout kept its
   /// image - the two never share bands.
   /// `CLOUDMACHINE_VM_REMOTE` replaces it whole (see `instanceName`).
+  /// Once `vm-encrypt switch` has moved the machine, it is the encrypted
+  /// `gdrive-crypt:tm` (`DriveEncryption`).
   public static var remote: String {
-    override("CLOUDMACHINE_VM_REMOTE")
-      ?? "\(DriveFolder.remoteName):\(DriveFolder.remoteRoot)/\(DriveFolder.name)-tm"
+    remote(
+      override: override("CLOUDMACHINE_VM_REMOTE"), encrypted: DriveEncryption.isEnabled,
+      folder: DriveFolder.name)
+  }
+
+  static func remote(override: String?, encrypted: Bool, folder: String) -> String {
+    override ?? (encrypted ? DriveEncryption.encryptedRemote : plainRemote(folder: folder))
+  }
+
+  /// The unencrypted folder, whichever one the machine uses now.
+  public static var plainRemote: String { plainRemote(folder: DriveFolder.name) }
+
+  static func plainRemote(folder: String) -> String {
+    "\(DriveFolder.remoteName):\(DriveFolder.remoteRoot)/\(folder)-tm"
   }
 
   /// `gdrive:CloudMachine/<folder>-tm-meta`: the image's files outside
