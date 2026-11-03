@@ -255,7 +255,8 @@ public enum DriveEncryption {
   /// the first copy on is consistent with itself, and only this sees it.
   static func keyRefusal(mac: String?, machine: String?) -> String? {
     guard let mac, let machine else {
-      return L10n.tr("Could not read the '%@' section on the Mac or in the machine.", cryptRemoteName)
+      return L10n.tr(
+        "Could not read the '%@' section on the Mac or in the machine.", cryptRemoteName)
     }
     let macKeys = cryptKeys(config: mac)
     guard macKeys["password"] != nil, macKeys["password2"] != nil, macKeys["remote"] != nil else {

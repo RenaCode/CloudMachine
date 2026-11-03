@@ -186,12 +186,16 @@ final class DriveEncryptionTests: XCTestCase {
       keys,
       ["remote": "gdrive:CloudMachine/m-crypt", "password": "AAA", "password2": "BBB"])
     // The machine's half, as `sed -n '/^\[gdrive-crypt\]/,/^\[/p'` prints it.
-    let same = "[gdrive-crypt]\ntype = crypt\nremote = gdrive:CloudMachine/m-crypt\npassword = AAA\npassword2 = BBB\n[other]\n"
+    let same = [
+      "[gdrive-crypt]", "type = crypt", "remote = gdrive:CloudMachine/m-crypt",
+      "password = AAA", "password2 = BBB", "[other]", "",
+    ].joined(separator: "\n")
     XCTAssertNil(DriveEncryption.keyRefusal(mac: mac, machine: same))
-    XCTAssertNotNil(
-      DriveEncryption.keyRefusal(mac: mac, machine: same.replacingOccurrences(of: "AAA", with: "XXX")))
-    XCTAssertNotNil(
-      DriveEncryption.keyRefusal(mac: mac, machine: same.replacingOccurrences(of: "BBB", with: "XXX")))
+    for (from, to) in [("AAA", "XXX"), ("BBB", "XXX")] {
+      XCTAssertNotNil(
+        DriveEncryption.keyRefusal(
+          mac: mac, machine: same.replacingOccurrences(of: from, with: to)), from)
+    }
     XCTAssertNotNil(
       DriveEncryption.keyRefusal(
         mac: mac, machine: same.replacingOccurrences(of: "m-crypt", with: "x-crypt")))
@@ -204,7 +208,9 @@ final class DriveEncryptionTests: XCTestCase {
   /// A failed listing of foreign-key folders says what to do, not only
   /// rclone's last lines.
   func testForeignFoldersAreExplained() {
-    let out = "ERROR : error listing: there were 2 undecryptable name errors. first error: 0b3t: undecryptable dir name detected"
+    let out =
+      "ERROR : error listing: there were 2 undecryptable name errors."
+      + " first error: 0b3t: undecryptable dir name detected"
     let hint = DriveEncryption.syncFailureHint(out, cryptRoot: "gdrive:CloudMachine/m-crypt")
     XCTAssertNotNil(hint)
     XCTAssertTrue(hint?.contains("gdrive:CloudMachine/m-crypt") == true)
