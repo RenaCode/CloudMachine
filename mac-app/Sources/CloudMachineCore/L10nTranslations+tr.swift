@@ -947,5 +947,35 @@ extension L10nTranslations {
       "rclone'da süren bantlar var ama %@ süredir hiçbiri yüklenmedi - genellikle rclone'un hata olarak bildirmediği kopuk bir ağ bağlantısıdır. O zamandan beri alınan yedekler yalnızca makinenin arabelleğinde. Ağ geri gelince yükleme kendiliğinden sürer (28.10.2026'da 80 s içinde); sürmezse makineyi yeniden başlatmak (prepare-shutdown, limactl start) ölü bağlantıları koparır.",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "tmutil yanıt vermedi - durumu bilinmeyen makine yeniden başlatılmıyor.",
+    "The machine's share cannot be read":
+      "Makinenin paylaşımı okunamıyor",
+    "Unknown whether the machine's share can be read":
+      "Makinenin paylaşımının okunup okunamadığı bilinmiyor",
+    "Samba in the machine does not answer this Mac":
+      "Makinedeki Samba bu Mac'e yanıt vermiyor",
+    "Unknown whether Samba in the machine answers this Mac":
+      "Makinedeki Samba'nın bu Mac'e yanıt verip vermediği bilinmiyor",
+    "Reading 1 byte of %@ in the machine failed: %@. Every service says it is active, yet Time Machine cannot use the image there. Nothing restarts it by itself. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm":
+      "Makinede %@ dosyasından 1 bayt okunamadı: %@. Her hizmet etkin olduğunu söylüyor, ancak Time Machine oradaki imajı kullanamıyor. Hiçbir şey bunu kendiliğinden yeniden başlatmaz. Kontrol edin: cloudmachine-agent vm-status, ardından makinede: journalctl -u punchfs -u tm-bands-bind -u rclone-tm",
+    "Reading 1 byte of %@ in the machine has not returned for %@ s. That is how a hung punchfs or rclone mount behaves. Nothing is restarted while the state is unknown - a restart under a write still going could lose it. Check in the machine: journalctl -u punchfs -u rclone-tm":
+      "Makinede %@ dosyasından 1 bayt okuma %@ sn'dir dönmedi. Takılmış bir punchfs veya rclone bağlaması böyle davranır. Durum bilinmezken hiçbir şey yeniden başlatılmaz - süren bir yazma sırasında yeniden başlatmak onu kaybettirebilir. Makinede kontrol edin: journalctl -u punchfs -u rclone-tm",
+    "An SMB connection to %@ got no answer within %@ s. Time Machine reaches the machine at this address. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "%@ adresine SMB bağlantısı %@ sn içinde yanıt almadı. Time Machine makineye bu adresten ulaşır. Makinenin ağını ve smbd'yi kontrol edin: cloudmachine-agent vm-status",
+    "The machine did not report its address, so nobody could try an SMB connection. Check: cloudmachine-agent vm-status":
+      "Makine adresini bildirmedi, bu yüzden kimse SMB bağlantısı deneyemedi. Kontrol edin: cloudmachine-agent vm-status",
+    "An SMB connection to %@ failed (%@). Time Machine reaches the machine at this address, so no backup is made. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "%@ adresine SMB bağlantısı başarısız oldu (%@). Time Machine makineye bu adresten ulaşır, bu yüzden yedek alınmıyor. Makinenin ağını ve smbd'yi kontrol edin: cloudmachine-agent vm-status",
+    "readable":
+      "okunabilir",
+    "no image yet":
+      "henüz imaj yok",
+    "answers":
+      "yanıt veriyor",
+    "Share read:       %@":
+      "Paylaşım okuma:   %@",
+    "Samba from Mac:   %@":
+      "Mac'ten Samba:    %@",
+    "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
+      "Bu Mac %@ için yol bulamadı (%@). Ya makineye giden yol yok oldu ya da macOS'in Yerel Ağ gizliliği CloudMachine'e izin vermedi - bu durumda Sistem Ayarları > Gizlilik ve Güvenlik > Yerel Ağ bölümünden izin verin. Kontrol edin: cloudmachine-agent vm-status",
   ]
 }

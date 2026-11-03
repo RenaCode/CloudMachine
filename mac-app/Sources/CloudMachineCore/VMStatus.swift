@@ -25,6 +25,9 @@ public enum VMStatus {
     /// Seconds since the last upload that went through, by the machine's
     /// clock; `.infinity` = none in rclone's log; `nil` = not read.
     public var lastUploadAge: TimeInterval?
+    /// One byte read through the share's path (`ShareReadProbe`). A report
+    /// without the probe's line says "no answer", not "readable".
+    public var shareRead: ShareReadProbe.Verdict = .noAnswer(hungSeconds: nil)
 
     public init() {}
   }
@@ -78,6 +81,7 @@ public enum VMStatus {
     + "l=$(tac \(VMLayout.Guest.rcloneLog) 2>/dev/null | grep -m1 'vfs cache: upload succeeded'); "
     + "if [ -n \"$l\" ]; then echo LASTUPLOAD $(date -d \"$(echo \"$l\" | cut -c1-19 | tr / -)\" +%s) $(date +%s); "
     + "else echo LASTUPLOAD 0 $(date +%s); fi; "
+    + ShareReadProbe.guestScript + "; "
     + VMLayout.readingScript
 
   /// Google's daily upload limit (750 GB) is not an error rclone gives up
@@ -122,6 +126,7 @@ public enum VMStatus {
       }
     }
     report.reading = VMLayout.reading(scriptOutput: scriptOutput)
+    report.shareRead = ShareReadProbe.verdict(scriptOutput: scriptOutput)
     return report
   }
 
@@ -130,7 +135,15 @@ public enum VMStatus {
   /// `vm-prepare-bundle` (its condition skips it). `failed` is never fine: a
   /// bind that failed after the image was prepared sends the bands to the
   /// machine's local disk instead of Drive. `nil` = no answer for some unit.
-  public static func servicesHealthy(_ services: [String: String]) -> Bool? {
+  ///
+  /// `inactive` is fine for the bind ONLY before `vm-prepare-bundle`
+  /// (`bundlePrepared == false`). After it the bind is what puts the bands on
+  /// Drive; until 03.11.2026 an inactive one passed as fine here, and Time
+  /// Machine wrote the bands to the machine's own disk with every light green.
+  /// Not knowing whether the image is prepared makes an inactive bind unknown.
+  public static func servicesHealthy(_ services: [String: String], bundlePrepared: Bool?)
+    -> Bool?
+  {
     var unknown = false
     for service in VMLayout.services {
       guard let state = services[service] else {
@@ -138,17 +151,33 @@ public enum VMStatus {
         continue
       }
       if state == "active" { continue }
-      if service == "tm-bands-bind" && state == "inactive" { continue }
+      if service == "tm-bands-bind" && state == "inactive" {
+        switch bundlePrepared {
+        case .some(false): continue
+        case .some(true): return false
+        case .none:
+          unknown = true
+          continue
+        }
+      }
       return false
     }
     return unknown ? nil : true
   }
 
+  /// The status script's limit. Its worst case, with rclone hung: the share
+  /// probe's wait (`ShareReadProbe.timeoutSeconds` + 1), two `curl -m 20` to
+  /// rclone's rc, plus `limactl shell`'s own start. It was 60 s before the
+  /// probe; with it, a hung rclone would have pushed the script past the
+  /// limit and turned the whole report into "no answer".
+  public static let reportTimeout: TimeInterval = 90
+
   /// One run of the status script in the machine. `nil` = no answer (machine
   /// down, limactl stuck); a report whose `reading` is `nil` means rclone in
   /// the machine did not answer.
   public static func currentReport() async -> Report? {
-    guard let result = try? await VMLayout.rootShell(script, timeout: 60), result.succeeded
+    guard let result = try? await VMLayout.rootShell(script, timeout: reportTimeout),
+      result.succeeded
     else { return nil }
     return report(scriptOutput: result.stdout)
   }
@@ -240,7 +269,13 @@ public enum VMStatus {
         L10n.tr("Service %@: %@", service.padding(toLength: 18, withPad: " ", startingAt: 0), state)
       )
     }
-    if servicesHealthy(report.services) != true { healthy = false }
+    if servicesHealthy(report.services, bundlePrepared: report.bundlePrepared) != true {
+      healthy = false
+    }
+    let share = shareLines(
+      read: report.shareRead, smb: await SMBProbe.probe(address: address), address: address)
+    out.append(contentsOf: share.lines)
+    if !share.healthy { healthy = false }
     if let line = metaSyncLine(report) { out.append(line) }
     if let stalled = uploadStalledFor(report) {
       out.append(

@@ -947,5 +947,35 @@ extension L10nTranslations {
       "rclone 有分块正在处理，但已有 %@ 没有任何分块上传完成，这通常是网络连接中断造成的，rclone 不会把它报告为错误。此后的备份只存在于虚拟机的缓冲区中。网络恢复后，上传会自动继续（2026 年 10 月 28 日那次在 80 秒内恢复）；如果没有恢复，请重启虚拟机（prepare-shutdown，limactl start）以丢弃失效的连接。",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "tmutil 没有响应，在状态未知时不会重启虚拟机。",
+    "The machine's share cannot be read":
+      "无法读取机器的共享",
+    "Unknown whether the machine's share can be read":
+      "不确定机器的共享能否读取",
+    "Samba in the machine does not answer this Mac":
+      "机器中的 Samba 未响应此 Mac",
+    "Unknown whether Samba in the machine answers this Mac":
+      "不确定机器中的 Samba 是否响应此 Mac",
+    "Reading 1 byte of %@ in the machine failed: %@. Every service says it is active, yet Time Machine cannot use the image there. Nothing restarts it by itself. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm":
+      "从机器中的 %@ 读取 1 字节失败:%@。所有服务都报告为活动状态,但 Time Machine 无法使用那里的映像。不会自动重启。检查:cloudmachine-agent vm-status,然后在机器中:journalctl -u punchfs -u tm-bands-bind -u rclone-tm",
+    "Reading 1 byte of %@ in the machine has not returned for %@ s. That is how a hung punchfs or rclone mount behaves. Nothing is restarted while the state is unknown - a restart under a write still going could lose it. Check in the machine: journalctl -u punchfs -u rclone-tm":
+      "从机器中的 %@ 读取 1 字节已有 %@ 秒未返回。这是 punchfs 或 rclone 挂载卡住时的表现。状态未知时不会重启任何东西——在写入进行中重启可能会丢失该写入。在机器中检查:journalctl -u punchfs -u rclone-tm",
+    "An SMB connection to %@ got no answer within %@ s. Time Machine reaches the machine at this address. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "到 %@ 的 SMB 连接在 %@ 秒内没有响应。Time Machine 通过此地址访问机器。请检查机器的网络和 smbd:cloudmachine-agent vm-status",
+    "The machine did not report its address, so nobody could try an SMB connection. Check: cloudmachine-agent vm-status":
+      "机器未报告其地址,因此无法尝试 SMB 连接。检查:cloudmachine-agent vm-status",
+    "An SMB connection to %@ failed (%@). Time Machine reaches the machine at this address, so no backup is made. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "到 %@ 的 SMB 连接失败(%@)。Time Machine 通过此地址访问机器,因此不会进行备份。请检查机器的网络和 smbd:cloudmachine-agent vm-status",
+    "readable":
+      "可读取",
+    "no image yet":
+      "尚无映像",
+    "answers":
+      "有响应",
+    "Share read:       %@":
+      "共享读取:         %@",
+    "Samba from Mac:   %@":
+      "从 Mac 到 Samba:  %@",
+    "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
+      "此 Mac 找不到到 %@ 的路由(%@)。要么到机器的路由已消失,要么 macOS 的“本地网络”隐私设置未允许 CloudMachine——此时请在 系统设置 > 隐私与安全性 > 本地网络 中允许。检查:cloudmachine-agent vm-status",
   ]
 }

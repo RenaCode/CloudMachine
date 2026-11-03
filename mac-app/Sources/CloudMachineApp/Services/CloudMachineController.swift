@@ -14,6 +14,8 @@ final class CloudMachineController: ObservableObject {
     hasClientID: false, hasClientSecret: false)
 
   private var refreshTask: Task<Void, Never>?
+  /// Samba is asked again after an answer only once a minute, not at every 10 s refresh.
+  private var smbCache = SMBProbe.Cache()
   private var lastBytesDone: Double?
   private var lastBytesSampledAt: Date?
 
@@ -159,7 +161,12 @@ final class CloudMachineController: ObservableObject {
       machine.punchfsFileLimit = report.punchfsFileLimit
       machine.bundlePrepared = report.bundlePrepared
       machine.imageCount = report.imageCount
+      machine.shareRead = report.shareRead
       machine.address = await VMLayout.currentAddress()
+      // Off the main actor inside, bounded by its own limit.
+      var cache = smbCache
+      machine.smb = await cache.probe(address: machine.address)
+      smbCache = cache
     }
     status.machine = machine
     status.remoteControlOpen = VMStatus.remoteControlOpenOnMac()

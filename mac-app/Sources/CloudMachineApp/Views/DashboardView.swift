@@ -480,26 +480,9 @@ private struct DashboardContent: View {
     }
   }
 
-  private var servicesTone: StatusTone {
-    switch status.machine.servicesHealthy {
-    case .some(true): return .success
-    case .some(false): return .danger
-    case .none: return status.machine.isRunning ? .warning : .neutral
-    }
-  }
+  private var servicesTone: StatusTone { status.machine.servicesTone }
 
-  private var servicesText: String {
-    switch status.machine.servicesHealthy {
-    case .some(true): return L10n.tr("All running")
-    case .some(false):
-      let down = VMLayout.services.filter {
-        let state = status.machine.services[$0]
-        return state != "active" && !($0 == "tm-bands-bind" && state == "inactive")
-      }
-      return L10n.tr("Not running: %@", down.joined(separator: ", "))
-    case .none: return L10n.tr("not read")
-    }
-  }
+  private var servicesText: String { status.machine.servicesText }
 
   private var disksTone: StatusTone {
     machineTone.worst(servicesTone == .neutral ? .warning : servicesTone)

@@ -947,5 +947,35 @@ extension L10nTranslations {
       "rclonella on paloja käsittelyssä, mutta mitään ei ole lähetetty %@ aikana - yleensä katkennut verkkoyhteys, jota rclone ei ilmoita virheenä. Sen jälkeiset varmuuskopiot ovat vain virtuaalikoneen puskurissa. Kun verkko palaa, lähetys jatkuu itsestään (28.10.2026 80 s:ssa); jos ei, virtuaalikoneen uudelleenkäynnistys (prepare-shutdown, limactl start) katkaisee kuolleet yhteydet.",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "tmutil ei vastannut - virtuaalikonetta ei käynnistetä uudelleen, kun sen tila on tuntematon.",
+    "The machine's share cannot be read":
+      "Koneen jakoa ei voi lukea",
+    "Unknown whether the machine's share can be read":
+      "Ei tiedetä, voiko koneen jakoa lukea",
+    "Samba in the machine does not answer this Mac":
+      "Koneen Samba ei vastaa tälle Macille",
+    "Unknown whether Samba in the machine answers this Mac":
+      "Ei tiedetä, vastaako koneen Samba tälle Macille",
+    "Reading 1 byte of %@ in the machine failed: %@. Every service says it is active, yet Time Machine cannot use the image there. Nothing restarts it by itself. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm":
+      "1 tavun lukeminen kohteesta %@ koneessa epäonnistui: %@. Jokainen palvelu ilmoittaa olevansa aktiivinen, mutta Time Machine ei voi käyttää levykuvaa siellä. Mikään ei käynnistä sitä itsestään uudelleen. Tarkista: cloudmachine-agent vm-status, sitten koneessa: journalctl -u punchfs -u tm-bands-bind -u rclone-tm",
+    "Reading 1 byte of %@ in the machine has not returned for %@ s. That is how a hung punchfs or rclone mount behaves. Nothing is restarted while the state is unknown - a restart under a write still going could lose it. Check in the machine: journalctl -u punchfs -u rclone-tm":
+      "1 tavun lukeminen kohteesta %@ koneessa ei ole palannut %@ s:iin. Näin käyttäytyy jumittunut punchfs- tai rclone-liitos. Mitään ei käynnistetä uudelleen, kun tila on tuntematon - uudelleenkäynnistys kesken kirjoituksen voisi hukata sen. Tarkista koneessa: journalctl -u punchfs -u rclone-tm",
+    "An SMB connection to %@ got no answer within %@ s. Time Machine reaches the machine at this address. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "SMB-yhteys osoitteeseen %@ ei saanut vastausta %@ s:ssa. Time Machine tavoittaa koneen tästä osoitteesta. Tarkista koneen verkko ja smbd: cloudmachine-agent vm-status",
+    "The machine did not report its address, so nobody could try an SMB connection. Check: cloudmachine-agent vm-status":
+      "Kone ei ilmoittanut osoitettaan, joten kukaan ei voinut yrittää SMB-yhteyttä. Tarkista: cloudmachine-agent vm-status",
+    "An SMB connection to %@ failed (%@). Time Machine reaches the machine at this address, so no backup is made. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "SMB-yhteys osoitteeseen %@ epäonnistui (%@). Time Machine tavoittaa koneen tästä osoitteesta, joten varmuuskopiota ei tehdä. Tarkista koneen verkko ja smbd: cloudmachine-agent vm-status",
+    "readable":
+      "luettavissa",
+    "no image yet":
+      "ei vielä levykuvaa",
+    "answers":
+      "vastaa",
+    "Share read:       %@":
+      "Jaon luku:        %@",
+    "Samba from Mac:   %@":
+      "Samba Macista:    %@",
+    "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
+      "Tämä Mac ei löytänyt reittiä kohteeseen %@ (%@). Joko reitti koneeseen on poissa, tai macOS:n Paikallisverkko-tietosuoja ei ole sallinut CloudMachinea - salli se silloin kohdassa Järjestelmäasetukset > Tietosuoja ja turvallisuus > Paikallisverkko. Tarkista: cloudmachine-agent vm-status",
   ]
 }

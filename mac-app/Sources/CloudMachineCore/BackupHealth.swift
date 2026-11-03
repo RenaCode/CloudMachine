@@ -191,7 +191,12 @@ public enum BackupHealth {
     // Whether the startup grace period is in progress - see `startupGraceMinutes`.
     withinStartupGrace: Bool = false,
     // Whether Time Machine is RIGHT NOW performing a run (`tmutil status`).
-    backupRunning: Bool? = nil
+    backupRunning: Bool? = nil,
+    // The read through the share's path in the machine and Samba's answer to
+    // this Mac (`ShareReadProbe`, `SMBProbe`); `nil` = not asked.
+    shareRead: ShareReadProbe.Verdict? = nil,
+    smb: SMBProbe.Verdict? = nil,
+    smbAddress: String? = nil
   ) -> Report {
     var problems: [Problem] = []
     var deferred: [Problem] = []
@@ -348,6 +353,15 @@ public enum BackupHealth {
             "Without it there is no way to check whether anything reached the Drive - the machine's guard is blind then."
           ),
           code: "rclone-rc-no-answer"))
+    }
+    // The services say "active"; these two say whether the path Time Machine
+    // uses works. Only for a machine whose services all answered, like the rc
+    // message above. "No answer" alarms at once and is never folded into fine;
+    // only Samba refusing (smbd still starting) waits out the startup grace.
+    if machineRunning == true && servicesHealthy == true {
+      let share = shareProblems(read: shareRead, smb: smb, address: smbAddress)
+      problems.append(contentsOf: share.problems)
+      share.notReadyYet.forEach(notReadyYet)
     }
     if punchfsNearFileLimit {
       problems.append(
@@ -585,7 +599,9 @@ public enum BackupHealth {
     }
     let report = machineRunning == true ? await VMStatus.currentReport() : nil
     let reading = report?.reading
-    let servicesHealthy = report.flatMap { VMStatus.servicesHealthy($0.services) }
+    let servicesHealthy = report.flatMap {
+      VMStatus.servicesHealthy($0.services, bundlePrepared: $0.bundlePrepared)
+    }
     let address = machineRunning == true ? await VMLayout.currentAddress() : nil
     let registered = await VMStatus.timeMachineTargetsMachine(address: address)
 
@@ -626,7 +642,11 @@ public enum BackupHealth {
       // uptime computed from it would come out negative, i.e. "startup in
       // progress".
       withinStartupGrace: (systemUptime() ?? .infinity) < startupGraceMinutes * 60,
-      backupRunning: await TimeMachineStatus.runningState())
+      backupRunning: await TimeMachineStatus.runningState(),
+      // `report == nil` (no answer) is already "machine does not answer".
+      shareRead: report?.shareRead,
+      smb: machineRunning == true ? await SMBProbe.probe(address: address) : nil,
+      smbAddress: address)
 
     health.problems.append(contentsOf: unmeasuredLocalDiskProblems(localFreeGB: localFree))
     health.problems.append(contentsOf: await MachineBudget.currentProblems())
