@@ -115,6 +115,124 @@ final class DriveEncryptionTests: XCTestCase {
     XCTAssertTrue(back.contains("cryptcheck 'gdrive:CloudMachine/m-tm' 'gdrive-crypt:tm'"))
   }
 
+  /// A wrong password in the machine's rclone.conf: `gdrive-crypt:tm` then
+  /// encrypts to another folder name, `sync` finds "nothing" there, uploads
+  /// the whole backup again under the wrong key and `cryptcheck` agrees with
+  /// it (container test, 03.11: switch succeeded, 182 files in the folder).
+  /// Listing the crypt root with `--crypt-strict-names` fails on the folders
+  /// the right key wrote, before anything is copied.
+  func testSyncAndCopyRefuseAnotherKey() {
+    let check = "lsf --dirs-only --crypt-strict-names 'gdrive-crypt:'"
+    for direction in [DriveEncryption.Direction.encrypt, .decrypt] {
+      let script = DriveEncryption.finalSyncScript(remotes, direction: direction)
+      let lines = script.split(separator: "\n").map(String.init)
+      let listed = lines.firstIndex { $0.contains(check) } ?? Int.max
+      let synced = lines.firstIndex { $0.contains(" sync ") } ?? -1
+      XCTAssertLessThan(listed, synced, "\(direction)")
+      // The copy has run, so both folders must be readable with this key -
+      // checked before anything is synced.
+      for folder in ["grep -qx 'tm/'", "grep -qx 'tm-meta/'"] {
+        let grepped = lines.firstIndex { $0.contains(folder) } ?? Int.max
+        XCTAssertLessThan(grepped, synced, "\(direction) \(folder)")
+      }
+    }
+    // The copy starts from an empty folder, but a resumed one must not
+    // continue under another key.
+    let copy = DriveEncryption.copyScript(.init(plain: "gdrive:CloudMachine/m-tm"))
+      .replacingOccurrences(of: #"'\''"#, with: "'")
+    let listed = copy.range(of: check)?.lowerBound
+    let copied = copy.range(of: "copy 'gdrive:CloudMachine/m-tm'")?.lowerBound
+    XCTAssertNotNil(listed)
+    XCTAssertNotNil(copied)
+    if let listed, let copied { XCTAssertLessThan(listed, copied) }
+    // Before the first copy the folder does not exist and `lsf` fails on it
+    // (the container test's first try of this check: every copy failed).
+    let made = copy.range(of: "mkdir 'gdrive-crypt:'")?.lowerBound
+    XCTAssertNotNil(made)
+    if let made, let listed { XCTAssertLessThan(made, listed) }
+  }
+
+  /// A nested encrypted folder: the listing of the crypt root shows only its
+  /// first component, so that is what is looked for.
+  func testEncryptedFolderChecks() {
+    XCTAssertEqual(
+      DriveEncryption.encryptedFolderChecks(.init(plain: "gdrive:m-tm")), ["tm/", "tm-meta/"])
+    XCTAssertEqual(
+      DriveEncryption.encryptedFolderChecks(
+        .init(plain: "gdrive:m-tm", encrypted: "gdrive-crypt:a/tm")), ["a/"])
+  }
+
+  /// The listing check cannot see a key that was wrong from the first copy
+  /// on: everything is then consistently under that key. What can see it is
+  /// the Mac: `setup` writes the same section to both files, so the machine's
+  /// password, salt and folder must equal the Mac's, character for character.
+  func testMachineKeyMustEqualTheMacs() {
+    let mac = """
+      [gdrive]
+      type = drive
+
+      [gdrive-crypt]
+      type = crypt
+      remote = gdrive:CloudMachine/m-crypt
+      password = AAA
+      password2 = BBB
+      filename_encryption = standard
+
+      [other]
+      password = ZZZ
+      """
+    let keys = DriveEncryption.cryptKeys(config: mac)
+    XCTAssertEqual(
+      keys,
+      ["remote": "gdrive:CloudMachine/m-crypt", "password": "AAA", "password2": "BBB"])
+    // The machine's half, as `sed -n '/^\[gdrive-crypt\]/,/^\[/p'` prints it.
+    let same = "[gdrive-crypt]\ntype = crypt\nremote = gdrive:CloudMachine/m-crypt\npassword = AAA\npassword2 = BBB\n[other]\n"
+    XCTAssertNil(DriveEncryption.keyRefusal(mac: mac, machine: same))
+    XCTAssertNotNil(
+      DriveEncryption.keyRefusal(mac: mac, machine: same.replacingOccurrences(of: "AAA", with: "XXX")))
+    XCTAssertNotNil(
+      DriveEncryption.keyRefusal(mac: mac, machine: same.replacingOccurrences(of: "BBB", with: "XXX")))
+    XCTAssertNotNil(
+      DriveEncryption.keyRefusal(
+        mac: mac, machine: same.replacingOccurrences(of: "m-crypt", with: "x-crypt")))
+    // Not read, or no section on one side: refused like a difference.
+    XCTAssertNotNil(DriveEncryption.keyRefusal(mac: nil, machine: same))
+    XCTAssertNotNil(DriveEncryption.keyRefusal(mac: mac, machine: nil))
+    XCTAssertNotNil(DriveEncryption.keyRefusal(mac: "[gdrive]\n", machine: "[gdrive]\n"))
+  }
+
+  /// A failed listing of foreign-key folders says what to do, not only
+  /// rclone's last lines.
+  func testForeignFoldersAreExplained() {
+    let out = "ERROR : error listing: there were 2 undecryptable name errors. first error: 0b3t: undecryptable dir name detected"
+    let hint = DriveEncryption.syncFailureHint(out, cryptRoot: "gdrive:CloudMachine/m-crypt")
+    XCTAssertNotNil(hint)
+    XCTAssertTrue(hint?.contains("gdrive:CloudMachine/m-crypt") == true)
+    XCTAssertNil(DriveEncryption.syncFailureHint("directory not found", cryptRoot: "x"))
+  }
+
+  /// Every guest script parses (`bash -n`); the container test ran them.
+  func testScriptsParse() throws {
+    let plain = "gdrive:CloudMachine/m-tm"
+    let r = DriveEncryption.Remotes(plain: plain)
+    let scripts = [
+      DriveEncryption.copyScript(r), DriveEncryption.copyStateScript,
+      DriveEncryption.finalSyncScript(r, direction: .encrypt),
+      DriveEncryption.finalSyncScript(r, direction: .decrypt),
+      DriveEncryption.repointScript(oldRemote: plain, newRemote: r.encrypted, stamp: "S"),
+      DriveEncryption.repointScript(oldRemote: r.encrypted, newRemote: plain, stamp: "S"),
+      DriveEncryption.deletePlainScript(plain: plain),
+    ]
+    for script in scripts {
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/bin/bash")
+      process.arguments = ["-n", "-c", script]
+      try process.run()
+      process.waitUntilExit()
+      XCTAssertEqual(process.terminationStatus, 0, script)
+    }
+  }
+
   func testCachePaths() {
     XCTAssertEqual(
       DriveEncryption.cachePaths(remote: "gdrive:CloudMachine/m-tm"),
@@ -150,6 +268,12 @@ final class DriveEncryptionTests: XCTestCase {
     XCTAssertTrue(script.contains("rm -rf '/var/cache/rclone/vfs/gdrive/CloudMachine/m-tm'"))
     XCTAssertFalse(script.contains("rm -rf '/var/cache/rclone/vfs/gdrive-crypt"))
     XCTAssertLessThan(index("test \"$after\" -eq \"$before\""), index("trap - ERR"))
+    // `move` stopped Samba before the last sync. A failure before the way
+    // back is armed (no bands, a preflight miss) must not leave it stopped:
+    // container test, 03.11, `before=0` left smbd inactive.
+    XCTAssertLessThan(index("trap 'systemctl start smbd' ERR"), index("systemctl cat rclone-tm"))
+    XCTAssertLessThan(index("trap 'systemctl start smbd' ERR"), index("test \"$before\" -gt 0"))
+    XCTAssertLessThan(index("trap 'systemctl start smbd' ERR"), index("trap 'echo \"FAILED"))
   }
 
   private func goodSwitch(_ direction: DriveEncryption.Direction = .encrypt)

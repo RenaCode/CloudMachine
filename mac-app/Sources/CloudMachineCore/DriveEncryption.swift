@@ -152,6 +152,15 @@ public enum DriveEncryption {
     "/usr/local/bin/rclone --config \(VMLayout.Guest.rcloneConfig) \(args)"
   }
 
+  /// The top of the `crypt` remote, listed with `--crypt-strict-names`: a
+  /// folder written with another password or salt fails it. Without it a
+  /// wrong key is silent - `gdrive-crypt:tm` encrypts to another folder name,
+  /// `sync` uploads everything again next to the real copy and `cryptcheck`
+  /// agrees with itself.
+  static var cryptRootListing: String {
+    rclone("lsf --dirs-only --crypt-strict-names \(VMLayout.shellQuoted(cryptRemoteName + ":"))")
+  }
+
   /// The background copy: bands, then metadata. `copy`, not `sync` - it
   /// runs while backups go on, and `switch` does the exact last pass.
   /// `--drive-stop-on-upload-limit` ends it at Google's daily limit instead of
@@ -167,6 +176,10 @@ public enum DriveEncryption {
       "systemd-run --unit \(copyUnit) -p RemainAfterExit=yes -p Nice=10 /bin/bash -c "
         + p(
           "set -euo pipefail; exec >>\(copyLog) 2>&1; date; "
+            // Empty on the first run (`lsf` fails on a folder that does not
+            // exist yet); a resumed copy must keep the key.
+            + rclone("mkdir \(p(cryptRemoteName + ":"))") + "; "
+            + cryptRootListing + " >/dev/null; "
             + rclone("copy \(p(remotes.plain)) \(p(remotes.encrypted)) \(flags)") + "; "
             + rclone(
               "copy \(p(remotes.plain + "-meta")) \(p(remotes.encrypted + "-meta")) \(flags)")
@@ -206,6 +219,76 @@ public enum DriveEncryption {
     return .failed(active)
   }
 
+  /// What the crypt root's listing must show once the copy has run: `tm/`
+  /// and `tm-meta/` for `gdrive-crypt:tm`; for a nested folder only its first
+  /// component, which holds both.
+  static func encryptedFolderChecks(_ remotes: Remotes) -> [String] {
+    let path = remotes.encrypted.split(separator: ":", maxSplits: 1).last.map(String.init) ?? ""
+    let parts = path.split(separator: "/").map(String.init)
+    guard let first = parts.first else { return [] }
+    return parts.count == 1 ? ["\(first)/", "\(first)-meta/"] : ["\(first)/"]
+  }
+
+  /// `password`, `password2` and `remote` of the `crypt` section.
+  static func cryptKeys(config: String) -> [String: String] {
+    var inSection = false
+    var keys: [String: String] = [:]
+    for raw in config.split(whereSeparator: \.isNewline) {
+      let line = raw.trimmingCharacters(in: .whitespaces)
+      if line.hasPrefix("[") {
+        inSection = line == "[\(cryptRemoteName)]"
+        continue
+      }
+      guard inSection else { continue }
+      let parts = line.split(separator: "=", maxSplits: 1).map {
+        $0.trimmingCharacters(in: .whitespaces)
+      }
+      if parts.count == 2, ["password", "password2", "remote"].contains(parts[0]) {
+        keys[parts[0]] = parts[1]
+      }
+    }
+    return keys
+  }
+
+  /// The machine must use the Mac's key: `setup` wrote the same section to
+  /// both, so any difference is an edit or another `setup`. A key wrong from
+  /// the first copy on is consistent with itself, and only this sees it.
+  static func keyRefusal(mac: String?, machine: String?) -> String? {
+    guard let mac, let machine else {
+      return L10n.tr("Could not read the '%@' section on the Mac or in the machine.", cryptRemoteName)
+    }
+    let macKeys = cryptKeys(config: mac)
+    guard macKeys["password"] != nil, macKeys["password2"] != nil, macKeys["remote"] != nil else {
+      return L10n.tr(
+        "'%@' is incomplete or missing in the Mac's rclone.conf - run: cloudmachine-agent vm-encrypt setup",
+        cryptRemoteName)
+    }
+    guard cryptKeys(config: machine) == macKeys else {
+      return L10n.tr(
+        "The machine's '%@' (password, salt or folder) differs from the Mac's - the copy would be readable only with the machine's key. Not moving anything.",
+        cryptRemoteName)
+    }
+    return nil
+  }
+
+  static let machineSectionScript =
+    "sed -n '/^\\[\(cryptRemoteName)\\]/,/^\\[/p' \(VMLayout.Guest.rcloneConfig)"
+
+  /// The Mac's and the machine's sections compared, for `copy` and `move`.
+  static func currentKeyRefusal() async -> String? {
+    let mac = try? String(contentsOf: VMLayout.hostRcloneConfig, encoding: .utf8)
+    let machine = try? await VMLayout.rootShell(machineSectionScript, timeout: 60)
+    return keyRefusal(mac: mac, machine: machine?.succeeded == true ? machine?.stdout : nil)
+  }
+
+  /// When the listing found folders another key wrote.
+  static func syncFailureHint(_ output: String, cryptRoot: String) -> String? {
+    guard output.contains("undecryptable") else { return nil }
+    return L10n.tr(
+      "%@ holds folders this key cannot read: another password or salt in the machine, or leftovers of an earlier try. Compare the machine's rclone.conf with the Mac's; leftovers have to be removed from %@ by hand.",
+      cryptRoot, cryptRoot)
+  }
+
   /// The last pass before the machine moves, with Time Machine stopped: sync
   /// bands and metadata from `direction`'s source to its target, then
   /// `cryptcheck` every file (contents, not just sizes). `set -e`: any
@@ -213,8 +296,12 @@ public enum DriveEncryption {
   static func finalSyncScript(_ remotes: Remotes, direction: Direction) -> String {
     let p = VMLayout.shellQuoted
     let flags = "--transfers 8 --drive-chunk-size 32M"
-    return [
-      "set -euo pipefail",
+    // The copy has run: both folders are there and readable with this key.
+    var keyCheck = ["listing=$(\(cryptRootListing))"]
+    for folder in encryptedFolderChecks(remotes) {
+      keyCheck.append("grep -qx " + p(folder) + " <<<\"$listing\"")
+    }
+    let rest = [
       rclone("sync \(p(remotes.source(direction))) \(p(remotes.target(direction))) \(flags)"),
       rclone(
         "sync \(p(remotes.source(direction) + "-meta")) \(p(remotes.target(direction) + "-meta")) \(flags)"
@@ -223,7 +310,8 @@ public enum DriveEncryption {
       rclone("cryptcheck \(p(remotes.plain)) \(p(remotes.encrypted))"),
       rclone("cryptcheck \(p(remotes.plain + "-meta")) \(p(remotes.encrypted + "-meta"))"),
       "echo CM-CHECKED",
-    ].joined(separator: "\n")
+    ]
+    return (["set -euo pipefail"] + keyCheck + rest).joined(separator: "\n")
   }
 
   /// Before anything stops: the machine runs this app's template (the unit
@@ -264,6 +352,10 @@ public enum DriveEncryption {
       "curl -s -m 20 -X POST http://\(VMLayout.Guest.rcAddress)/vfs/queue"
       + " | python3 -c 'import json,sys; print(sum(i.get(\"size\",0) for i in json.load(sys.stdin)[\"queue\"]))'"
     return [
+      // `move` stopped Samba before the last sync; until the way back is
+      // armed below, any failure must at least start it again.
+      "set -euo pipefail",
+      "trap 'systemctl start smbd' ERR",
       preflightScript(oldRemote: oldRemote),
       "B=$(. /etc/cloudmachine/bundle.env && echo \"/srv/tm-local/$CM_BUNDLE/bands\")",
       "before=$(find \"$B/\" -type f | wc -l)",
@@ -529,6 +621,7 @@ public enum DriveEncryption {
   public static func copy() async -> Outcome {
     if let refusal = currentThrowawayRefusal { return fail(refusal) }
     if isEnabled { return fail(L10n.tr("The machine already uses the encrypted folder.")) }
+    if let refusal = await currentKeyRefusal() { return fail(refusal) }
     let shown = try? await VMLayout.rootShell(copyStateScript, timeout: 60)
     if shown.map({ copyState(showOutput: $0.stdout) }) == .running {
       return fail(
@@ -561,6 +654,7 @@ public enum DriveEncryption {
       copyState: shown?.succeeded == true ? copyState(showOutput: shown!.stdout) : .unknown,
       guardHoldsPause: FileManager.default.fileExists(atPath: VMLayout.guardMarker.path))
     if let refusal = switchRefusal(facts) { return fail(refusal) }
+    if let refusal = await currentKeyRefusal() { return fail(refusal) }
     let old = direction == .encrypt ? remotes.plain : remotes.encrypted
     let new = direction == .encrypt ? remotes.encrypted : remotes.plain
     let preflight = try? await VMLayout.rootShell(preflightScript(oldRemote: old), timeout: 60)
@@ -580,14 +674,18 @@ public enum DriveEncryption {
       finalSyncScript(remotes, direction: direction), timeout: 6 * 3600)
     guard synced?.succeeded == true, synced?.stdout.contains("CM-CHECKED") == true else {
       _ = try? await VMLayout.rootShell("systemctl start smbd", timeout: 120)
+      let tail = VMLayout.errorTail(synced)
+      let hint = synced.flatMap { syncFailureHint($0.stderr + $0.stdout, cryptRoot: cryptRoot) }
       return fail(
-        L10n.tr(
-          "The last sync or cryptcheck failed - the machine was NOT moved: %@",
-          VMLayout.errorTail(synced)))
+        L10n.tr("The last sync or cryptcheck failed - the machine was NOT moved: %@", tail)
+          + (hint.map { "\n" + $0 } ?? ""))
     }
     let moved = try? await VMLayout.rootShell(
       repointScript(oldRemote: old, newRemote: new, stamp: VMBundlePrep.stamp()), timeout: 1800)
     guard moved?.succeeded == true, moved?.stdout.contains("CM-REPOINTED") == true else {
+      // The script starts Samba on its own failures; not if it never ran
+      // to the end (no answer from limactl). Idempotent either way.
+      _ = try? await VMLayout.rootShell("systemctl start smbd", timeout: 120)
       return fail(
         L10n.tr(
           "Moving the machine failed; it went back to %@: %@", old, VMLayout.errorTail(moved)))

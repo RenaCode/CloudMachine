@@ -8,6 +8,14 @@ extension L10nPolish {
       "'%@' już jest w %@ - nie podmieniam jego hasła.",
     "'%@' is already in the machine's rclone.conf - not replacing its password.":
       "'%@' już jest w rclone.conf maszyny - nie podmieniam jego hasła.",
+    "%@ holds folders this key cannot read: another password or salt in the machine, or leftovers of an earlier try. Compare the machine's rclone.conf with the Mac's; leftovers have to be removed from %@ by hand.":
+      "%@ zawiera foldery, których ten klucz nie odczyta: inne hasło albo sól w maszynie albo resztki wcześniejszej próby. Porównaj rclone.conf maszyny z tym na Macu; resztki trzeba usunąć z %@ ręcznie.",
+    "'%@' is incomplete or missing in the Mac's rclone.conf - run: cloudmachine-agent vm-encrypt setup":
+      "'%@' jest niepełny albo go brak w rclone.conf na Macu - uruchom: cloudmachine-agent vm-encrypt setup",
+    "Could not read the '%@' section on the Mac or in the machine.":
+      "Nie udało się odczytać sekcji '%@' na Macu albo w maszynie.",
+    "The machine's '%@' (password, salt or folder) differs from the Mac's - the copy would be readable only with the machine's key. Not moving anything.":
+      "'%@' w maszynie (hasło, sól albo folder) różni się od tego na Macu - kopię dałoby się odczytać tylko kluczem maszyny. Niczego nie przenoszę.",
     "A file was restored from the encrypted backup.":
       "Plik został odtworzony z zaszyfrowanej kopii.",
     "Added '%@' (%@) on the Mac and in the machine; password and salt are in the Keychain (service %@).\nSALT: %@\nKeep the password AND this salt outside this Mac now - without both the encrypted backup cannot be read. Next: cloudmachine-agent vm-encrypt copy":
