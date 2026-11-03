@@ -11,6 +11,9 @@ ConditionPathExists=/etc/cloudmachine/vm.env
 
 [Service]
 Type=notify
+# rclone scans the whole VFS cache (up to 120G) before it mounts; after an
+# interrupted upload that takes minutes, and the default 90 s kills it in a loop.
+TimeoutStartSec=45min
 EnvironmentFile=/etc/cloudmachine/vm.env
 EnvironmentFile=/etc/cloudmachine/tm-ids.env
 ExecStart=/usr/local/bin/rclone mount ${CM_REMOTE} /srv/tm \
