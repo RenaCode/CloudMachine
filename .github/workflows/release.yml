@@ -252,6 +252,8 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
           brew tap-new --no-git renacode/ci-check
+          # Homebrew 7 refuses to load casks from a tap nobody trusted ("untrusted tap").
+          brew trust --tap renacode/ci-check
           tap="$(brew --repository renacode/ci-check)"
           mkdir -p "$tap/Casks"
           cp mac-app/build/cloudmachine.rb "$tap/Casks/cloudmachine.rb"
