@@ -40,9 +40,12 @@ CloudMachine is an independent project, not affiliated with Apple or Google
 - About 200 GB of free disk: the machine's disk file grows with the upload
   buffer.
 
-The menu-bar app, CLI output and notifications follow the system language:
-Polish when Polish is the first preferred language, English otherwise.
-`CM_LANGUAGE=en` or `CM_LANGUAGE=pl` overrides it. Logs are always English,
+The menu-bar app, CLI output and notifications follow the system language, in
+22 languages: Arabic, Chinese (Simplified and Traditional), Danish, Dutch,
+English, Finnish, French, German, Hebrew, Italian, Japanese, Korean, Malay,
+Norwegian Bokmål, Polish, Portuguese (Brazil), Russian, Spanish, Swedish, Thai
+and Turkish; English for any other. `CM_LANGUAGE` with a language code (`en`,
+`de`, `zh-Hant`...) overrides it. Logs are always English,
 so they read the same whoever sends them to you.
 
 ### Current limitations
