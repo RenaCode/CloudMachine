@@ -6,6 +6,14 @@
   See the file COPYING.
 */
 
+/*
+  punchfs: libfuse 3.14.0 example/passthrough_ll.c, modified for CloudMachine
+  (RenaCode) in October 2026. Changed: lo_fallocate falls back to writing
+  zeros, and the extended-attribute calls keep attributes in side files.
+  Both changes follow a comment starting "CloudMachine:"; README.md in this
+  directory says why.
+*/
+
 /** @file
  *
  * This file system mirrors the existing file system hierarchy of the

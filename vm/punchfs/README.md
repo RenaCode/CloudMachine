@@ -20,7 +20,8 @@ between rclone's Google Drive mount (`/srv/tm`) and Samba (`/srv/tm-punch`).
   small file `/srv/tm-xattr/<inode hex>/<name>` on the machine's local disk.
   rclone's inode is a hash of the path, so it stays the same for a band.
 
-Everything else is upstream code, unchanged.
+Everything else is upstream code, unchanged, apart from a header comment
+saying what was modified and when (GPLv2 section 2a).
 
 ## Building and testing
 
@@ -37,5 +38,8 @@ directory, without touching Google Drive:
 ## Licence
 
 `punchfs.c` is distributed under the terms of the **GNU GPLv2**, like the
-libfuse example it is based on (see its header). This applies to that one
-file only; the rest of the CloudMachine repository is MIT.
+libfuse example it is based on (see its header); the licence text is in
+[`COPYING`](COPYING). This applies to that one file only; the rest of the
+CloudMachine repository is MIT. `passthrough_helpers.h` is libfuse's,
+unchanged, under the BSD 2-Clause notice in the file. See also
+[`THIRD-PARTY-NOTICES.md`](../../THIRD-PARTY-NOTICES.md).
