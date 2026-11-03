@@ -35,6 +35,32 @@ final class L10nTests: XCTestCase {
       .ptBR)
   }
 
+  /// The variable goes through the same matching as the system setting, so
+  /// a locale-style value works too.
+  func testEnvironmentAcceptsLocaleStyleValues() {
+    let cases: [(String, L10n.Language)] = [
+      ("pl-PL", .pl), ("de_DE", .de), ("zh_Hant", .zhHant), ("zh-TW", .zhHant), ("pt", .ptBR),
+      ("no", .nb), ("en_GB", .en),
+    ]
+    for (value, expected) in cases {
+      XCTAssertEqual(
+        L10n.detectLanguage(
+          environment: ["CM_LANGUAGE": value], preferredLanguages: ["ja-JP"], isRunningTests: true),
+        expected, value)
+    }
+  }
+
+  /// An unknown value is not a reason to switch to English: the system wins.
+  func testUnknownEnvironmentValueFallsBackToTheSystem() {
+    for value in ["xx", "", "uk-UA"] {
+      XCTAssertEqual(
+        L10n.detectLanguage(
+          environment: ["CM_LANGUAGE": value], preferredLanguages: ["ja-JP"],
+          isRunningTests: false),
+        .ja, value)
+    }
+  }
+
   /// Same matching as macOS uses for a localized app: the first preferred
   /// language the app has wins, regional variants fall back to the language.
   func testFollowsPreferredLanguagesLikeTheSystem() {
@@ -56,6 +82,8 @@ final class L10nTests: XCTestCase {
       (["nb-NO"], .nb),
       (["uk-UA", "pl-PL"], .pl),
       (["uk-UA"], .en),
+      (["xx"], .en),
+      (["xx", "de-DE"], .de),
       ([], .en),
     ]
     for (preferred, expected) in cases {
@@ -240,6 +268,34 @@ final class L10nTests: XCTestCase {
     XCTAssert(
       failures.isEmpty,
       "\(failures.count) problems:\n" + failures.prefix(300).joined(separator: "\n"))
+  }
+
+  /// Words spelled the same in Polish and in that language.
+  private static let sameAsPolish: [L10n.Language: Set<String>] = [.nl: ["Adres"], .tr: ["Adres"]]
+
+  /// A table copied instead of translated passes every format check, so
+  /// compare it with Polish (no entry may equal it) and with English (names,
+  /// units and words spelled alike, such as Version or GiB, are a few percent).
+  func testNoTableIsACopyOfPolishOrEnglish() {
+    var failures: [String] = []
+    for language in L10n.Language.allCases where language != .en && language != .pl {
+      let table = L10n.translations[language] ?? [:]
+      let bare = { (s: String) in s.filter { $0.isLetter } }
+      var sameAsEnglish = 0
+      for (key, text) in table where !bare(text).isEmpty {
+        if text == key { sameAsEnglish += 1 }
+        if let polish = L10n.polish[key], polish != key, text == polish,
+          Self.sameAsPolish[language]?.contains(bare(text)) != true
+        {
+          failures.append("[\(language.rawValue)] \"\(key)\" is the Polish text")
+        }
+      }
+      if sameAsEnglish * 100 > table.count * 3 {
+        failures.append(
+          "[\(language.rawValue)] \(sameAsEnglish) of \(table.count) entries are the English text")
+      }
+    }
+    XCTAssert(failures.isEmpty, "\n" + failures.joined(separator: "\n"))
   }
 
   func testNoUnusedTranslations() throws {

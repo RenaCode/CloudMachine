@@ -40,15 +40,29 @@ public enum L10n {
     preferredLanguages: [String] = Locale.preferredLanguages,
     isRunningTests: Bool = NSClassFromString("XCTestCase") != nil
   ) -> Language {
-    if let forced = environment["CM_LANGUAGE"]?.lowercased(),
-      let language = Language.allCases.first(where: { $0.rawValue.lowercased() == forced })
-    {
+    if let forced = environment["CM_LANGUAGE"], let language = match([forced]) {
       return language
     }
-    if isRunningTests || preferredLanguages.isEmpty { return .en }
+    if isRunningTests { return .en }
+    return match(preferredLanguages) ?? .en
+  }
+
+  /// The first of `preferences` the app has, matched by Foundation (zh-TW ->
+  /// zh-Hant, pt-PT -> pt-BR, no -> nb). Foundation answers "en" when nothing
+  /// matches, so English counts only when the preference itself is English.
+  private static func match(_ preferences: [String]) -> Language? {
     let codes = Language.allCases.map(\.rawValue)
-    let match = Bundle.preferredLocalizations(from: codes, forPreferences: preferredLanguages)
-    return match.first.flatMap(Language.init(rawValue:)) ?? .en
+    for preference in preferences {
+      let identifier = preference.replacingOccurrences(of: "_", with: "-")
+      guard
+        let found = Bundle.preferredLocalizations(from: codes, forPreferences: [identifier]).first
+          .flatMap(Language.init(rawValue:))
+      else { continue }
+      if found != .en || Locale(identifier: identifier).language.languageCode == .english {
+        return found
+      }
+    }
+    return nil
   }
 
   /// Translates `english`; with arguments, fills its `%@` placeholders.

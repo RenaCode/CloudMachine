@@ -34,7 +34,7 @@ extension L10nTranslations {
     "On first launch (the app is not signed with an Apple Developer account):":
       "عند التشغيل الأول (التطبيق غير موقّع بحساب مطوّر Apple):",
     "1. Open %@ and drag CloudMachine.app to Applications.":
-      "1. افتح %@ واسحب CloudMachine.app إلى التطبيقات.",
+      "1. افتح %@ واسحب CloudMachine.app إلى مجلد التطبيقات.",
     "2. In Finder, RIGHT-click CloudMachine.app -> Open -> Open\n   (a plain double-click shows the Gatekeeper block \"unidentified developer\").":
       "2. في Finder، انقر بزر الفأرة الأيمن على CloudMachine.app -> فتح -> فتح\n   (النقر المزدوج العادي يُظهر حظر Gatekeeper \"مطوّر غير معروف\").",
     "3. Later launches work normally, with a double-click.":
@@ -58,7 +58,7 @@ extension L10nTranslations {
     "ERROR: Resources/AppIcon.icns is missing - generate it: swift Resources/icon-gen/generate_icon.swift Resources/AppIcon.iconset && iconutil -c icns Resources/AppIcon.iconset -o Resources/AppIcon.icns":
       "خطأ: Resources/AppIcon.icns غير موجود - أنشئه: swift Resources/icon-gen/generate_icon.swift Resources/AppIcon.iconset && iconutil -c icns Resources/AppIcon.iconset -o Resources/AppIcon.icns",
     "==> Signing with the local certificate '%@' (Full Disk Access will survive later rebuilds)":
-      "==> التوقيع بالشهادة المحلية '%@' (سيبقى Full Disk Access بعد إعادة البناء لاحقًا)",
+      "==> التوقيع بالشهادة المحلية '%@' (سيبقى الوصول الكامل إلى القرص بعد إعادة البناء لاحقًا)",
     "==> Signing ad-hoc (no Apple Developer account) - run 'cloudmachine-agent setup-signing-cert' once so that TCC permissions survive later rebuilds":
       "==> توقيع ad-hoc (دون حساب مطوّر Apple) - شغّل 'cloudmachine-agent setup-signing-cert' مرة واحدة لتبقى أذونات TCC بعد إعادة البناء لاحقًا",
     "ERROR: codesign exited with code %@.":
@@ -160,7 +160,7 @@ extension L10nTranslations {
     "Used on Google Drive":
       "المستخدم على Google Drive",
     "Measured %@. The watchdog measures again every few hours.":
-      "قيس %@. يعيد المراقب القياس كل بضع ساعات.",
+      "قِيس في %@. يعيد المراقب القياس كل بضع ساعات.",
     "Limit (GB)":
       "الحد (GB)",
     "Save":
@@ -168,7 +168,7 @@ extension L10nTranslations {
     "Measure now":
       "قِس الآن",
     "Time Machine quota: %@ GB (70%% of the limit - the copy on Drive is about a third larger than the backup inside it). Time Machine deletes the oldest backups to stay within it.":
-      "حصة Time Machine: %@ GB (70%% من الحد - نسخة Drive أكبر بنحو الثلث من النسخة الاحتياطية بداخلها). تحذف Time Machine أقدم النسخ الاحتياطية لتبقى ضمنها.",
+      "حصة Time Machine: %@ GB (70%% من الحد - نسخة Drive أكبر بنحو الثلث من النسخة الاحتياطية بداخلها). يحذف Time Machine أقدم النسخ الاحتياطية لتبقى ضمنها.",
     "Set the Time Machine quota: run this in Terminal (needs sudo)":
       "اضبط حصة Time Machine: شغّل هذا في الطرفية (يتطلب sudo)",
     "Connect Google Drive: run this in Terminal and approve in the browser":
@@ -236,7 +236,7 @@ extension L10nTranslations {
     "Waiting to upload":
       "بانتظار الرفع",
     "%@ files":
-      "%@ ملفًا",
+      "الملفات: %@",
     "nothing":
       "لا شيء",
     "Back up now":
@@ -328,7 +328,7 @@ extension L10nTranslations {
     "%@ GiB in %@ bands, %@ uploading":
       "%@ GiB في %@ أجزاء، يجري رفع %@",
     "%@ bands":
-      "%@ أجزاء",
+      "الأجزاء: %@",
     "%@ fragments abandoned - only in the machine":
       "%@ مقاطع متروكة - موجودة في الجهاز الافتراضي فقط",
     "127.0.0.1:5572 answers on the Mac: Lima forwards the machine's rclone remote control, which has no password. Any web page open in a browser can send it commands - including deleting the backup on Google Drive. Add the portForwards rule from vm/cmsmb.yaml to the machine and restart it (see vm/README.md).":
@@ -352,7 +352,7 @@ extension L10nTranslations {
     "Connected to Google Drive, but could not create the folder '%@' - without it the machine has nowhere to keep the backup. Check the account permissions and try again.":
       "تم الاتصال بـ Google Drive، لكن تعذّر إنشاء المجلد '%@' - ومن دونه لا يملك الجهاز الافتراضي مكانًا لحفظ النسخة الاحتياطية. تحقق من أذونات الحساب وحاول مرة أخرى.",
     "Convert the image":
-      "حوّل الصورة",
+      "تحويل صورة القرص",
     "Converting the image to 32 MB bands":
       "تحويل الصورة إلى أجزاء بحجم 32 MB",
     "Could not check with the current connection whether the backup is on Google Drive (%@), so remote '%@' was NOT replaced: without that answer the new sign-in cannot be checked against it.":
@@ -386,7 +386,7 @@ extension L10nTranslations {
     "Machine buffer":
       "المخزن المؤقت للجهاز الافتراضي",
     "No Time Machine destination is the machine's share (smb://tm@<address>/CloudMachine) - backups are not being made there. The command is printed by: cloudmachine-agent vm-setup":
-      "لا توجد وجهة Time Machine هي مشاركة الجهاز الافتراضي (smb://tm@<address>/CloudMachine) - لا تُجرى نسخ احتياطية هناك. يطبع الأمر: cloudmachine-agent vm-setup",
+      "لا توجد وجهة Time Machine هي مشاركة الجهاز الافتراضي (smb://tm@<address>/CloudMachine) - لا تُجرى نسخ احتياطية هناك. يُطبع الأمر بواسطة: cloudmachine-agent vm-setup",
     "Not running: %@":
       "لا يعمل: %@",
     "Not set up":
@@ -468,7 +468,7 @@ extension L10nTranslations {
     "These bands exist only in the machine's buffer. The backup on Google Drive is INCOMPLETE and may not open.":
       "هذه الأجزاء موجودة في المخزن المؤقت للجهاز الافتراضي فقط. النسخة الاحتياطية على Google Drive غير مكتملة وقد لا تُفتح.",
     "Time Machine backs up to the machine, so without it no backup is made. Start it: limactl start %@ (or the Start button in the app).":
-      "يجري Time Machine النسخ الاحتياطي إلى الجهاز الافتراضي، ومن دونه لا تُجرى أي نسخة احتياطية. شغّله: limactl start %@ (أو زر التشغيل في التطبيق).",
+      "يجري Time Machine النسخ الاحتياطي إلى الجهاز الافتراضي، ومن دونه لا تُجرى أي نسخة احتياطية. شغّله: limactl start %@ (أو زر \"تشغيل الجهاز الافتراضي\" في التطبيق).",
     "Time Machine did not stop its backup within 2 minutes (or tmutil did not answer) - the machine was NOT stopped. Try again in a moment.":
       "لم يوقف Time Machine نسخه الاحتياطي خلال دقيقتين (أو لم يستجب tmutil) - لم يُوقف الجهاز الافتراضي. حاول مرة أخرى بعد قليل.",
     "Time Machine has created its image: stop the backup, then convert the image to 32 MB bands":
@@ -900,7 +900,7 @@ extension L10nTranslations {
     "Unsent %@ GiB, free %@ GiB (pause above %@ GiB unsent or below %@ GiB free, resume below %@ GiB).":
       "غير مرسل %@ GiB، المتاح %@ GiB (إيقاف مؤقت فوق %@ GiB غير مرسلة أو دون %@ GiB متاحة، استئناف دون %@ GiB).",
     "Upload:           Google's daily limit refused an upload %@ ago - rclone retries every 5 min and resumes by itself":
-      "الرفع:           رفضت Google اليومية رفعًا منذ %@ - يعيد rclone المحاولة كل 5 دقائق ويستأنف تلقائيًا",
+      "الرفع:           رفض حد Google اليومي رفعًا منذ %@ - يعيد rclone المحاولة كل 5 دقائق ويستأنف تلقائيًا",
     "no":
       "لا",
     "running":

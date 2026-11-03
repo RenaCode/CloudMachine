@@ -160,7 +160,7 @@ extension L10nTranslations {
     "Used on Google Drive":
       "Utilisé sur Google Drive",
     "Measured %@. The watchdog measures again every few hours.":
-      "Mesuré %@. La surveillance mesure de nouveau toutes les quelques heures.",
+      "Mesuré le %@. La surveillance mesure de nouveau toutes les quelques heures.",
     "Limit (GB)":
       "Limite (GB)",
     "Save":
@@ -172,7 +172,7 @@ extension L10nTranslations {
     "Set the Time Machine quota: run this in Terminal (needs sudo)":
       "Réglez le quota Time Machine : exécutez ceci dans Terminal (sudo requis)",
     "Connect Google Drive: run this in Terminal and approve in the browser":
-      "Connecter Google Drive : exécutez ceci dans Terminal et validez dans le navigateur",
+      "Connectez Google Drive : exécutez ceci dans Terminal et validez dans le navigateur",
     "Grant Full Disk Access to CloudMachine, so it can tell whether backups complete":
       "Accordez l'Accès complet au disque à CloudMachine pour qu'il puisse savoir si les sauvegardes se terminent",
     "Folder on Google Drive":
@@ -252,7 +252,7 @@ extension L10nTranslations {
     "Attention":
       "Attention",
     "Refreshed %@":
-      "Actualisé %@",
+      "Actualisé à %@",
     "System Status":
       "État du système",
     "Action needed":
@@ -352,7 +352,7 @@ extension L10nTranslations {
     "Connected to Google Drive, but could not create the folder '%@' - without it the machine has nowhere to keep the backup. Check the account permissions and try again.":
       "Connecté à Google Drive, mais impossible de créer le dossier '%@' - sans lui, la machine n'a nulle part où conserver la sauvegarde. Vérifiez les autorisations du compte et réessayez.",
     "Convert the image":
-      "Convertir l'image",
+      "Convertir l'image disque",
     "Converting the image to 32 MB bands":
       "Conversion de l'image en bandes de 32 MB",
     "Could not check with the current connection whether the backup is on Google Drive (%@), so remote '%@' was NOT replaced: without that answer the new sign-in cannot be checked against it.":
@@ -364,13 +364,13 @@ extension L10nTranslations {
     "Free in the machine: %@":
       "Libre dans la machine : %@",
     "Generates and installs the launchd agents (app, backup watchdog, machine start, machine guard).":
-      "Génère et installe les agents launchd (app, surveillance des sauvegardes, démarrage de la machine, garde de la machine).",
+      "Génère et installe les agents launchd (app, surveillance des sauvegardes, démarrage de la machine, gardien de la machine).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Installez Lima, qui exécute la machine CloudMachine : exécutez ceci dans Terminal",
     "Install rclone (signs in to Google Drive for the machine)":
-      "Installer rclone (connecte la machine à Google Drive)",
+      "Installez rclone (connecte la machine à Google Drive)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
-      "Installer les agents en arrière-plan (démarrage de la machine, garde du tampon, surveillance des sauvegardes)",
+      "Installez les agents en arrière-plan (démarrage de la machine, gardien du tampon, surveillance des sauvegardes)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
       "Installe rclone via Homebrew - CloudMachine utilise lui-même celui d'install-rclone.",
     "Info.plist, token and mapped/ of the backup image exist only on the machine's disk; without them the bands in %@ cannot be restored. The copy (tm-meta-sync, every 15 min) goes to %@. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u tm-meta-sync":
@@ -416,7 +416,7 @@ extension L10nTranslations {
     "Services":
       "Services",
     "Set up the CloudMachine machine (the first time it downloads Ubuntu - several minutes)":
-      "Configurer la machine CloudMachine (la première fois, elle télécharge Ubuntu - plusieurs minutes)",
+      "Configurez la machine CloudMachine (la première fois, elle télécharge Ubuntu - plusieurs minutes)",
     "Set up the CloudMachine machine again, so it prints the Time Machine command":
       "Reconfigurer la machine CloudMachine pour qu'elle affiche la commande Time Machine",
     "Set up the machine":
@@ -424,7 +424,7 @@ extension L10nTranslations {
     "Setting up the CloudMachine machine":
       "Configuration de la machine CloudMachine",
     "Start the CloudMachine machine":
-      "Démarrer la machine CloudMachine",
+      "Démarrez la machine CloudMachine",
     "Start the machine":
       "Démarrer la machine",
     "Starting the CloudMachine machine":
@@ -464,11 +464,11 @@ extension L10nTranslations {
     "The new sign-in does NOT see the existing backup (%@), so remote '%@' was NOT replaced and rclone.conf is unchanged. Keep the current connection, or sign in with the credential (client_id) that created the backup.":
       "La nouvelle connexion NE voit PAS la sauvegarde existante (%@), donc le remote '%@' n'a PAS été remplacé et rclone.conf est inchangé. Gardez la connexion actuelle, ou connectez-vous avec l'identifiant (client_id) qui a créé la sauvegarde.",
     "The upload buffer lives on this disk. The guard pauses Time Machine before it fills; if the upload does not catch up, backups stay paused.":
-      "Le tampon d'envoi se trouve sur ce disque. La garde met Time Machine en pause avant qu'il ne soit plein ; si l'envoi ne rattrape pas son retard, les sauvegardes restent en pause.",
+      "Le tampon d'envoi se trouve sur ce disque. Le gardien met Time Machine en pause avant qu'il ne soit plein ; si l'envoi ne rattrape pas son retard, les sauvegardes restent en pause.",
     "These bands exist only in the machine's buffer. The backup on Google Drive is INCOMPLETE and may not open.":
       "Ces bandes n'existent que dans le tampon de la machine. La sauvegarde sur Google Drive est INCOMPLÈTE et risque de ne pas s'ouvrir.",
     "Time Machine backs up to the machine, so without it no backup is made. Start it: limactl start %@ (or the Start button in the app).":
-      "Time Machine sauvegarde vers la machine ; sans elle, aucune sauvegarde n'est effectuée. Démarrez-la : limactl start %@ (ou le bouton Démarrer de l'app).",
+      "Time Machine sauvegarde vers la machine ; sans elle, aucune sauvegarde n'est effectuée. Démarrez-la : limactl start %@ (ou le bouton « Démarrer la machine » de l'app).",
     "Time Machine did not stop its backup within 2 minutes (or tmutil did not answer) - the machine was NOT stopped. Try again in a moment.":
       "Time Machine n'a pas arrêté sa sauvegarde en 2 minutes (ou tmutil n'a pas répondu) - la machine n'a PAS été arrêtée. Réessayez dans un instant.",
     "Time Machine has created its image: stop the backup, then convert the image to 32 MB bands":
@@ -482,7 +482,7 @@ extension L10nTranslations {
     "With --replace-existing: confirms that the new sign-in (scope 'drive.file') may not see the existing backup. The new token is still checked against the backup first.":
       "Avec --replace-existing : confirme que la nouvelle connexion (étendue 'drive.file') peut ne pas voir la sauvegarde existante. Le nouveau jeton est tout de même vérifié d'abord par rapport à la sauvegarde.",
     "Without it there is no way to check whether anything reached the Drive - the machine's guard is blind then.":
-      "Sans lui, il est impossible de vérifier si quoi que ce soit est arrivé sur Drive - la garde de la machine est alors aveugle.",
+      "Sans lui, il est impossible de vérifier si quoi que ce soit est arrivé sur Drive - le gardien de la machine est alors aveugle.",
     "limactl did not answer":
       "limactl n'a pas répondu",
     "limactl did not answer (or is not installed). That does not mean the machine is down - it means nobody has checked.":
@@ -674,7 +674,7 @@ extension L10nTranslations {
     "Cannot read the Time Machine preferences":
       "Impossible de lire les préférences de Time Machine",
     "%@ is unreadable - most often Full Disk Access is missing. Without this file it is UNKNOWN when the last backup was made, so we treat it as a failure, not as the absence of a problem.":
-      "%@ est illisible - le plus souvent, l'Accès complet au disque est manquant. Sans ce fichier, on IGNORE quand la dernière sauvegarde a été faite ; nous le traitons donc comme une panne, et non comme l'absence de problème.",
+      "%@ est illisible - le plus souvent, l'Accès complet au disque est manquant. Sans ce fichier, il est IMPOSSIBLE de savoir quand la dernière sauvegarde a été faite ; nous le traitons donc comme une panne, et non comme l'absence de problème.",
     "Cannot measure free space on the Mac's disk":
       "Impossible de mesurer l'espace libre sur le disque du Mac",
     "%@ days":
@@ -780,7 +780,7 @@ extension L10nTranslations {
     "Image metadata:   not copied yet - waits for vm-prepare-bundle":
       "Métadonnées image : pas encore copiées - attend vm-prepare-bundle",
     "Backup %@, paused by the guard %@: %@":
-      "Sauvegarde %@, mise en pause par la garde %@ : %@",
+      "Sauvegarde %@, mise en pause par le gardien %@ : %@",
     "Free in machine:  %@ GiB":
       "Libre machine :   %@ GiB",
     "fsck_apfs -n found problems: %@":
@@ -830,9 +830,9 @@ extension L10nTranslations {
     "Packing the image failed: %@":
       "L'empaquetage de l'image a échoué : %@",
     "No answer from the machine (rclone rc) - the guard would do nothing.":
-      "Aucune réponse de la machine (rclone rc) - la garde ne ferait rien.",
+      "Aucune réponse de la machine (rclone rc) - le gardien ne ferait rien.",
     "Only print what the guard would decide - for trying thresholds on a throwaway machine.":
-      "Affiche seulement ce que la garde déciderait - pour essayer des seuils sur une machine jetable.",
+      "Affiche seulement ce que le gardien déciderait - pour essayer des seuils sur une machine jetable.",
     "Pause above this many GiB in the buffer.":
       "Mettre en pause au-dessus de ce nombre de GiB dans le tampon.",
     "Pause when the machine has less free than this, in GiB.":
@@ -848,7 +848,7 @@ extension L10nTranslations {
     "rclone-tm or punchfs is not running in the machine - see cloudmachine-agent vm-status.":
       "rclone-tm ou punchfs ne fonctionne pas dans la machine - voir cloudmachine-agent vm-status.",
     "Resume below this many GiB (only a backup the guard paused).":
-      "Reprendre en dessous de ce nombre de GiB (uniquement une sauvegarde mise en pause par la garde).",
+      "Reprendre en dessous de ce nombre de GiB (uniquement une sauvegarde mise en pause par le gardien).",
     "Service %@: %@":
       "Service %@ : %@",
     "Several images in the machine (%@) - choose one with --bundle.":

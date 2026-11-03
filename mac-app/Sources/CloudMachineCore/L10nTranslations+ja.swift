@@ -330,7 +330,7 @@ extension L10nTranslations {
     "%@ bands":
       "%@ バンド",
     "%@ fragments abandoned - only in the machine":
-      "%@ 個のフラグメントを破棄しました - マシン内にのみ存在します",
+      "%@ 個のフラグメントのアップロードを断念 - マシン内にのみ存在します",
     "127.0.0.1:5572 answers on the Mac: Lima forwards the machine's rclone remote control, which has no password. Any web page open in a browser can send it commands - including deleting the backup on Google Drive. Add the portForwards rule from vm/cmsmb.yaml to the machine and restart it (see vm/README.md).":
       "127.0.0.1:5572 がMac上で応答しています: Limaが、パスワードのないマシンのrclone遠隔操作を転送しています。ブラウザで開いているWebページからコマンドを送られる可能性があり、Google Drive上のバックアップを削除されることもあります。vm/cmsmb.yamlのportForwardsルールをマシンに追加し、マシンを再起動してください(vm/README.mdを参照)。",
     "A service in the CloudMachine machine is not running":
@@ -468,13 +468,13 @@ extension L10nTranslations {
     "These bands exist only in the machine's buffer. The backup on Google Drive is INCOMPLETE and may not open.":
       "これらのバンドはマシンのバッファにのみ存在します。Google Drive上のバックアップは不完全で、開けない可能性があります。",
     "Time Machine backs up to the machine, so without it no backup is made. Start it: limactl start %@ (or the Start button in the app).":
-      "Time Machineはマシンにバックアップするため、マシンが動作していないとバックアップは作成されません。起動してください: limactl start %@(またはAppの「起動」ボタン)。",
+      "Time Machineはマシンにバックアップするため、マシンが動作していないとバックアップは作成されません。起動してください: limactl start %@(またはAppの「マシンを起動」ボタン)。",
     "Time Machine did not stop its backup within 2 minutes (or tmutil did not answer) - the machine was NOT stopped. Try again in a moment.":
       "Time Machineが2分以内にバックアップを停止しなかった(またはtmutilが応答しなかった)ため、マシンは停止されませんでした。しばらくしてから、もう一度お試しください。",
     "Time Machine has created its image: stop the backup, then convert the image to 32 MB bands":
       "Time Machineがイメージを作成しました: バックアップを停止してから、イメージを32 MBのバンドに変換してください",
     "To upload":
-      "アップロード待ち",
+      "未アップロード",
     "Unknown whether the CloudMachine machine is running":
       "CloudMachineマシンが動作中かどうか不明です",
     "Waiting for the upload to Google Drive (at most %@ min)...":
@@ -780,7 +780,7 @@ extension L10nTranslations {
     "Image metadata:   not copied yet - waits for vm-prepare-bundle":
       "イメージのメタデータ: まだコピーされていません - vm-prepare-bundleを待っています",
     "Backup %@, paused by the guard %@: %@":
-      "バックアップ %1$@、ガード %2$@ により一時停止: %3$@",
+      "バックアップ %1$@、ガードによる一時停止 %2$@: %3$@",
     "Free in machine:  %@ GiB":
       "マシンの空き:     %@ GiB",
     "fsck_apfs -n found problems: %@":

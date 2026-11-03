@@ -780,7 +780,7 @@ extension L10nTranslations {
     "Image metadata:   not copied yet - waits for vm-prepare-bundle":
       "이미지 메타데이터: 아직 복사되지 않음 - vm-prepare-bundle을 기다리는 중",
     "Backup %@, paused by the guard %@: %@":
-      "백업 %1$@, 가드 %2$@에 의해 일시 중지됨: %3$@",
+      "백업 %1$@, 가드에 의한 일시 중지 %2$@: %3$@",
     "Free in machine:  %@ GiB":
       "머신 여유 공간:   %@ GiB",
     "fsck_apfs -n found problems: %@":

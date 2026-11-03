@@ -160,7 +160,7 @@ extension L10nTranslations {
     "Used on Google Drive":
       "Auf Google Drive belegt",
     "Measured %@. The watchdog measures again every few hours.":
-      "Gemessen %@. Der Wächter misst alle paar Stunden erneut.",
+      "Gemessen am %@. Der Backup-Wächter misst alle paar Stunden erneut.",
     "Limit (GB)":
       "Limit (GB)",
     "Save":
@@ -240,7 +240,7 @@ extension L10nTranslations {
     "nothing":
       "nichts",
     "Back up now":
-      "Jetzt sichern",
+      "Backup jetzt erstellen",
     "Stop backup":
       "Backup anhalten",
     "Open CloudMachine":
@@ -252,7 +252,7 @@ extension L10nTranslations {
     "Attention":
       "Achtung",
     "Refreshed %@":
-      "Aktualisiert %@",
+      "Aktualisiert um %@",
     "System Status":
       "Systemstatus",
     "Action needed":
@@ -294,7 +294,7 @@ extension L10nTranslations {
     "Paste client_secret...":
       "client_secret einsetzen ...",
     "Save securely in the Keychain":
-      "Sicher im Schlüsselbund sichern",
+      "Sicher im Schlüsselbund ablegen",
     "Refresh":
       "Aktualisieren",
     "Overview":
@@ -464,17 +464,17 @@ extension L10nTranslations {
     "The new sign-in does NOT see the existing backup (%@), so remote '%@' was NOT replaced and rclone.conf is unchanged. Keep the current connection, or sign in with the credential (client_id) that created the backup.":
       "Die neue Anmeldung sieht das vorhandene Backup NICHT (%@), daher wurde Remote '%@' NICHT ersetzt und rclone.conf ist unverändert. Die aktuelle Verbindung beibehalten oder sich mit den Zugangsdaten (client_id) anmelden, mit denen das Backup erstellt wurde.",
     "The upload buffer lives on this disk. The guard pauses Time Machine before it fills; if the upload does not catch up, backups stay paused.":
-      "Der Upload-Puffer liegt auf dieser Festplatte. Der Wächter hält Time Machine an, bevor er sich füllt; holt der Upload nicht auf, bleiben die Backups angehalten.",
+      "Der Upload-Puffer liegt auf dieser Festplatte. Der Pufferwächter hält Time Machine an, bevor er sich füllt; holt der Upload nicht auf, bleiben die Backups angehalten.",
     "These bands exist only in the machine's buffer. The backup on Google Drive is INCOMPLETE and may not open.":
       "Diese Bänder existieren nur im Puffer der Maschine. Das Backup auf Google Drive ist UNVOLLSTÄNDIG und lässt sich eventuell nicht öffnen.",
     "Time Machine backs up to the machine, so without it no backup is made. Start it: limactl start %@ (or the Start button in the app).":
-      "Time Machine sichert auf die Maschine, ohne sie wird also kein Backup erstellt. Starten mit: limactl start %@ (oder mit dem Button „Maschine starten“ in der App).",
+      "Time Machine sichert auf die Maschine, ohne sie wird also kein Backup erstellt. Starten mit: limactl start %@ (oder mit der Taste „Maschine starten“ in der App).",
     "Time Machine did not stop its backup within 2 minutes (or tmutil did not answer) - the machine was NOT stopped. Try again in a moment.":
       "Time Machine hat sein Backup nicht innerhalb von 2 Minuten angehalten (oder tmutil hat nicht geantwortet) – die Maschine wurde NICHT angehalten. In einem Moment erneut versuchen.",
     "Time Machine has created its image: stop the backup, then convert the image to 32 MB bands":
       "Time Machine hat sein Image erstellt: das Backup anhalten, dann das Image in 32-MB-Bänder konvertieren",
     "To upload":
-      "Hochzuladen",
+      "Noch hochzuladen",
     "Unknown whether the CloudMachine machine is running":
       "Unklar, ob die CloudMachine-Maschine läuft",
     "Waiting for the upload to Google Drive (at most %@ min)...":
@@ -482,7 +482,7 @@ extension L10nTranslations {
     "With --replace-existing: confirms that the new sign-in (scope 'drive.file') may not see the existing backup. The new token is still checked against the backup first.":
       "Mit --replace-existing: bestätigt, dass die neue Anmeldung (Bereich 'drive.file') das vorhandene Backup eventuell nicht sieht. Das neue Token wird zuvor trotzdem am Backup geprüft.",
     "Without it there is no way to check whether anything reached the Drive - the machine's guard is blind then.":
-      "Ohne ihn lässt sich nicht prüfen, ob etwas Drive erreicht hat – der Wächter der Maschine ist dann blind.",
+      "Ohne ihn lässt sich nicht prüfen, ob etwas Drive erreicht hat – der Pufferwächter der Maschine ist dann blind.",
     "limactl did not answer":
       "limactl hat nicht geantwortet",
     "limactl did not answer (or is not installed). That does not mean the machine is down - it means nobody has checked.":
@@ -502,7 +502,7 @@ extension L10nTranslations {
     "Google Drive's daily upload limit stops the upload":
       "Das tägliche Upload-Limit von Google Drive stoppt den Upload",
     "Google last refused an upload %@ ago (750 GB a day). Backups since then are only in the machine's buffer on this Mac. rclone retries every 5 min and resumes by itself when the limit passes; the guard pauses Time Machine if more than %@ GiB waits.":
-      "Google hat vor %@ zuletzt einen Upload abgelehnt (750 GB pro Tag). Backups seitdem liegen nur im Puffer der Maschine auf diesem Mac. rclone versucht es alle 5 Min. erneut und macht von selbst weiter, sobald das Limit vorbei ist; der Wächter hält Time Machine an, wenn mehr als %@ GiB warten.",
+      "Google hat vor %@ zuletzt einen Upload abgelehnt (750 GB pro Tag). Backups seitdem liegen nur im Puffer der Maschine auf diesem Mac. rclone versucht es alle 5 Min. erneut und macht von selbst weiter, sobald das Limit vorbei ist; der Pufferwächter hält Time Machine an, wenn mehr als %@ GiB warten.",
     "Usage on Google Drive is not being measured":
       "Die Nutzung auf Google Drive wird nicht gemessen",
     "The last measurement (%@ GB) is from %@, %@ ago - rclone size has not answered since. Until it does, nothing watches the %@ GB limit: the 90%% and 100%% alarms stay silent. Check vm-status, or press Measure now in the window.":
@@ -780,7 +780,7 @@ extension L10nTranslations {
     "Image metadata:   not copied yet - waits for vm-prepare-bundle":
       "Image-Metadaten:   noch nicht kopiert – wartet auf vm-prepare-bundle",
     "Backup %@, paused by the guard %@: %@":
-      "Backup %@, vom Wächter angehalten %@: %@",
+      "Backup %@, vom Pufferwächter angehalten %@: %@",
     "Free in machine:  %@ GiB":
       "Frei in Maschine: %@ GiB",
     "fsck_apfs -n found problems: %@":
@@ -830,9 +830,9 @@ extension L10nTranslations {
     "Packing the image failed: %@":
       "Das Packen des Images ist fehlgeschlagen: %@",
     "No answer from the machine (rclone rc) - the guard would do nothing.":
-      "Keine Antwort der Maschine (rclone rc) – der Wächter würde nichts tun.",
+      "Keine Antwort der Maschine (rclone rc) – der Pufferwächter würde nichts tun.",
     "Only print what the guard would decide - for trying thresholds on a throwaway machine.":
-      "Nur ausgeben, was der Wächter entscheiden würde – zum Ausprobieren von Schwellenwerten auf einer Wegwerf-Maschine.",
+      "Nur ausgeben, was der Pufferwächter entscheiden würde – zum Ausprobieren von Schwellenwerten auf einer Wegwerf-Maschine.",
     "Pause above this many GiB in the buffer.":
       "Anhalten, wenn mehr als so viele GiB im Puffer liegen.",
     "Pause when the machine has less free than this, in GiB.":
@@ -848,7 +848,7 @@ extension L10nTranslations {
     "rclone-tm or punchfs is not running in the machine - see cloudmachine-agent vm-status.":
       "rclone-tm oder punchfs läuft nicht in der Maschine – siehe cloudmachine-agent vm-status.",
     "Resume below this many GiB (only a backup the guard paused).":
-      "Fortsetzen unterhalb von so vielen GiB (nur bei einem vom Wächter angehaltenen Backup).",
+      "Fortsetzen unterhalb von so vielen GiB (nur bei einem vom Pufferwächter angehaltenen Backup).",
     "Service %@: %@":
       "Dienst %@: %@",
     "Several images in the machine (%@) - choose one with --bundle.":
