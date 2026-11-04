@@ -37,17 +37,30 @@ public enum KeychainStore {
   /// Saves or overwrites an item. `-U` means "replace if it already exists" -
   /// without it, fixing a typo would end in an error with the old value still
   /// in use.
-  public static func save(_ value: String, account: String, service: String) async throws {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { throw StoreError.emptyValue }
+  ///
+  /// `exact`: store the value as given. For a secret that is used elsewhere
+  /// untrimmed - the encryption password goes to `rclone obscure` exactly as
+  /// typed, so a trimmed Keychain copy would not decrypt the backup.
+  public static func save(
+    _ value: String, account: String, service: String, exact: Bool = false
+  ) async throws {
+    let stored = try valueToStore(value, exact: exact)
 
     let result = try? await ProcessRunner.run(
       "/usr/bin/security",
-      ["add-generic-password", "-a", account, "-s", service, "-w", trimmed, "-U"],
+      ["add-generic-password", "-a", account, "-s", service, "-w", stored, "-U"],
       timeout: 30)
     guard result?.succeeded == true else {
       throw StoreError.failed(result?.stderr ?? L10n.tr("unknown error"))
     }
+  }
+
+  /// The value `save` hands to `security`: trimmed (pasted keys carry
+  /// newlines), or as given with `exact`. Blank is refused either way.
+  static func valueToStore(_ value: String, exact: Bool = false) throws -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { throw StoreError.emptyValue }
+    return exact ? value : trimmed
   }
 
   /// Whether the item exists - WITHOUT `-w`, i.e. without reaching for the
