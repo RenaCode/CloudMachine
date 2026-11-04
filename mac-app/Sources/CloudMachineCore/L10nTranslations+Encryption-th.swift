@@ -12,7 +12,7 @@ extension L10nTranslations {
     "'%@' is incomplete or missing in the Mac's rclone.conf - run: cloudmachine-agent vm-encrypt setup":
       "'%@' ไม่สมบูรณ์หรือไม่มีใน rclone.conf ของ Mac - เรียกใช้: cloudmachine-agent vm-encrypt setup",
     "CLOUDMACHINE_VM_INSTANCE=%@ needs its own rclone.conf - set RCLONE_CONFIG to a copy, not %@. Its Keychain entry is service %@.":
-      "CLOUDMACHINE_VM_INSTANCE=%@ ต้องมี rclone.conf ของตัวเอง - ตั้ง RCLONE_CONFIG เป็นสำเนา ไม่ใช่ %@ รายการในพวงกุญแจของเครื่องนี้คือบริการ %@",
+      "CLOUDMACHINE_VM_INSTANCE=%@ ต้องมี rclone.conf ของตัวเอง - ตั้ง RCLONE_CONFIG เป็นสำเนา ไม่ใช่ %@ รายการในพวงกุญแจของอินสแตนซ์นี้คือบริการ %@",
     "Could not read the '%@' section on the Mac or in the machine.":
       "อ่านส่วน '%@' บน Mac หรือในเครื่องเสมือนไม่ได้",
     "The machine's '%@' (password, salt or folder) differs from the Mac's - the copy would be readable only with the machine's key. Not moving anything.":
@@ -22,7 +22,7 @@ extension L10nTranslations {
     "Added '%@' (%@) on the Mac and in the machine; password and salt are in the Keychain (service %@).\nSALT: %@\nKeep the password AND this salt outside this Mac now - without both the encrypted backup cannot be read. Next: cloudmachine-agent vm-encrypt copy":
       "เพิ่ม '%@' (%@) บน Mac และในเครื่องเสมือนแล้ว รหัสผ่านและซอลต์อยู่ในพวงกุญแจ (บริการ %@)\nซอลต์: %@\nเก็บรหัสผ่านและซอลต์นี้ไว้นอก Mac เครื่องนี้ตอนนี้เลย - หากไม่มีทั้งสองอย่างจะอ่านข้อมูลสำรองที่เข้ารหัสไม่ได้ ถัดไป: cloudmachine-agent vm-encrypt copy",
     "Adds the encrypted remote on the Mac and in the machine (asks for the password). Moves no data.":
-      "เพิ่มรีโมตที่เข้ารหัสบน Mac และในเครื่องเสมือน (ถามรหัสผ่าน) ไม่ย้ายข้อมูล",
+      "เพิ่ม remote ที่เข้ารหัสบน Mac และในเครื่องเสมือน (ถามรหัสผ่าน) ไม่ย้ายข้อมูล",
     "Again: ":
       "อีกครั้ง: ",
     "Copies the plain backup into the encrypted folder, in the background; backups go on.":
@@ -32,9 +32,9 @@ extension L10nTranslations {
     "CLOUDMACHINE_VM_INSTANCE=%@ without CLOUDMACHINE_VM_REMOTE would use the live backup's folder - set both.":
       "CLOUDMACHINE_VM_INSTANCE=%@ ที่ไม่มี CLOUDMACHINE_VM_REMOTE จะใช้โฟลเดอร์ของข้อมูลสำรองที่ใช้งานอยู่ - ตั้งค่าทั้งสองตัว",
     "Could not add the remote to %@: %@":
-      "เพิ่มรีโมตลงใน %@ ไม่ได้: %@",
+      "เพิ่ม remote ลงใน %@ ไม่ได้: %@",
     "Could not add the remote to the machine's rclone.conf.":
-      "เพิ่มรีโมตลงใน rclone.conf ของเครื่องเสมือนไม่ได้",
+      "เพิ่ม remote ลงใน rclone.conf ของเครื่องเสมือนไม่ได้",
     "Could not read %@.":
       "อ่าน %@ ไม่ได้",
     "Could not read when Time Machine last finished a backup (Full Disk Access?) - not deleting.":
@@ -50,13 +50,13 @@ extension L10nTranslations {
     "Encryption password: ":
       "รหัสผ่านการเข้ารหัส: ",
     "Machine uses:     %@":
-      "เครื่องใช้:       %@",
+      "เครื่องเสมือนใช้:  %@",
     "Moves the backup on Google Drive under rclone encryption: setup, copy, switch, then delete-plain.":
       "ย้ายข้อมูลสำรองบน Google Drive ไปอยู่ใต้การเข้ารหัสของ rclone: setup, copy, switch แล้วจึง delete-plain",
     "Moves the plain folder to Google Drive's bin - only after a backup has finished into the encrypted one.":
       "ย้ายโฟลเดอร์ที่ไม่เข้ารหัสไปยังถังขยะของ Google Drive - หลังจากสำรองข้อมูลลงโฟลเดอร์ที่เข้ารหัสเสร็จแล้วเท่านั้น",
     "Moving the machine failed; it went back to %@: %@":
-      "สลับเครื่องเสมือนไม่สำเร็จ และกลับไปใช้ %@: %@",
+      "การย้ายเครื่องเสมือนไปยังโฟลเดอร์ใหม่ไม่สำเร็จ จึงกลับไปใช้ %@: %@",
     "No answer from rclone in the machine - the upload queue is unknown.":
       "ไม่มีคำตอบจาก rclone ในเครื่องเสมือน - ไม่ทราบสถานะคิวอัปโหลด",
     "No backup has finished into the encrypted folder yet (last one %@, switched %@) - not deleting.":
@@ -78,11 +78,11 @@ extension L10nTranslations {
     "The encryption password and salt are kept outside this Mac.":
       "รหัสผ่านการเข้ารหัสและซอลต์เก็บไว้นอก Mac เครื่องนี้",
     "The guard holds Time Machine paused and would resume it during the switch. Wait until it resumes and the upload is done.":
-      "ตัวป้องกันบัฟเฟอร์กำลังพัก Time Machine ไว้และจะสั่งให้ทำต่อระหว่างการสลับ รอจนกลับมาทำงานและอัปโหลดเสร็จ",
+      "ตัวป้องกันบัฟเฟอร์กำลังหยุด Time Machine ไว้ชั่วคราว และจะให้ทำงานต่อระหว่างการสลับ รอจนกว่า Time Machine จะกลับมาทำงานและอัปโหลดเสร็จ",
     "The image metadata has not been copied to the encrypted folder since the last backup - not deleting.":
       "ข้อมูลเมตาของอิมเมจยังไม่ถูกคัดลอกไปยังโฟลเดอร์ที่เข้ารหัสตั้งแต่การสำรองข้อมูลครั้งล่าสุด - จะไม่ลบอะไร",
     "The last sync or cryptcheck failed - the machine was NOT moved: %@":
-      "การซิงค์ครั้งสุดท้ายหรือ cryptcheck ล้มเหลว - ไม่ได้สลับเครื่องเสมือน: %@",
+      "การซิงค์ครั้งสุดท้ายหรือ cryptcheck ล้มเหลว - ไม่ได้ย้ายเครื่องเสมือนไปยังโฟลเดอร์ที่เข้ารหัส: %@",
     "The machine already uses the encrypted folder - nothing to switch.":
       "เครื่องเสมือนใช้โฟลเดอร์ที่เข้ารหัสอยู่แล้ว - ไม่มีอะไรต้องสลับ",
     "The machine already uses the encrypted folder.":
@@ -92,11 +92,11 @@ extension L10nTranslations {
     "The machine does not use the encrypted folder - the plain folder is the backup. Not deleting it.":
       "เครื่องเสมือนไม่ได้ใช้โฟลเดอร์ที่เข้ารหัส - โฟลเดอร์ที่ไม่เข้ารหัสคือข้อมูลสำรอง จะไม่ลบ",
     "The machine has no '%@' remote in its rclone.conf - run: cloudmachine-agent vm-encrypt setup":
-      "เครื่องเสมือนไม่มีรีโมต '%@' ใน rclone.conf - เรียกใช้: cloudmachine-agent vm-encrypt setup",
+      "เครื่องเสมือนไม่มี remote '%@' ใน rclone.conf - เรียกใช้: cloudmachine-agent vm-encrypt setup",
     "The machine is not on this app's template or does not use %@ (cloudmachine-agent vm-update first): %@":
-      "เครื่องเสมือนไม่ได้ใช้แม่แบบของแอปนี้ หรือไม่ได้ใช้ %@ (ทำ cloudmachine-agent vm-update ก่อน): %@",
+      "เครื่องเสมือนไม่ได้ใช้เทมเพลตของแอปนี้ หรือไม่ได้ใช้ %@ (ทำ cloudmachine-agent vm-update ก่อน): %@",
     "The machine now uses %@, but %@ could not be updated (%@) - fix it before anything else runs vm-setup.":
-      "ตอนนี้เครื่องเสมือนใช้ %@ แต่อัปเดต %@ ไม่ได้ (%@) - แก้ไขก่อนที่สิ่งอื่นจะเรียกใช้ vm-setup",
+      "ตอนนี้เครื่องเสมือนใช้ %@ แต่อัปเดต %@ ไม่ได้ (%@) - แก้ไขก่อนที่จะมีการเรียกใช้ vm-setup อีก",
     "The machine now uses %@. %@ is kept. Turn automatic backups back on: sudo tmutil enable":
       "ตอนนี้เครื่องเสมือนใช้ %@ และเก็บ %@ ไว้ เปิดการสำรองข้อมูลอัตโนมัติอีกครั้ง: sudo tmutil enable",
     "The password must have at least 12 characters.":

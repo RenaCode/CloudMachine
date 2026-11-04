@@ -20,9 +20,9 @@ extension L10nTranslations {
     "A file was restored from the encrypted backup.":
       "קובץ שוחזר מהגיבוי המוצפן.",
     "Added '%@' (%@) on the Mac and in the machine; password and salt are in the Keychain (service %@).\nSALT: %@\nKeep the password AND this salt outside this Mac now - without both the encrypted backup cannot be read. Next: cloudmachine-agent vm-encrypt copy":
-      "'%@' (%@) נוסף ב-Mac ובמכונה; הסיסמה והמלח נמצאים במחזיק המפתחות (שירות %@).\nמלח: %@\nשמור עכשיו את הסיסמה ואת המלח הזה מחוץ ל-Mac הזה - בלי שניהם אי אפשר לקרוא את הגיבוי המוצפן. הבא: cloudmachine-agent vm-encrypt copy",
+      "'%@' (%@) נוסף ב-Mac ובמכונה; הסיסמה והמלח נמצאים במחזיק המפתחות (שירות %@).\nמלח: %@\nשמור עכשיו את הסיסמה ואת המלח הזה מחוץ ל-Mac הזה - בלי שניהם אי אפשר לקרוא את הגיבוי המוצפן. השלב הבא: cloudmachine-agent vm-encrypt copy",
     "Adds the encrypted remote on the Mac and in the machine (asks for the password). Moves no data.":
-      "מוסיף את היעד המרוחק המוצפן ב-Mac ובמכונה (מבקש את הסיסמה). לא מעביר נתונים.",
+      "מוסיף את החיבור המוצפן ב-Mac ובמכונה (מבקש את הסיסמה). לא מעביר נתונים.",
     "Again: ":
       "שוב: ",
     "Copies the plain backup into the encrypted folder, in the background; backups go on.":
@@ -32,9 +32,9 @@ extension L10nTranslations {
     "CLOUDMACHINE_VM_INSTANCE=%@ without CLOUDMACHINE_VM_REMOTE would use the live backup's folder - set both.":
       "CLOUDMACHINE_VM_INSTANCE=%@ ללא CLOUDMACHINE_VM_REMOTE תשתמש בתיקיית הגיבוי הפעיל - הגדר את שניהם.",
     "Could not add the remote to %@: %@":
-      "לא ניתן היה להוסיף את היעד המרוחק ל-%@: %@",
+      "לא ניתן היה להוסיף את החיבור ל-%@: %@",
     "Could not add the remote to the machine's rclone.conf.":
-      "לא ניתן היה להוסיף את היעד המרוחק ל-rclone.conf של המכונה.",
+      "לא ניתן היה להוסיף את החיבור ל-rclone.conf של המכונה.",
     "Could not read %@.":
       "לא ניתן היה לקרוא את %@.",
     "Could not read when Time Machine last finished a backup (Full Disk Access?) - not deleting.":
@@ -50,17 +50,17 @@ extension L10nTranslations {
     "Encryption password: ":
       "סיסמת הצפנה: ",
     "Machine uses:     %@":
-      "המכונה משתמשת:   %@",
+      "בשימוש המכונה:    %@",
     "Moves the backup on Google Drive under rclone encryption: setup, copy, switch, then delete-plain.":
-      "מעביר את הגיבוי ב-Google Drive אל מתחת להצפנה של rclone: setup, copy, switch ואז delete-plain.",
+      "מעביר את הגיבוי ב-Google Drive להצפנה של rclone: setup, copy, switch ואז delete-plain.",
     "Moves the plain folder to Google Drive's bin - only after a backup has finished into the encrypted one.":
       "מעביר את התיקייה הלא מוצפנת לפח של Google Drive - רק אחרי שגיבוי הסתיים בתיקייה המוצפנת.",
     "Moving the machine failed; it went back to %@: %@":
       "העברת המכונה נכשלה; היא חזרה אל %@: %@",
     "No answer from rclone in the machine - the upload queue is unknown.":
-      "אין תשובה מ-rclone במכונה - תור ההעלאה לא ידוע.",
+      "אין תשובה מ-rclone במכונה - מצב תור ההעלאה לא ידוע.",
     "No backup has finished into the encrypted folder yet (last one %@, switched %@) - not deleting.":
-      "עדיין אף גיבוי לא הסתיים בתיקייה המוצפנת (האחרון %@, הועבר %@) - שום דבר לא נמחק.",
+      "עדיין אף גיבוי לא הסתיים בתיקייה המוצפנת (האחרון %@, ההעברה %@) - שום דבר לא נמחק.",
     "Not everything is on Google Drive yet (%@ MB unsent, %@ uploading, %@ failed). Wait until the upload is done: cloudmachine-agent vm-status":
       "עדיין לא הכול ב-Google Drive (%@ MB לא נשלחו, %@ בהעלאה, %@ נכשלו). המתן עד שההעלאה תסתיים: cloudmachine-agent vm-status",
     "Restore a file from the encrypted backup first (Time Machine, Browse), then confirm with --restore-checked.":
@@ -74,11 +74,11 @@ extension L10nTranslations {
     "The copy runs in the machine (%@, log %@). Backups go on meanwhile. Check: cloudmachine-agent vm-encrypt status":
       "ההעתקה פועלת במכונה (%@, יומן %@). בינתיים הגיבויים ממשיכים. בדיקה: cloudmachine-agent vm-encrypt status",
     "The copy to the encrypted folder has not finished well (%@) - run: cloudmachine-agent vm-encrypt copy, and wait for it.":
-      "ההעתקה לתיקייה המוצפנת לא הסתיימה כראוי (%@) - הרץ: cloudmachine-agent vm-encrypt copy, והמתן לה.",
+      "ההעתקה לתיקייה המוצפנת לא הסתיימה כראוי (%@) - הרץ: cloudmachine-agent vm-encrypt copy, והמתן לסיומה.",
     "The encryption password and salt are kept outside this Mac.":
       "סיסמת ההצפנה והמלח נשמרים מחוץ ל-Mac הזה.",
     "The guard holds Time Machine paused and would resume it during the switch. Wait until it resumes and the upload is done.":
-      "השומר מחזיק את Time Machine מושהה והיה מחדש אותו במהלך ההעברה. המתן עד שיחודש וההעלאה תסתיים.",
+      "השומר מחזיק את Time Machine במצב מושהה ועלול לחדש אותו במהלך ההעברה. המתן עד שהגיבוי יחודש וההעלאה תסתיים.",
     "The image metadata has not been copied to the encrypted folder since the last backup - not deleting.":
       "המטא-נתונים של התמונה לא הועתקו לתיקייה המוצפנת מאז הגיבוי האחרון - שום דבר לא נמחק.",
     "The last sync or cryptcheck failed - the machine was NOT moved: %@":
@@ -92,9 +92,9 @@ extension L10nTranslations {
     "The machine does not use the encrypted folder - the plain folder is the backup. Not deleting it.":
       "המכונה לא משתמשת בתיקייה המוצפנת - התיקייה הלא מוצפנת היא הגיבוי. היא לא נמחקת.",
     "The machine has no '%@' remote in its rclone.conf - run: cloudmachine-agent vm-encrypt setup":
-      "למכונה אין יעד מרוחק '%@' ב-rclone.conf שלה - הרץ: cloudmachine-agent vm-encrypt setup",
+      "למכונה אין חיבור '%@' ב-rclone.conf שלה - הרץ: cloudmachine-agent vm-encrypt setup",
     "The machine is not on this app's template or does not use %@ (cloudmachine-agent vm-update first): %@":
-      "המכונה לא על התבנית של היישום הזה או לא משתמשת ב-%@ (קודם cloudmachine-agent vm-update): %@",
+      "המכונה לא פועלת עם התבנית של האפליקציה הזו או לא משתמשת ב-%@ (קודם cloudmachine-agent vm-update): %@",
     "The machine now uses %@, but %@ could not be updated (%@) - fix it before anything else runs vm-setup.":
       "המכונה משתמשת עכשיו ב-%@, אבל לא ניתן היה לעדכן את %@ (%@) - תקן זאת לפני שמשהו אחר מריץ vm-setup.",
     "The machine now uses %@. %@ is kept. Turn automatic backups back on: sudo tmutil enable":
