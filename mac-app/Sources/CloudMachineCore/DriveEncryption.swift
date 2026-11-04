@@ -555,6 +555,15 @@ public enum DriveEncryption {
     return Data(bytes).base64EncodedString()
   }
 
+  /// What `setup` keeps in the Keychain: the password and the salt exactly as
+  /// `obscure` encrypted them. A trimmed copy of a password with an edge
+  /// space would not decrypt the backup.
+  static func keychainItems(password: String, salt: String)
+    -> [(account: String, value: String, exact: Bool)]
+  {
+    [(passwordAccount, password, true), (saltAccount, salt, true)]
+  }
+
   /// `rclone obscure`, the secret through the environment (not `ps`).
   static func obscure(_ secret: String) async -> String? {
     let result = try? await ProcessRunner.run(
@@ -608,8 +617,10 @@ public enum DriveEncryption {
     // the one mistake here that cannot be undone.
     let service = keychainService(instance: VMLayout.instanceName)
     do {
-      try await KeychainStore.save(password, account: passwordAccount, service: service)
-      try await KeychainStore.save(salt, account: saltAccount, service: service)
+      for item in keychainItems(password: password, salt: salt) {
+        try await KeychainStore.save(
+          item.value, account: item.account, service: service, exact: item.exact)
+      }
     } catch {
       return fail(error.localizedDescription)
     }
