@@ -65,10 +65,24 @@ public enum VMLayout {
   /// `gdrive:CloudMachine/<folder>-tm`. The `-tm` suffix keeps it apart from
   /// `CloudMachine/<folder>`, where the retired disk-image layout kept its
   /// image - the two never share bands.
-  /// `CLOUDMACHINE_VM_REMOTE` replaces it whole (see `instanceName`).
+  /// Once `vm-encrypt switch` has moved the machine, it is the encrypted
+  /// `gdrive-crypt:tm` (`DriveEncryption`).
   public static var remote: String {
-    override("CLOUDMACHINE_VM_REMOTE")
-      ?? "\(DriveFolder.remoteName):\(DriveFolder.remoteRoot)/\(DriveFolder.name)-tm"
+    remote(plain: plainRemote, encrypted: DriveEncryption.isEnabled)
+  }
+
+  static func remote(plain: String, encrypted: Bool) -> String {
+    encrypted ? DriveEncryption.encryptedRemote : plain
+  }
+
+  /// The unencrypted folder, whichever one the machine uses now.
+  /// `CLOUDMACHINE_VM_REMOTE` replaces it whole (see `instanceName`).
+  public static var plainRemote: String {
+    plainRemote(override: override("CLOUDMACHINE_VM_REMOTE"), folder: DriveFolder.name)
+  }
+
+  static func plainRemote(override: String?, folder: String) -> String {
+    override ?? "\(DriveFolder.remoteName):\(DriveFolder.remoteRoot)/\(folder)-tm"
   }
 
   /// `gdrive:CloudMachine/<folder>-tm-meta`: the image's files outside
@@ -119,7 +133,12 @@ public enum VMLayout {
     if let custom = ProcessInfo.processInfo.environment["RCLONE_CONFIG"], !custom.isEmpty {
       return URL(fileURLWithPath: custom)
     }
-    return FileManager.default.homeDirectoryForCurrentUser
+    return defaultHostRcloneConfig
+  }
+
+  /// `~/.config/rclone/rclone.conf`, the file `RCLONE_CONFIG` replaces.
+  public static var defaultHostRcloneConfig: URL {
+    FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent(".config/rclone/rclone.conf")
   }
 

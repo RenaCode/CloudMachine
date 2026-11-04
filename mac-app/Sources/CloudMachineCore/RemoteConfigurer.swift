@@ -377,7 +377,11 @@ public enum RemoteConfigurer {
       env["RCLONE_DRIVE_CLIENT_ID"] = clientID
       env["RCLONE_DRIVE_CLIENT_SECRET"] = clientSecret
     }
-    let path = VMLayout.remote.split(separator: ":", maxSplits: 1).last.map(String.init) ?? ""
+    // `:drive:` cannot decrypt, so with encryption the question is whether
+    // the encrypted folder has anything in it - its names are not readable.
+    let encrypted = DriveEncryption.isEnabled
+    let folder = encrypted ? DriveEncryption.cryptRoot : VMLayout.remote
+    let path = folder.split(separator: ":", maxSplits: 1).last.map(String.init) ?? ""
     guard
       let result = try? await ProcessRunner.run(
         CMTooling.managedRclonePath.path, ["lsf", "--dirs-only", ":drive:\(path)"], env: env,
@@ -386,17 +390,20 @@ public enum RemoteConfigurer {
       return .unknown(L10n.tr("rclone did not answer"))
     }
     return classifyRemoteListing(
-      succeeded: result.succeeded, stdout: result.stdout, stderr: result.stderr)
+      succeeded: result.succeeded, stdout: result.stdout, stderr: result.stderr,
+      anyFolderCounts: encrypted)
   }
 
-  /// `lsf --dirs-only` of the folder -> whether the backup's `bands/` is there.
+  /// `lsf --dirs-only` of the folder -> whether the backup's `bands/` is there
+  /// (with `anyFolderCounts`, for an encrypted folder: any folder at all).
   /// A missing folder is an answer ("absent"), any other error is not.
-  static func classifyRemoteListing(succeeded: Bool, stdout: String, stderr: String)
-    -> RemotePresence
-  {
+  static func classifyRemoteListing(
+    succeeded: Bool, stdout: String, stderr: String, anyFolderCounts: Bool = false
+  ) -> RemotePresence {
     if succeeded {
       let present = stdout.split(whereSeparator: \.isNewline).contains {
-        $0.trimmingCharacters(in: .whitespaces) == "bands/"
+        let name = $0.trimmingCharacters(in: .whitespaces)
+        return anyFolderCounts ? name.hasSuffix("/") : name == "bands/"
       }
       return present ? .present : .absent
     }
