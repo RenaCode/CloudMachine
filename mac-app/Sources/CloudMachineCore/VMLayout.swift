@@ -133,7 +133,12 @@ public enum VMLayout {
     if let custom = ProcessInfo.processInfo.environment["RCLONE_CONFIG"], !custom.isEmpty {
       return URL(fileURLWithPath: custom)
     }
-    return FileManager.default.homeDirectoryForCurrentUser
+    return defaultHostRcloneConfig
+  }
+
+  /// `~/.config/rclone/rclone.conf`, the file `RCLONE_CONFIG` replaces.
+  public static var defaultHostRcloneConfig: URL {
+    FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent(".config/rclone/rclone.conf")
   }
 

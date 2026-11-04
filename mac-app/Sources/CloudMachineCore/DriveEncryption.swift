@@ -54,16 +54,45 @@ public enum DriveEncryption {
   /// A throwaway machine must name its own Drive folder: everything here
   /// derives from `VMLayout.plainRemote`, and `delete-plain` on `cmtest`
   /// with the default folder would delete the live backup.
-  static func throwawayRefusal(instance: String, remoteOverride: String?) -> String? {
-    guard instance != "cmsmb", remoteOverride == nil else { return nil }
-    return L10n.tr(
-      "CLOUDMACHINE_VM_INSTANCE=%@ without CLOUDMACHINE_VM_REMOTE would use the live backup's folder - set both.",
-      instance)
+  /// It must also have its own rclone.conf (decision 04.11): `setup` appends
+  /// the `crypt` section to it, and on the Mac's own file that section would
+  /// point the live machine's next `vm-setup` at the throwaway folder and
+  /// block the real `setup`. Its Keychain entry is its own by name
+  /// (`keychainService(instance:)`), so the live password and salt are never
+  /// overwritten.
+  static func throwawayRefusal(
+    instance: String, remoteOverride: String?, rcloneConfig: String?, defaultConfig: String
+  ) -> String? {
+    guard instance != "cmsmb" else { return nil }
+    guard remoteOverride != nil else {
+      return L10n.tr(
+        "CLOUDMACHINE_VM_INSTANCE=%@ without CLOUDMACHINE_VM_REMOTE would use the live backup's folder - set both.",
+        instance)
+    }
+    func normalized(_ path: String) -> String {
+      URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+    guard let rcloneConfig, !rcloneConfig.isEmpty,
+      normalized(rcloneConfig) != normalized(defaultConfig)
+    else {
+      return L10n.tr(
+        "CLOUDMACHINE_VM_INSTANCE=%@ needs its own rclone.conf - set RCLONE_CONFIG to a copy, not %@. Its Keychain entry is service %@.",
+        instance, defaultConfig, keychainService(instance: instance))
+    }
+    return nil
   }
 
   static var currentThrowawayRefusal: String? {
     throwawayRefusal(
-      instance: VMLayout.instanceName, remoteOverride: VMLayout.override("CLOUDMACHINE_VM_REMOTE"))
+      instance: VMLayout.instanceName, remoteOverride: VMLayout.override("CLOUDMACHINE_VM_REMOTE"),
+      rcloneConfig: ProcessInfo.processInfo.environment["RCLONE_CONFIG"],
+      defaultConfig: VMLayout.defaultHostRcloneConfig.path)
+  }
+
+  /// The Keychain service of the password and salt: the live machine's is
+  /// `cloudmachine-drive-crypt`, a throwaway machine's carries its name.
+  public static func keychainService(instance: String) -> String {
+    instance == "cmsmb" ? keychainService : "\(keychainService)-\(instance)"
   }
 
   public static var isEnabled: Bool { marker(in: markerFile) != nil }
@@ -577,9 +606,10 @@ public enum DriveEncryption {
 
     // The Keychain first: a remote whose password exists nowhere else is
     // the one mistake here that cannot be undone.
+    let service = keychainService(instance: VMLayout.instanceName)
     do {
-      try await KeychainStore.save(password, account: passwordAccount, service: keychainService)
-      try await KeychainStore.save(salt, account: saltAccount, service: keychainService)
+      try await KeychainStore.save(password, account: passwordAccount, service: service)
+      try await KeychainStore.save(salt, account: saltAccount, service: service)
     } catch {
       return fail(error.localizedDescription)
     }
@@ -613,7 +643,7 @@ public enum DriveEncryption {
       succeeded: true,
       message: L10n.tr(
         "Added '%@' (%@) on the Mac and in the machine; password and salt are in the Keychain (service %@).\nSALT: %@\nKeep the password AND this salt outside this Mac now - without both the encrypted backup cannot be read. Next: cloudmachine-agent vm-encrypt copy",
-        cryptRemoteName, cryptRoot, keychainService, salt))
+        cryptRemoteName, cryptRoot, service, salt))
   }
 
   static var remotes: Remotes { Remotes(plain: VMLayout.plainRemote) }

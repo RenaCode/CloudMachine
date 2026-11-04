@@ -12,6 +12,8 @@ extension L10nPolish {
       "%@ zawiera foldery, których ten klucz nie odczyta: inne hasło albo sól w maszynie albo resztki wcześniejszej próby. Porównaj rclone.conf maszyny z tym na Macu; resztki trzeba usunąć z %@ ręcznie.",
     "'%@' is incomplete or missing in the Mac's rclone.conf - run: cloudmachine-agent vm-encrypt setup":
       "'%@' jest niepełny albo go brak w rclone.conf na Macu - uruchom: cloudmachine-agent vm-encrypt setup",
+    "CLOUDMACHINE_VM_INSTANCE=%@ needs its own rclone.conf - set RCLONE_CONFIG to a copy, not %@. Its Keychain entry is service %@.":
+      "CLOUDMACHINE_VM_INSTANCE=%@ potrzebuje własnego rclone.conf - ustaw RCLONE_CONFIG na kopię, nie %@. Jej wpis w pęku kluczy to usługa %@.",
     "Could not read the '%@' section on the Mac or in the machine.":
       "Nie udało się odczytać sekcji '%@' na Macu albo w maszynie.",
     "The machine's '%@' (password, salt or folder) differs from the Mac's - the copy would be readable only with the machine's key. Not moving anything.":

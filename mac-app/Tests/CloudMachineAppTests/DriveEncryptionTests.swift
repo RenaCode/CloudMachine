@@ -26,10 +26,37 @@ final class DriveEncryptionTests: XCTestCase {
   func testThrowawayMachineIsIsolated() {
     XCTAssertEqual(DriveEncryption.markerName(instance: "cmsmb"), "drive-encryption")
     XCTAssertEqual(DriveEncryption.markerName(instance: "cmtest"), "drive-encryption-cmtest")
-    XCTAssertNil(DriveEncryption.throwawayRefusal(instance: "cmsmb", remoteOverride: nil))
-    XCTAssertNotNil(DriveEncryption.throwawayRefusal(instance: "cmtest", remoteOverride: nil))
-    XCTAssertNil(
-      DriveEncryption.throwawayRefusal(instance: "cmtest", remoteOverride: "gdrive:test-tm"))
+    let mac = "/Users/x/.config/rclone/rclone.conf"
+    func refusal(_ instance: String, _ remote: String?, _ config: String?) -> String? {
+      DriveEncryption.throwawayRefusal(
+        instance: instance, remoteOverride: remote, rcloneConfig: config, defaultConfig: mac)
+    }
+    XCTAssertNil(refusal("cmsmb", nil, nil))
+    XCTAssertNil(refusal("cmsmb", nil, mac))
+    XCTAssertNotNil(refusal("cmtest", nil, "/tmp/cmtest/rclone.conf"))
+    XCTAssertNil(refusal("cmtest", "gdrive:test-tm", "/tmp/cmtest/rclone.conf"))
+  }
+
+  /// Decision 04.11: a throwaway machine never writes the Mac's rclone.conf
+  /// or the live Keychain entry. Without its own RCLONE_CONFIG every step
+  /// refuses and says what to set; its Keychain entry is its own by name.
+  func testThrowawayMachineNeedsItsOwnConfigAndKeychainEntry() {
+    let mac = "/Users/x/.config/rclone/rclone.conf"
+    func refusal(_ config: String?) -> String? {
+      DriveEncryption.throwawayRefusal(
+        instance: "cmtest", remoteOverride: "gdrive:test-tm", rcloneConfig: config,
+        defaultConfig: mac)
+    }
+    for config in [nil, "", mac, "/Users/x/.config/rclone/../rclone/rclone.conf"] {
+      let text = refusal(config)
+      XCTAssertNotNil(text, "\(String(describing: config))")
+      XCTAssertTrue(text?.contains("RCLONE_CONFIG") == true)
+    }
+    XCTAssertNil(refusal("/tmp/cmtest/rclone.conf"))
+
+    XCTAssertEqual(DriveEncryption.keychainService(instance: "cmsmb"), "cloudmachine-drive-crypt")
+    XCTAssertEqual(
+      DriveEncryption.keychainService(instance: "cmtest"), "cloudmachine-drive-crypt-cmtest")
   }
 
   /// Only a complete marker moves the machine; a half-written file is none.
