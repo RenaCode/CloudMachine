@@ -6,6 +6,16 @@ on:
   pull_request:
 
 jobs:
+  # release.yml publishes only from main or a tag on main
+  # (see the script's header).
+  release-workflow:
+    name: Release workflow guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: test-release-workflow
+        run: bash .github/test-release-workflow.sh
+
   build-app:
     name: Build Swift package
     runs-on: macos-15
