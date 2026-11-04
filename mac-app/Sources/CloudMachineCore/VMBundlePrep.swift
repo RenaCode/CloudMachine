@@ -327,24 +327,38 @@ public enum VMBundlePrep {
     return (plist["band-size"] as? NSNumber)?.intValue
   }
 
-  /// From `hdiutil attach -plist`: the APFS partition to check and the whole
-  /// disk to detach.
+  /// `content-hint` of the synthesized APFS container.
+  private static let apfsContainerHint = "EF57347C-0000-11AA-AA11-00306543ECAC"
+  /// What `fsck_apfs` should check, widest first: a container covers all its
+  /// volumes, a volume target only itself and its container. macOS 27.2 lists
+  /// a container and a volume, with no partition map and no "Apple_APFS".
+  private static let apfsTargetHints = [
+    apfsContainerHint, "Apple_APFS", "41504653-0000-11AA-AA11-00306543ECAC",
+  ]
+
+  /// From `hdiutil attach -plist`: the APFS device to check and the whole disk
+  /// to detach. That disk is the image's own, the lowest-numbered one that is
+  /// not a synthesized container; the list's order is not relied on.
   static func attachedDevices(attachPlist: Data) -> (apfs: String?, whole: String?) {
     guard
       let plist = try? PropertyListSerialization.propertyList(from: attachPlist, format: nil)
         as? [String: Any],
       let entities = plist["system-entities"] as? [[String: Any]]
     else { return (nil, nil) }
-    var apfs: String?
-    var whole: String?
+    var deviceByHint: [String: String] = [:]
+    var wholeDisks: [(number: Int, device: String)] = []
     for entity in entities {
       guard let device = entity["dev-entry"] as? String else { continue }
       let hint = entity["content-hint"] as? String
-      if hint == "Apple_APFS", apfs == nil { apfs = device }
-      if device.range(of: #"^/dev/disk\d+$"#, options: .regularExpression) != nil, whole == nil {
-        whole = device
+      if let hint, deviceByHint[hint] == nil { deviceByHint[hint] = device }
+      if hint != apfsContainerHint, device.hasPrefix("/dev/disk"),
+        let number = Int(device.dropFirst("/dev/disk".count))
+      {
+        wholeDisks.append((number, device))
       }
     }
+    let apfs = apfsTargetHints.lazy.compactMap { deviceByHint[$0] }.first
+    let whole = wholeDisks.min { $0.number < $1.number }?.device
     return (apfs, whole)
   }
 
