@@ -21,6 +21,8 @@ extension MachineStatus {
       freeBytes: 120 * VMGuard.gib)
     machine.bundlePrepared = true
     machine.imageCount = 1
+    machine.shareRead = .readable
+    machine.smb = .answers
     return machine
   }
 }

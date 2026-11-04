@@ -947,5 +947,35 @@ extension L10nTranslations {
       "ל-rclone יש חלקים בעיבוד, אבל אף אחד לא הועלה במשך %@ - לרוב בגלל חיבור רשת שנותק, ש-rclone אינו מדווח עליו כשגיאה. גיבויים מאז נמצאים רק במאגר הביניים של המכונה. כשהרשת חוזרת ההעלאה ממשיכה מעצמה (ב-28.10.2026 תוך 80 s); אם לא, הפעלה מחדש של המכונה (prepare-shutdown, limactl start) מנתקת את החיבורים המתים.",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "tmutil לא ענה - לא מפעילים מחדש את המכונה כל עוד מצבה לא ידוע.",
+    "The machine's share cannot be read":
+      "לא ניתן לקרוא את השיתוף של המכונה",
+    "Unknown whether the machine's share can be read":
+      "לא ידוע אם ניתן לקרוא את השיתוף של המכונה",
+    "Samba in the machine does not answer this Mac":
+      "Samba במכונה לא עונה ל-Mac הזה",
+    "Unknown whether Samba in the machine answers this Mac":
+      "לא ידוע אם Samba במכונה עונה ל-Mac הזה",
+    "Reading 1 byte of %@ in the machine failed: %@. Every service says it is active, yet Time Machine cannot use the image there. Nothing restarts it by itself. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm":
+      "קריאת בית אחד מ-%@ במכונה נכשלה: %@. כל שירות מדווח שהוא פעיל, ובכל זאת Time Machine לא יכול להשתמש בתמונה שם. שום דבר לא מפעיל אותו מחדש מעצמו. בדיקה: cloudmachine-agent vm-status, ואז במכונה: journalctl -u punchfs -u tm-bands-bind -u rclone-tm",
+    "Reading 1 byte of %@ in the machine has not returned for %@ s. That is how a hung punchfs or rclone mount behaves. Nothing is restarted while the state is unknown - a restart under a write still going could lose it. Check in the machine: journalctl -u punchfs -u rclone-tm":
+      "קריאת בית אחד מ-%@ במכונה לא חזרה כבר %@ שנ'. כך מתנהג עיגון תקוע של punchfs או rclone. שום דבר לא מופעל מחדש כל עוד המצב לא ידוע - הפעלה מחדש באמצע כתיבה שעדיין מתבצעת עלולה לאבד אותה. בדיקה במכונה: journalctl -u punchfs -u rclone-tm",
+    "An SMB connection to %@ got no answer within %@ s. Time Machine reaches the machine at this address. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "חיבור SMB אל %@ לא קיבל תשובה בתוך %@ שנ'. Time Machine מגיע למכונה בכתובת הזו. בדקו את הרשת של המכונה ואת smbd: cloudmachine-agent vm-status",
+    "The machine did not report its address, so nobody could try an SMB connection. Check: cloudmachine-agent vm-status":
+      "המכונה לא דיווחה על הכתובת שלה, ולכן איש לא יכול היה לנסות חיבור SMB. בדיקה: cloudmachine-agent vm-status",
+    "An SMB connection to %@ failed (%@). Time Machine reaches the machine at this address, so no backup is made. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "חיבור SMB אל %@ נכשל (%@). Time Machine מגיע למכונה בכתובת הזו, ולכן לא נוצר גיבוי. בדקו את הרשת של המכונה ואת smbd: cloudmachine-agent vm-status",
+    "readable":
+      "קריא",
+    "no image yet":
+      "עדיין אין תמונה",
+    "answers":
+      "עונה",
+    "Share read:       %@":
+      "קריאת השיתוף:     %@",
+    "Samba from Mac:   %@":
+      "Samba מה-Mac:     %@",
+    "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
+      "ה-Mac הזה לא מצא נתיב אל %@ (%@). או שהנתיב למכונה נעלם, או שפרטיות \"רשת מקומית\" של macOS לא התירה ל-CloudMachine - במקרה כזה התירו זאת בהגדרות המערכת > פרטיות ואבטחה > רשת מקומית. בדיקה: cloudmachine-agent vm-status",
   ]
 }

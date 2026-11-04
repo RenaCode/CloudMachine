@@ -947,5 +947,35 @@ extension L10nTranslations {
       "rclone a des bandes en cours, mais aucune n'a été envoyée depuis %@ - généralement une connexion réseau coupée, que rclone ne signale pas comme une erreur. Les sauvegardes depuis ce moment ne sont que dans le tampon de la machine. Quand le réseau revient, l'envoi reprend tout seul (le 28.10.2026 en 80 s) ; sinon, redémarrer la machine (prepare-shutdown, limactl start) coupe les connexions mortes.",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "tmutil n'a pas répondu - la machine n'est pas redémarrée tant que son état est inconnu.",
+    "The machine's share cannot be read":
+      "Impossible de lire le partage de la machine",
+    "Unknown whether the machine's share can be read":
+      "On ne sait pas si le partage de la machine est lisible",
+    "Samba in the machine does not answer this Mac":
+      "Samba dans la machine ne répond pas à ce Mac",
+    "Unknown whether Samba in the machine answers this Mac":
+      "On ne sait pas si Samba dans la machine répond à ce Mac",
+    "Reading 1 byte of %@ in the machine failed: %@. Every service says it is active, yet Time Machine cannot use the image there. Nothing restarts it by itself. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm":
+      "La lecture de 1 octet de %@ dans la machine a échoué : %@. Chaque service se dit actif, mais Time Machine ne peut pas utiliser l'image à cet endroit. Rien ne le redémarre automatiquement. Vérifier : cloudmachine-agent vm-status, puis dans la machine : journalctl -u punchfs -u tm-bands-bind -u rclone-tm",
+    "Reading 1 byte of %@ in the machine has not returned for %@ s. That is how a hung punchfs or rclone mount behaves. Nothing is restarted while the state is unknown - a restart under a write still going could lose it. Check in the machine: journalctl -u punchfs -u rclone-tm":
+      "La lecture de 1 octet de %@ dans la machine n'est pas revenue depuis %@ s. C'est ainsi que se comporte un montage punchfs ou rclone bloqué. Rien n'est redémarré tant que l'état est inconnu - un redémarrage pendant une écriture en cours pourrait la perdre. Vérifier dans la machine : journalctl -u punchfs -u rclone-tm",
+    "An SMB connection to %@ got no answer within %@ s. Time Machine reaches the machine at this address. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "Une connexion SMB à %@ n'a reçu aucune réponse en %@ s. Time Machine joint la machine à cette adresse. Vérifiez le réseau de la machine et smbd : cloudmachine-agent vm-status",
+    "The machine did not report its address, so nobody could try an SMB connection. Check: cloudmachine-agent vm-status":
+      "La machine n'a pas indiqué son adresse, personne n'a donc pu tenter de connexion SMB. Vérifier : cloudmachine-agent vm-status",
+    "An SMB connection to %@ failed (%@). Time Machine reaches the machine at this address, so no backup is made. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "Une connexion SMB à %@ a échoué (%@). Time Machine joint la machine à cette adresse, donc aucune sauvegarde n'est faite. Vérifiez le réseau de la machine et smbd : cloudmachine-agent vm-status",
+    "readable":
+      "lisible",
+    "no image yet":
+      "pas encore d'image",
+    "answers":
+      "répond",
+    "Share read:       %@":
+      "Lecture partage : %@",
+    "Samba from Mac:   %@":
+      "Samba (Mac) :     %@",
+    "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
+      "Ce Mac n'a trouvé aucune route vers %@ (%@). Soit la route vers la machine a disparu, soit la confidentialité « Réseau local » de macOS n'a pas autorisé CloudMachine - autorisez-le alors dans Réglages Système > Confidentialité et sécurité > Réseau local. Vérifier : cloudmachine-agent vm-status",
   ]
 }

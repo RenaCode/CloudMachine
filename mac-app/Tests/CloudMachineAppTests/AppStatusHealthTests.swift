@@ -153,6 +153,9 @@ final class AppStatusHealthTests: XCTestCase {
   /// `tm-bands-bind` is skipped before `vm-prepare-bundle`; that is not a failure.
   func testSkippedBandBindIsNotAFailure() {
     let status = healthyStatus()
+    // Before `vm-prepare-bundle` - the state the sentence above is about.
+    // After it an inactive bind is a failure (ShareHealthTests).
+    status.machine.bundlePrepared = false
     status.machine.services["tm-bands-bind"] = "inactive"
     XCTAssertTrue(status.healthy)
     status.machine.services["tm-bands-bind"] = "failed"

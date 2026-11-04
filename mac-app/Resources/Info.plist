@@ -73,5 +73,7 @@
   <string>AppIcon</string>
   <key>CFBundleIconName</key>
   <string>AppIcon</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>CloudMachine checks that Samba in its own machine (a virtual machine on this Mac) answers at the address Time Machine backs up to.</string>
 </dict>
 </plist>

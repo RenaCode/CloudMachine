@@ -75,13 +75,64 @@ struct MachineStatus: Equatable {
   var punchfsFileLimit: Int?
   var bundlePrepared: Bool?
   var imageCount: Int?
+  /// One byte read through the share's path in the machine; `nil` = not read.
+  var shareRead: ShareReadProbe.Verdict?
+  /// Samba's answer to this Mac over the address Time Machine uses; `nil` = not asked.
+  var smb: SMBProbe.Verdict?
 
   var isRunning: Bool { state == .running }
+
+  /// Both probes confirmed the path Time Machine uses. Not read is not confirmed.
+  var shareConfirmed: Bool {
+    shareRead?.isConfirmed == true && smb?.answers == true
+  }
 
   /// `nil` = not known (no answer from the machine).
   var servicesHealthy: Bool? {
     guard isRunning, !services.isEmpty else { return nil }
-    return VMStatus.servicesHealthy(services)
+    return VMStatus.servicesHealthy(services, bundlePrepared: bundlePrepared)
+  }
+
+  /// Units that are not up, by the same rule as `servicesHealthy`: an
+  /// inactive bind counts once the image is prepared.
+  var servicesDown: [String] {
+    VMLayout.services.filter {
+      let state = services[$0]
+      if state == "active" { return false }
+      if $0 == "tm-bands-bind" && state == "inactive" { return bundlePrepared != false }
+      return true
+    }
+  }
+
+  /// The "Services" row of the machine card. All services up is green only
+  /// with the share confirmed by both probes - otherwise the row says what
+  /// the probes found.
+  var servicesText: String {
+    switch servicesHealthy {
+    case .some(true):
+      if let summary = shareProblemSummary { return summary }
+      return L10n.tr("All running")
+    case .some(false):
+      return L10n.tr("Not running: %@", servicesDown.joined(separator: ", "))
+    case .none: return L10n.tr("not read")
+    }
+  }
+
+  var servicesTone: StatusTone {
+    switch servicesHealthy {
+    case .some(true):
+      if shareRead?.isFailure == true || smb?.isFailure == true { return .danger }
+      return shareConfirmed ? .success : .warning
+    case .some(false): return .danger
+    case .none: return isRunning ? .warning : .neutral
+    }
+  }
+
+  /// What the probes found, first the read, then Samba; `nil` = both
+  /// confirmed. Not read counts as unknown.
+  var shareProblemSummary: String? {
+    (shareRead ?? .noAnswer(hungSeconds: nil)).problemSummary
+      ?? (smb ?? .noAnswer(seconds: 0)).problemSummary
   }
 
   /// Whether the counters below come from a reading at all. A fresh
@@ -260,6 +311,13 @@ final class AppStatus: ObservableObject {
     if machine.servicesHealthy == false {
       return L10n.tr("A service in the CloudMachine machine is not running")
     }
+    // Every service "active" says nothing about whether the path through
+    // them works - and a probe that did not answer is not a path that works.
+    if machine.isRunning, machine.servicesHealthy == true,
+      let summary = machine.shareProblemSummary
+    {
+      return summary
+    }
     if case .notRegistered = timeMachineState {
       return L10n.tr("Time Machine does not point to CloudMachine")
     }
@@ -294,7 +352,8 @@ final class AppStatus: ObservableObject {
   /// safe", and that follows solely from a backup having BEEN MADE.
   var healthy: Bool {
     guard case .ready = dependencyState, remoteConfigured, machine.isRunning,
-      machine.servicesHealthy == true, case .registered = timeMachineState,
+      machine.servicesHealthy == true, machine.shareConfirmed,
+      case .registered = timeMachineState,
       machine.uploadState.isNominal, backupCycle.isFresh(), !remoteControlOpen
     else { return false }
     return true
@@ -330,6 +389,7 @@ extension AppStatus {
     case .unknown, .running: break
     }
     if machine.servicesHealthy == false { return .danger }
+    if machine.shareRead?.isFailure == true || machine.smb?.isFailure == true { return .danger }
     if case .notRegistered = timeMachineState { return .danger }
     if machine.uploadState.needsAttention { return .danger }
     if remoteControlOpen { return .danger }

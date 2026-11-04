@@ -947,5 +947,35 @@ extension L10nTranslations {
       "rclone ha bande in corso, ma nessuna è stata inviata da %@ - di solito una connessione di rete interrotta, che rclone non segnala come errore. I backup da allora sono solo nel buffer della macchina. Quando la rete torna, l'invio riprende da solo (il 28.10.2026 entro 80 s); se non succede, riavviare la macchina (prepare-shutdown, limactl start) chiude le connessioni morte.",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "tmutil non ha risposto - non riavvio la macchina finché il suo stato è sconosciuto.",
+    "The machine's share cannot be read":
+      "Impossibile leggere la condivisione della macchina",
+    "Unknown whether the machine's share can be read":
+      "Non si sa se la condivisione della macchina sia leggibile",
+    "Samba in the machine does not answer this Mac":
+      "Samba nella macchina non risponde a questo Mac",
+    "Unknown whether Samba in the machine answers this Mac":
+      "Non si sa se Samba nella macchina risponda a questo Mac",
+    "Reading 1 byte of %@ in the machine failed: %@. Every service says it is active, yet Time Machine cannot use the image there. Nothing restarts it by itself. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm":
+      "La lettura di 1 byte di %@ nella macchina non è riuscita: %@. Ogni servizio risulta attivo, eppure Time Machine non può usare l'immagine lì. Nulla lo riavvia da solo. Controlla: cloudmachine-agent vm-status, poi nella macchina: journalctl -u punchfs -u tm-bands-bind -u rclone-tm",
+    "Reading 1 byte of %@ in the machine has not returned for %@ s. That is how a hung punchfs or rclone mount behaves. Nothing is restarted while the state is unknown - a restart under a write still going could lose it. Check in the machine: journalctl -u punchfs -u rclone-tm":
+      "La lettura di 1 byte di %@ nella macchina non è tornata da %@ s. Così si comporta un mount punchfs o rclone bloccato. Finché lo stato è sconosciuto non si riavvia nulla: un riavvio durante una scrittura in corso potrebbe perderla. Controlla nella macchina: journalctl -u punchfs -u rclone-tm",
+    "An SMB connection to %@ got no answer within %@ s. Time Machine reaches the machine at this address. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "Una connessione SMB a %@ non ha ricevuto risposta entro %@ s. Time Machine raggiunge la macchina a questo indirizzo. Controlla la rete della macchina e smbd: cloudmachine-agent vm-status",
+    "The machine did not report its address, so nobody could try an SMB connection. Check: cloudmachine-agent vm-status":
+      "La macchina non ha comunicato il suo indirizzo, quindi nessuno ha potuto tentare una connessione SMB. Controlla: cloudmachine-agent vm-status",
+    "An SMB connection to %@ failed (%@). Time Machine reaches the machine at this address, so no backup is made. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "Una connessione SMB a %@ non è riuscita (%@). Time Machine raggiunge la macchina a questo indirizzo, quindi non viene fatto alcun backup. Controlla la rete della macchina e smbd: cloudmachine-agent vm-status",
+    "readable":
+      "leggibile",
+    "no image yet":
+      "ancora nessuna immagine",
+    "answers":
+      "risponde",
+    "Share read:       %@":
+      "Lettura condiv.:  %@",
+    "Samba from Mac:   %@":
+      "Samba dal Mac:    %@",
+    "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
+      "Questo Mac non ha trovato alcun percorso verso %@ (%@). O il percorso verso la macchina non c'è più, oppure la privacy «Rete locale» di macOS non ha consentito CloudMachine: in tal caso consentilo in Impostazioni di Sistema > Privacy e sicurezza > Rete locale. Controlla: cloudmachine-agent vm-status",
   ]
 }

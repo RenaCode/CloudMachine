@@ -124,17 +124,35 @@ final class VMLayoutTests: XCTestCase {
       "tm-bands-bind": "inactive",
       "smbd": "active", "tm-meta-sync.timer": "active",
     ]
-    XCTAssertEqual(VMStatus.servicesHealthy(services), true)
+    XCTAssertEqual(VMStatus.servicesHealthy(services, bundlePrepared: false), true)
     services["tm-meta-sync.timer"] = "inactive"
-    XCTAssertEqual(VMStatus.servicesHealthy(services), false)
+    XCTAssertEqual(VMStatus.servicesHealthy(services, bundlePrepared: false), false)
     services["tm-meta-sync.timer"] = "active"
     services["tm-bands-bind"] = "failed"
-    XCTAssertEqual(VMStatus.servicesHealthy(services), false)
+    XCTAssertEqual(VMStatus.servicesHealthy(services, bundlePrepared: false), false)
     services["tm-bands-bind"] = "active"
     services["smbd"] = "inactive"
-    XCTAssertEqual(VMStatus.servicesHealthy(services), false)
+    XCTAssertEqual(VMStatus.servicesHealthy(services, bundlePrepared: false), false)
     services["smbd"] = nil
-    XCTAssertNil(VMStatus.servicesHealthy(services))
+    XCTAssertNil(VMStatus.servicesHealthy(services, bundlePrepared: false))
+  }
+
+  /// After `vm-prepare-bundle` an inactive bind is NOT "skipped by design":
+  /// the bands then go to the machine's local disk instead of Drive, with
+  /// every other service green. Whether the image is prepared not read =
+  /// unknown, not fine.
+  func testInactiveBindAfterPrepareIsNotHealthy() {
+    let services = [
+      "smb-throttle": "active", "rclone-tm": "active", "punchfs": "active",
+      "tm-bands-bind": "inactive",
+      "smbd": "active", "tm-meta-sync.timer": "active",
+    ]
+    XCTAssertEqual(VMStatus.servicesHealthy(services, bundlePrepared: true), false)
+    XCTAssertNil(VMStatus.servicesHealthy(services, bundlePrepared: nil))
+    var bound = services
+    bound["tm-bands-bind"] = "active"
+    XCTAssertEqual(VMStatus.servicesHealthy(bound, bundlePrepared: true), true)
+    XCTAssertEqual(VMStatus.servicesHealthy(bound, bundlePrepared: nil), true)
   }
 
   /// An unknown backlog after `prepare-shutdown` must not read as "all uploaded".
