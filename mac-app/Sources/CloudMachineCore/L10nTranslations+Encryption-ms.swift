@@ -16,31 +16,31 @@ extension L10nTranslations {
     "Could not read the '%@' section on the Mac or in the machine.":
       "Bahagian '%@' tidak dapat dibaca pada Mac atau dalam mesin.",
     "The machine's '%@' (password, salt or folder) differs from the Mac's - the copy would be readable only with the machine's key. Not moving anything.":
-      "'%@' mesin (kata laluan, garam atau folder) berbeza daripada Mac - salinan hanya dapat dibaca dengan kunci mesin. Tiada apa-apa dipindahkan.",
+      "'%@' mesin (kata laluan, garam atau folder) berbeza daripada yang ada pada Mac - salinan hanya dapat dibaca dengan kunci mesin. Tiada apa-apa dipindahkan.",
     "A file was restored from the encrypted backup.":
       "Satu fail telah dipulihkan daripada sandaran tersulit.",
     "Added '%@' (%@) on the Mac and in the machine; password and salt are in the Keychain (service %@).\nSALT: %@\nKeep the password AND this salt outside this Mac now - without both the encrypted backup cannot be read. Next: cloudmachine-agent vm-encrypt copy":
       "'%@' (%@) ditambah pada Mac dan dalam mesin; kata laluan dan garam berada dalam Rantai Kunci (perkhidmatan %@).\nGARAM: %@\nSimpan kata laluan DAN garam ini di luar Mac ini sekarang - tanpa kedua-duanya sandaran tersulit tidak dapat dibaca. Seterusnya: cloudmachine-agent vm-encrypt copy",
     "Adds the encrypted remote on the Mac and in the machine (asks for the password). Moves no data.":
-      "Menambah jauh tersulit pada Mac dan dalam mesin (meminta kata laluan). Tidak memindahkan data.",
+      "Menambah remote tersulit pada Mac dan dalam mesin (meminta kata laluan). Tidak memindahkan data.",
     "Again: ":
       "Sekali lagi: ",
     "Copies the plain backup into the encrypted folder, in the background; backups go on.":
       "Menyalin sandaran tidak tersulit ke folder tersulit di latar belakang; sandaran diteruskan.",
     "Copy:             %@":
-      "Salinan:          %@",
+      "Penyalinan:       %@",
     "CLOUDMACHINE_VM_INSTANCE=%@ without CLOUDMACHINE_VM_REMOTE would use the live backup's folder - set both.":
       "CLOUDMACHINE_VM_INSTANCE=%@ tanpa CLOUDMACHINE_VM_REMOTE akan menggunakan folder sandaran yang sedang digunakan - tetapkan kedua-duanya.",
     "Could not add the remote to %@: %@":
-      "Tidak dapat menambah jauh ke %@: %@",
+      "Tidak dapat menambah remote ke %@: %@",
     "Could not add the remote to the machine's rclone.conf.":
-      "Tidak dapat menambah jauh ke rclone.conf mesin.",
+      "Tidak dapat menambah remote ke rclone.conf mesin.",
     "Could not read %@.":
       "Tidak dapat membaca %@.",
     "Could not read when Time Machine last finished a backup (Full Disk Access?) - not deleting.":
       "Tidak dapat membaca bila Time Machine terakhir menyelesaikan sandaran (Capaian Cakera Penuh?) - tiada apa-apa dipadam.",
     "Could not start the copy: %@":
-      "Tidak dapat memulakan salinan: %@",
+      "Tidak dapat memulakan penyalinan: %@",
     "Could not write %@.":
       "Tidak dapat menulis %@.",
     "Deleting the plain folder failed: %@":
@@ -50,7 +50,7 @@ extension L10nTranslations {
     "Encryption password: ":
       "Kata laluan penyulitan: ",
     "Machine uses:     %@":
-      "Mesin guna:       %@",
+      "Digunakan mesin:  %@",
     "Moves the backup on Google Drive under rclone encryption: setup, copy, switch, then delete-plain.":
       "Memindahkan sandaran di Google Drive ke bawah penyulitan rclone: setup, copy, switch, kemudian delete-plain.",
     "Moves the plain folder to Google Drive's bin - only after a backup has finished into the encrypted one.":
@@ -66,15 +66,15 @@ extension L10nTranslations {
     "Restore a file from the encrypted backup first (Time Machine, Browse), then confirm with --restore-checked.":
       "Pulihkan satu fail daripada sandaran tersulit dahulu (Time Machine, Layari), kemudian sahkan dengan --restore-checked.",
     "Shows which folder the machine uses and the copy.":
-      "Menunjukkan folder yang digunakan mesin dan keadaan salinan.",
+      "Menunjukkan folder yang digunakan mesin dan keadaan penyalinan.",
     "Switched:         %@":
       "Ditukar:          %@",
     "The copy is already running - see: cloudmachine-agent vm-encrypt status":
-      "Salinan sudah berjalan - lihat: cloudmachine-agent vm-encrypt status",
+      "Penyalinan sudah berjalan - lihat: cloudmachine-agent vm-encrypt status",
     "The copy runs in the machine (%@, log %@). Backups go on meanwhile. Check: cloudmachine-agent vm-encrypt status":
-      "Salinan berjalan dalam mesin (%@, log %@). Sandaran diteruskan sementara itu. Semak: cloudmachine-agent vm-encrypt status",
+      "Penyalinan berjalan dalam mesin (%@, log %@). Sandaran diteruskan sementara itu. Semak: cloudmachine-agent vm-encrypt status",
     "The copy to the encrypted folder has not finished well (%@) - run: cloudmachine-agent vm-encrypt copy, and wait for it.":
-      "Salinan ke folder tersulit tidak selesai dengan baik (%@) - jalankan: cloudmachine-agent vm-encrypt copy, dan tunggu sehingga selesai.",
+      "Penyalinan ke folder tersulit tidak selesai dengan baik (%@) - jalankan: cloudmachine-agent vm-encrypt copy, dan tunggu sehingga selesai.",
     "The encryption password and salt are kept outside this Mac.":
       "Kata laluan penyulitan dan garam disimpan di luar Mac ini.",
     "The guard holds Time Machine paused and would resume it during the switch. Wait until it resumes and the upload is done.":
@@ -92,9 +92,9 @@ extension L10nTranslations {
     "The machine does not use the encrypted folder - the plain folder is the backup. Not deleting it.":
       "Mesin tidak menggunakan folder tersulit - folder tidak tersulit ialah sandarannya. Ia tidak dipadam.",
     "The machine has no '%@' remote in its rclone.conf - run: cloudmachine-agent vm-encrypt setup":
-      "Mesin tiada jauh '%@' dalam rclone.conf nya - jalankan: cloudmachine-agent vm-encrypt setup",
+      "Mesin tiada remote '%@' dalam rclone.conf-nya - jalankan: cloudmachine-agent vm-encrypt setup",
     "The machine is not on this app's template or does not use %@ (cloudmachine-agent vm-update first): %@":
-      "Mesin tidak menggunakan templat apl ini atau tidak menggunakan %@ (cloudmachine-agent vm-update dahulu): %@",
+      "Mesin tidak berada pada templat app ini atau tidak menggunakan %@ (cloudmachine-agent vm-update dahulu): %@",
     "The machine now uses %@, but %@ could not be updated (%@) - fix it before anything else runs vm-setup.":
       "Mesin kini menggunakan %@, tetapi %@ tidak dapat dikemas kini (%@) - betulkan sebelum apa-apa lagi menjalankan vm-setup.",
     "The machine now uses %@. %@ is kept. Turn automatic backups back on: sudo tmutil enable":
