@@ -82,6 +82,51 @@ final class VMBundlePrepTests: XCTestCase {
     XCTAssertEqual(devices.whole, "/dev/disk7")
   }
 
+  private func devices(_ entities: [[String: String]]) throws -> (apfs: String?, whole: String?) {
+    let data = try PropertyListSerialization.data(
+      fromPropertyList: ["system-entities": entities], format: .xml, options: 0)
+    return VMBundlePrep.attachedDevices(attachPlist: data)
+  }
+
+  private let image = ["dev-entry": "/dev/disk16"]
+  private let apfsVolume = [
+    "content-hint": "41504653-0000-11AA-AA11-00306543ECAC", "dev-entry": "/dev/disk17s1",
+  ]
+  private let apfsContainer = [
+    "content-hint": "EF57347C-0000-11AA-AA11-00306543ECAC", "dev-entry": "/dev/disk17",
+  ]
+
+  /// Measured on macOS 27.2: no partition map and no "Apple_APFS". The whole
+  /// container is checked, so a second volume cannot go unchecked; detaching
+  /// the image's own disk, not the synthesized container, ejects the image.
+  func testAttachedDevicesChoosesTheContainerAndTheImageDisk() throws {
+    let found = try devices([image, apfsVolume, apfsContainer])
+    XCTAssertEqual(found.apfs, "/dev/disk17")
+    XCTAssertEqual(found.whole, "/dev/disk16")
+  }
+
+  func testAttachedDevicesDoesNotDependOnEntityOrder() throws {
+    let found = try devices([apfsContainer, apfsVolume, image])
+    XCTAssertEqual(found.apfs, "/dev/disk17")
+    XCTAssertEqual(found.whole, "/dev/disk16")
+  }
+
+  func testAttachedDevicesPrefersThePartitionToAVolume() throws {
+    let partition = ["content-hint": "Apple_APFS", "dev-entry": "/dev/disk7s2"]
+    XCTAssertEqual(try devices([apfsVolume, partition]).apfs, "/dev/disk7s2")
+  }
+
+  func testAttachedDevicesFallsBackToTheVolume() throws {
+    XCTAssertEqual(try devices([image, apfsVolume]).apfs, "/dev/disk17s1")
+  }
+
+  /// Without APFS the check must fail, and the image must still be detachable.
+  func testAttachedDevicesWithoutAPFS() throws {
+    let found = try devices([image, ["content-hint": "EFI", "dev-entry": "/dev/disk16s1"]])
+    XCTAssertNil(found.apfs)
+    XCTAssertEqual(found.whole, "/dev/disk16")
+  }
+
   // MARK: - The install script
 
   private func script() -> [String] {

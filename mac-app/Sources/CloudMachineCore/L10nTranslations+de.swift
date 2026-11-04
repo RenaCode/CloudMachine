@@ -947,5 +947,35 @@ extension L10nTranslations {
       "rclone hat Bänder in Bearbeitung, aber seit %@ wurde keines hochgeladen – meist eine unterbrochene Netzwerkverbindung, die rclone nicht als Fehler meldet. Backups seitdem liegen nur im Puffer der Maschine. Sobald das Netzwerk wieder da ist, macht der Upload von selbst weiter (am 28.10.2026 innerhalb von 80 s); falls nicht, verwirft ein Neustart der Maschine (prepare-shutdown, limactl start) die toten Verbindungen.",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "tmutil hat nicht geantwortet – die Maschine wird nicht neu gestartet, solange ihr Zustand unbekannt ist.",
+    "The machine's share cannot be read":
+      "Die Freigabe der Maschine lässt sich nicht lesen",
+    "Unknown whether the machine's share can be read":
+      "Unbekannt, ob sich die Freigabe der Maschine lesen lässt",
+    "Samba in the machine does not answer this Mac":
+      "Samba in der Maschine antwortet diesem Mac nicht",
+    "Unknown whether Samba in the machine answers this Mac":
+      "Unbekannt, ob Samba in der Maschine diesem Mac antwortet",
+    "Reading 1 byte of %@ in the machine failed: %@. Every service says it is active, yet Time Machine cannot use the image there. Nothing restarts it by itself. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm":
+      "Das Lesen von 1 Byte aus %@ in der Maschine ist fehlgeschlagen: %@. Jeder Dienst meldet sich als aktiv, doch Time Machine kann das Image dort nicht nutzen. Nichts startet ihn von selbst neu. Prüfen: cloudmachine-agent vm-status, dann in der Maschine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm",
+    "Reading 1 byte of %@ in the machine has not returned for %@ s. That is how a hung punchfs or rclone mount behaves. Nothing is restarted while the state is unknown - a restart under a write still going could lose it. Check in the machine: journalctl -u punchfs -u rclone-tm":
+      "Das Lesen von 1 Byte aus %@ in der Maschine ist seit %@ s nicht zurückgekehrt. So verhält sich ein hängendes punchfs- oder rclone-Mount. Solange der Zustand unbekannt ist, wird nichts neu gestartet – ein Neustart unter einem laufenden Schreibvorgang könnte ihn verlieren. In der Maschine prüfen: journalctl -u punchfs -u rclone-tm",
+    "An SMB connection to %@ got no answer within %@ s. Time Machine reaches the machine at this address. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "Eine SMB-Verbindung zu %@ bekam innerhalb von %@ s keine Antwort. Unter dieser Adresse erreicht Time Machine die Maschine. Netzwerk der Maschine und smbd prüfen: cloudmachine-agent vm-status",
+    "The machine did not report its address, so nobody could try an SMB connection. Check: cloudmachine-agent vm-status":
+      "Die Maschine hat ihre Adresse nicht gemeldet, daher konnte niemand eine SMB-Verbindung versuchen. Prüfen: cloudmachine-agent vm-status",
+    "An SMB connection to %@ failed (%@). Time Machine reaches the machine at this address, so no backup is made. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "Eine SMB-Verbindung zu %@ ist fehlgeschlagen (%@). Unter dieser Adresse erreicht Time Machine die Maschine, daher entsteht kein Backup. Netzwerk der Maschine und smbd prüfen: cloudmachine-agent vm-status",
+    "readable":
+      "lesbar",
+    "no image yet":
+      "noch kein Image",
+    "answers":
+      "antwortet",
+    "Share read:       %@":
+      "Freigabe lesen:   %@",
+    "Samba from Mac:   %@":
+      "Samba vom Mac:    %@",
+    "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
+      "Dieser Mac hat keine Route zu %@ gefunden (%@). Entweder ist die Route zur Maschine weg, oder der macOS-Datenschutz „Lokales Netzwerk“ hat CloudMachine nicht erlaubt – dann unter Systemeinstellungen > Datenschutz & Sicherheit > Lokales Netzwerk erlauben. Prüfen: cloudmachine-agent vm-status",
   ]
 }

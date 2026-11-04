@@ -17,7 +17,7 @@ final class TimeMachineStatusTests: XCTestCase {
     {
         BackupPhase = Copying;
         ClientID = "com.apple.backupd";
-        DestinationID = "C4B0056F-6CE8-486E-8726-75B45E2E7A56";
+        DestinationID = "00000000-0000-4000-8000-000000000002";
         DestinationMountPoint = "/Volumes/TimeMachine";
         Progress =     {
             Percent = "0.2766528592339472";
@@ -35,13 +35,13 @@ final class TimeMachineStatusTests: XCTestCase {
     Name          : Mac
     Kind          : Local
     Mount Point   : /Volumes/Mac
-    ID            : DEAD2007-8BC5-4D7B-BCF3-A5646B636CCD
+    ID            : 00000000-0000-4000-8000-000000000001
     Quota         : 300 GB
     ====================================================
     Name          : TimeMachine
     Kind          : Local
     Mount Point   : /Volumes/TimeMachine
-    ID            : C4B0056F-6CE8-486E-8726-75B45E2E7A56
+    ID            : 00000000-0000-4000-8000-000000000002
     """
 
   func testIsRunning_copying() {
@@ -74,7 +74,7 @@ final class TimeMachineStatusTests: XCTestCase {
     Name          : CloudMachine
     Kind          : Network
     URL           : smb://tm@192.168.64.10/CloudMachine
-    ID            : 469C129A-962F-4353-BD32-C8E797B4D20B
+    ID            : 00000000-0000-4000-8000-000000000003
     """
 
   func testBlocksAreParsedInOrder() {
@@ -82,7 +82,7 @@ final class TimeMachineStatusTests: XCTestCase {
     XCTAssertEqual(
       destinations.map(\.id),
       [
-        "DEAD2007-8BC5-4D7B-BCF3-A5646B636CCD", "C4B0056F-6CE8-486E-8726-75B45E2E7A56",
+        "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002",
       ])
     XCTAssertEqual(destinations.map(\.mountPoint), ["/Volumes/Mac", "/Volumes/TimeMachine"])
     XCTAssertEqual(destinations.map(\.quotaGB), [300, nil])
@@ -95,7 +95,7 @@ final class TimeMachineStatusTests: XCTestCase {
       [
         TimeMachineStatus.Destination(
           name: "CloudMachine", kind: "Network", url: "smb://tm@192.168.64.10/CloudMachine",
-          id: "469C129A-962F-4353-BD32-C8E797B4D20B")
+          id: "00000000-0000-4000-8000-000000000003")
       ])
   }
 

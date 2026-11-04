@@ -947,5 +947,35 @@ extension L10nTranslations {
       "rclone mempunyai jalur sedang berjalan, tetapi tiada yang dimuat naik selama %@ - biasanya sambungan rangkaian terputus, yang tidak dilaporkan oleh rclone sebagai ralat. Sandaran sejak itu hanya ada dalam penimbal mesin. Apabila rangkaian kembali, muat naik menyambung sendiri (pada 28.10.2026 dalam 80 s); jika tidak, memulakan semula mesin (prepare-shutdown, limactl start) menutup sambungan yang mati.",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "tmutil tidak menjawab - mesin tidak dimulakan semula selagi keadaannya tidak diketahui.",
+    "The machine's share cannot be read":
+      "Perkongsian mesin tidak boleh dibaca",
+    "Unknown whether the machine's share can be read":
+      "Tidak diketahui sama ada perkongsian mesin boleh dibaca",
+    "Samba in the machine does not answer this Mac":
+      "Samba dalam mesin tidak menjawab Mac ini",
+    "Unknown whether Samba in the machine answers this Mac":
+      "Tidak diketahui sama ada Samba dalam mesin menjawab Mac ini",
+    "Reading 1 byte of %@ in the machine failed: %@. Every service says it is active, yet Time Machine cannot use the image there. Nothing restarts it by itself. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm":
+      "Membaca 1 bait daripada %@ dalam mesin gagal: %@. Setiap perkhidmatan mengatakan ia aktif, tetapi Time Machine tidak dapat menggunakan imej di situ. Tiada apa yang memulakannya semula dengan sendiri. Semak: cloudmachine-agent vm-status, kemudian dalam mesin: journalctl -u punchfs -u tm-bands-bind -u rclone-tm",
+    "Reading 1 byte of %@ in the machine has not returned for %@ s. That is how a hung punchfs or rclone mount behaves. Nothing is restarted while the state is unknown - a restart under a write still going could lose it. Check in the machine: journalctl -u punchfs -u rclone-tm":
+      "Membaca 1 bait daripada %@ dalam mesin belum kembali selama %@ s. Begitulah kelakuan lekapan punchfs atau rclone yang tergantung. Tiada apa yang dimulakan semula selagi keadaan tidak diketahui - mula semula di bawah penulisan yang masih berjalan boleh menghilangkannya. Semak dalam mesin: journalctl -u punchfs -u rclone-tm",
+    "An SMB connection to %@ got no answer within %@ s. Time Machine reaches the machine at this address. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "Sambungan SMB ke %@ tidak mendapat jawapan dalam %@ s. Time Machine mencapai mesin pada alamat ini. Semak rangkaian mesin dan smbd: cloudmachine-agent vm-status",
+    "The machine did not report its address, so nobody could try an SMB connection. Check: cloudmachine-agent vm-status":
+      "Mesin tidak melaporkan alamatnya, jadi tiada sesiapa dapat mencuba sambungan SMB. Semak: cloudmachine-agent vm-status",
+    "An SMB connection to %@ failed (%@). Time Machine reaches the machine at this address, so no backup is made. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "Sambungan SMB ke %@ gagal (%@). Time Machine mencapai mesin pada alamat ini, jadi tiada sandaran dibuat. Semak rangkaian mesin dan smbd: cloudmachine-agent vm-status",
+    "readable":
+      "boleh dibaca",
+    "no image yet":
+      "belum ada imej",
+    "answers":
+      "menjawab",
+    "Share read:       %@":
+      "Bacaan kongsi:    %@",
+    "Samba from Mac:   %@":
+      "Samba dari Mac:   %@",
+    "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
+      "Mac ini tidak menemui laluan ke %@ (%@). Sama ada laluan ke mesin sudah hilang, atau privasi Rangkaian Setempat macOS belum membenarkan CloudMachine - jika begitu, benarkannya dalam Seting Sistem > Privasi & Keselamatan > Rangkaian Setempat. Semak: cloudmachine-agent vm-status",
   ]
 }

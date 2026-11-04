@@ -947,5 +947,35 @@ extension L10nTranslations {
       "rclone에 진행 중인 밴드가 있지만 %1$@ 동안 업로드된 것이 없습니다 - 대개 네트워크 연결이 끊긴 경우이며, rclone은 이를 오류로 알리지 않습니다. 그 이후의 백업은 머신의 버퍼에만 있습니다. 네트워크가 복구되면 업로드가 저절로 재개됩니다(2026년 10월 28일에는 80초 이내). 재개되지 않으면 머신을 다시 시작하면(prepare-shutdown, limactl start) 끊어진 연결이 정리됩니다.",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "tmutil이 응답하지 않았습니다 - 머신의 상태를 모르는 동안에는 머신을 다시 시작하지 않습니다.",
+    "The machine's share cannot be read":
+      "머신의 공유를 읽을 수 없습니다",
+    "Unknown whether the machine's share can be read":
+      "머신의 공유를 읽을 수 있는지 알 수 없습니다",
+    "Samba in the machine does not answer this Mac":
+      "머신의 Samba가 이 Mac에 응답하지 않습니다",
+    "Unknown whether Samba in the machine answers this Mac":
+      "머신의 Samba가 이 Mac에 응답하는지 알 수 없습니다",
+    "Reading 1 byte of %@ in the machine failed: %@. Every service says it is active, yet Time Machine cannot use the image there. Nothing restarts it by itself. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm":
+      "머신의 %@에서 1바이트를 읽지 못했습니다: %@. 모든 서비스가 활성 상태라고 하지만 Time Machine은 그곳의 이미지를 사용할 수 없습니다. 스스로 재시작되지 않습니다. 확인: cloudmachine-agent vm-status, 그다음 머신에서: journalctl -u punchfs -u tm-bands-bind -u rclone-tm",
+    "Reading 1 byte of %@ in the machine has not returned for %@ s. That is how a hung punchfs or rclone mount behaves. Nothing is restarted while the state is unknown - a restart under a write still going could lose it. Check in the machine: journalctl -u punchfs -u rclone-tm":
+      "머신의 %@에서 1바이트 읽기가 %@초째 돌아오지 않습니다. punchfs 또는 rclone 마운트가 멈췄을 때의 동작입니다. 상태를 알 수 없는 동안에는 아무것도 재시작하지 않습니다 - 진행 중인 쓰기 도중 재시작하면 그 쓰기를 잃을 수 있습니다. 머신에서 확인: journalctl -u punchfs -u rclone-tm",
+    "An SMB connection to %@ got no answer within %@ s. Time Machine reaches the machine at this address. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "%@(으)로의 SMB 연결이 %@초 안에 응답을 받지 못했습니다. Time Machine은 이 주소로 머신에 접속합니다. 머신의 네트워크와 smbd를 확인하세요: cloudmachine-agent vm-status",
+    "The machine did not report its address, so nobody could try an SMB connection. Check: cloudmachine-agent vm-status":
+      "머신이 주소를 알려 주지 않아 아무도 SMB 연결을 시도할 수 없었습니다. 확인: cloudmachine-agent vm-status",
+    "An SMB connection to %@ failed (%@). Time Machine reaches the machine at this address, so no backup is made. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "%@(으)로의 SMB 연결에 실패했습니다(%@). Time Machine은 이 주소로 머신에 접속하므로 백업이 만들어지지 않습니다. 머신의 네트워크와 smbd를 확인하세요: cloudmachine-agent vm-status",
+    "readable":
+      "읽기 가능",
+    "no image yet":
+      "아직 이미지 없음",
+    "answers":
+      "응답함",
+    "Share read:       %@":
+      "공유 읽기:        %@",
+    "Samba from Mac:   %@":
+      "Mac에서 Samba:    %@",
+    "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
+      "이 Mac이 %@(으)로 가는 경로를 찾지 못했습니다(%@). 머신으로 가는 경로가 사라졌거나 macOS의 '로컬 네트워크' 개인정보 보호가 CloudMachine을 허용하지 않았습니다 - 그렇다면 시스템 설정 > 개인정보 보호 및 보안 > 로컬 네트워크에서 허용하세요. 확인: cloudmachine-agent vm-status",
   ]
 }

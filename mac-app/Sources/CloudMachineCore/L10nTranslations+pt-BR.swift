@@ -947,5 +947,35 @@ extension L10nTranslations {
       "O rclone tem bandas em andamento, mas nenhuma foi enviada há %@ - normalmente uma conexão de rede interrompida, que o rclone não relata como erro. Os backups desde então estão apenas no buffer da máquina. Quando a rede voltar, o envio retoma sozinho (em 28.10.2026, em 80 s); se não retomar, reiniciar a máquina (prepare-shutdown, limactl start) descarta as conexões mortas.",
     "tmutil did not answer - not restarting the machine while its state is unknown.":
       "O tmutil não respondeu - a máquina não será reiniciada enquanto o estado for desconhecido.",
+    "The machine's share cannot be read":
+      "Não é possível ler o compartilhamento da máquina",
+    "Unknown whether the machine's share can be read":
+      "Não se sabe se o compartilhamento da máquina pode ser lido",
+    "Samba in the machine does not answer this Mac":
+      "O Samba na máquina não responde a este Mac",
+    "Unknown whether Samba in the machine answers this Mac":
+      "Não se sabe se o Samba na máquina responde a este Mac",
+    "Reading 1 byte of %@ in the machine failed: %@. Every service says it is active, yet Time Machine cannot use the image there. Nothing restarts it by itself. Check: cloudmachine-agent vm-status, then in the machine: journalctl -u punchfs -u tm-bands-bind -u rclone-tm":
+      "A leitura de 1 byte de %@ na máquina falhou: %@. Todos os serviços dizem estar ativos, mas o Time Machine não consegue usar a imagem ali. Nada o reinicia sozinho. Verifique: cloudmachine-agent vm-status e depois, na máquina: journalctl -u punchfs -u tm-bands-bind -u rclone-tm",
+    "Reading 1 byte of %@ in the machine has not returned for %@ s. That is how a hung punchfs or rclone mount behaves. Nothing is restarted while the state is unknown - a restart under a write still going could lose it. Check in the machine: journalctl -u punchfs -u rclone-tm":
+      "A leitura de 1 byte de %@ na máquina não retornou há %@ s. É assim que se comporta uma montagem do punchfs ou do rclone travada. Nada é reiniciado enquanto o estado for desconhecido - um reinício durante uma gravação em andamento poderia perdê-la. Verifique na máquina: journalctl -u punchfs -u rclone-tm",
+    "An SMB connection to %@ got no answer within %@ s. Time Machine reaches the machine at this address. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "Uma conexão SMB com %@ não obteve resposta em %@ s. O Time Machine acessa a máquina neste endereço. Verifique a rede da máquina e o smbd: cloudmachine-agent vm-status",
+    "The machine did not report its address, so nobody could try an SMB connection. Check: cloudmachine-agent vm-status":
+      "A máquina não informou seu endereço, então ninguém pôde tentar uma conexão SMB. Verifique: cloudmachine-agent vm-status",
+    "An SMB connection to %@ failed (%@). Time Machine reaches the machine at this address, so no backup is made. Check the machine's network and smbd: cloudmachine-agent vm-status":
+      "Uma conexão SMB com %@ falhou (%@). O Time Machine acessa a máquina neste endereço, então nenhum backup é feito. Verifique a rede da máquina e o smbd: cloudmachine-agent vm-status",
+    "readable":
+      "legível",
+    "no image yet":
+      "ainda sem imagem",
+    "answers":
+      "responde",
+    "Share read:       %@":
+      "Leitura compart.: %@",
+    "Samba from Mac:   %@":
+      "Samba do Mac:     %@",
+    "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
+      "Este Mac não encontrou rota para %@ (%@). Ou a rota até a máquina sumiu, ou a privacidade de \"Rede Local\" do macOS não permitiu o CloudMachine - nesse caso, permita em Ajustes do Sistema > Privacidade e Segurança > Rede Local. Verifique: cloudmachine-agent vm-status",
   ]
 }
