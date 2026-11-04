@@ -75,27 +75,35 @@ public enum L10n {
   /// Every language except English (the keys themselves).
   static let translations: [Language: [String: String]] = [
     .pl: polish,
-    .ar: L10nTranslations.ar,
-    .da: L10nTranslations.da,
-    .de: L10nTranslations.de,
-    .es: L10nTranslations.es,
-    .fi: L10nTranslations.fi,
-    .fr: L10nTranslations.fr,
-    .he: L10nTranslations.he,
-    .it: L10nTranslations.it,
-    .ja: L10nTranslations.ja,
-    .ko: L10nTranslations.ko,
-    .ms: L10nTranslations.ms,
-    .nb: L10nTranslations.nb,
-    .nl: L10nTranslations.nl,
-    .ptBR: L10nTranslations.ptBR,
-    .ru: L10nTranslations.ru,
-    .sv: L10nTranslations.sv,
-    .th: L10nTranslations.th,
-    .tr: L10nTranslations.tr,
-    .zhHans: L10nTranslations.zhHans,
-    .zhHant: L10nTranslations.zhHant,
+    .ar: merged(L10nTranslations.ar, L10nTranslations.arEncryption),
+    .da: merged(L10nTranslations.da, L10nTranslations.daEncryption),
+    .de: merged(L10nTranslations.de, L10nTranslations.deEncryption),
+    .es: merged(L10nTranslations.es, L10nTranslations.esEncryption),
+    .fi: merged(L10nTranslations.fi, L10nTranslations.fiEncryption),
+    .fr: merged(L10nTranslations.fr, L10nTranslations.frEncryption),
+    .he: merged(L10nTranslations.he, L10nTranslations.heEncryption),
+    .it: merged(L10nTranslations.it, L10nTranslations.itEncryption),
+    .ja: merged(L10nTranslations.ja, L10nTranslations.jaEncryption),
+    .ko: merged(L10nTranslations.ko, L10nTranslations.koEncryption),
+    .ms: merged(L10nTranslations.ms, L10nTranslations.msEncryption),
+    .nb: merged(L10nTranslations.nb, L10nTranslations.nbEncryption),
+    .nl: merged(L10nTranslations.nl, L10nTranslations.nlEncryption),
+    .ptBR: merged(L10nTranslations.ptBR, L10nTranslations.ptBREncryption),
+    .ru: merged(L10nTranslations.ru, L10nTranslations.ruEncryption),
+    .sv: merged(L10nTranslations.sv, L10nTranslations.svEncryption),
+    .th: merged(L10nTranslations.th, L10nTranslations.thEncryption),
+    .tr: merged(L10nTranslations.tr, L10nTranslations.trEncryption),
+    .zhHans: merged(L10nTranslations.zhHans, L10nTranslations.zhHansEncryption),
+    .zhHant: merged(L10nTranslations.zhHant, L10nTranslations.zhHantEncryption),
   ]
+
+  /// A language's main table and its vm-encrypt table
+  /// (`L10nTranslations+Encryption-<code>.swift`). The tables share no key.
+  private static func merged(_ main: [String: String], _ part: [String: String])
+    -> [String: String]
+  {
+    main.merging(part) { first, _ in first }
+  }
 
   /// All Polish tables merged. Split into files so that parts of the code can
   /// be translated in parallel without editing one shared dictionary.
