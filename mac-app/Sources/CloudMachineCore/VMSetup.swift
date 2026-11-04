@@ -138,7 +138,8 @@ public enum VMSetup {
     let units = VMLayout.services.map(VMLayout.unitName).joined(separator: " ")
     guard
       let started = try? await VMLayout.rootShell(
-        "systemctl daemon-reload && systemctl start \(units)", timeout: 300),
+        // rclone-tm may scan a full VFS cache for minutes (TimeoutStartSec=45min in its unit).
+        "systemctl daemon-reload && systemctl start \(units)", timeout: 2880),
       started.succeeded
     else {
       return fail(

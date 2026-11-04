@@ -26,6 +26,9 @@ Machine destination (`tmutil setdestination` answers error 45), and refuses SMB
 to the Mac's own address. A share served from a machine on the Mac is what Time
 Machine still accepts. Why each layer inside it is there: [`vm/README.md`](vm/README.md).
 
+CloudMachine is an independent project, not affiliated with Apple or Google
+(see [Licence](#licence)).
+
 ---
 
 ## Requirements
@@ -37,9 +40,12 @@ Machine still accepts. Why each layer inside it is there: [`vm/README.md`](vm/RE
 - About 200 GB of free disk: the machine's disk file grows with the upload
   buffer.
 
-The menu-bar app, CLI output and notifications follow the system language:
-Polish when Polish is the first preferred language, English otherwise.
-`CM_LANGUAGE=en` or `CM_LANGUAGE=pl` overrides it. Logs are always English,
+The menu-bar app, CLI output and notifications follow the system language, in
+22 languages: Arabic, Chinese (Simplified and Traditional), Danish, Dutch,
+English, Finnish, French, German, Hebrew, Italian, Japanese, Korean, Malay,
+Norwegian Bokmål, Polish, Portuguese (Brazil), Russian, Spanish, Swedish, Thai
+and Turkish; English for any other. `CM_LANGUAGE` with a language code (`en`,
+`de`, `zh-Hant`...) overrides it. Logs are always English,
 so they read the same whoever sends them to you.
 
 ### Current limitations
@@ -47,9 +53,18 @@ so they read the same whoever sends them to you.
 - **Not notarised.** Releases are signed with a self-signed certificate, not
   with an Apple Developer ID. The Homebrew cask clears the quarantine flag; a
   DMG downloaded by hand gets Gatekeeper's "unidentified developer" warning.
-- **Google's daily upload limit and a full Drive are not named in the app.**
-  rclone's log that says so lives in the machine; what the app does show is
-  the backlog growing and the guard pausing Time Machine.
+- **No client-side encryption.** The backup's bands are stored on Google
+  Drive as they are, unencrypted by CloudMachine: anyone who can read the
+  Google account (and Google itself) can read the backup, which is a copy of
+  the whole Mac. Do not use it for data you may not hand to Google, such as
+  a company's or clients' data on a private Google account. Time Machine's
+  own "Encrypt backups" is not supported yet: `vm-prepare-bundle` refuses an
+  encrypted image.
+- **A full Google Drive is not named as such.** It shows up as an upload
+  that hangs and a growing backlog, with the guard pausing Time Machine.
+  Google's daily upload limit (750 GB) is named: `cloudmachine-agent
+  vm-status` and the backup-health notification say when it stops the
+  upload; the app window shows only the growing backlog.
 
 ---
 
@@ -157,6 +172,16 @@ type *Desktop*. Paste the client ID and secret into the **Google Drive
 Credentials (OAuth 2.0)** card at the bottom of the app window; it stores them
 in the macOS Keychain.
 
+**Publish the consent screen.** On the OAuth consent screen (Google Auth
+Platform → Audience), set the publishing status to **In production**. While
+it says *Testing*, Google issues refresh tokens that expire after 7 days, and
+the backup stops reaching Drive a week after you connect. With only the
+`drive.file` scope, which Google classes as non-sensitive, publishing does not
+require Google's verification. (A Google Workspace project with the
+*Internal* user type has no 7-day limit.) If the token has already expired,
+publish the screen and sign in again with the same credentials: the same
+client ID still sees the backup it created.
+
 They are not optional polish: rclone's shared `client_id` is being retired
 during 2026, and Google rate-limits per `client_id`, so on the shared one you
 compete with every other rclone user.
@@ -195,6 +220,18 @@ repository (`renacode-infra: docs/projekty/cloudmachine/`):
 
 ## Licence
 
-MIT. rclone, Lima and Samba keep their own licences. One file is GPLv2:
-`vm/punchfs/punchfs.c`, based on libfuse's passthrough example (see
-`vm/punchfs/README.md`).
+MIT (see [`LICENSE`](LICENSE)). One file is GPLv2:
+`vm/punchfs/punchfs.c`, based on libfuse's passthrough example; the licence
+text is in [`vm/punchfs/COPYING`](vm/punchfs/COPYING) and the changes are
+described in [`vm/punchfs/README.md`](vm/punchfs/README.md). The third-party
+code CloudMachine contains, and the software it installs without shipping it
+(rclone, Lima, Samba, Ubuntu), are listed with their licences in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+### Trademarks
+
+Time Machine, Mac and macOS are trademarks of Apple Inc., registered in the
+U.S. and other countries. Google Drive is a trademark of Google LLC.
+CloudMachine is an independent project; it is not affiliated with, endorsed
+or sponsored by Apple or Google. The names are used only to say what
+CloudMachine works with.
