@@ -17,6 +17,13 @@ name: Release
 # Also: "Run workflow" on the Actions tab (same as a merge), and a vX.Y.Z tag
 # pushed by hand, which releases exactly that version.
 #
+# Only main publishes (2026-11-04). "Run workflow" can be started on any
+# branch: there it is a dry run, like a pull request. A tag releases only when
+# its commit is on main; a tag on any other commit fails. The release job
+# re-checks the ref in IS_RELEASE, so a mistake in `decide` alone cannot
+# publish. .github/test-release-workflow.sh (CI) runs `decide` for each kind
+# of ref and checks that every publishing step is gated on IS_RELEASE.
+#
 # A pull request that changes the build or the cask goes through the same
 # pipeline as a dry run: ad-hoc signature, no release and no tap, artifacts
 # downloadable from the run.
@@ -80,6 +87,9 @@ jobs:
       version: ${{ steps.decide.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: a tag is checked for being on main (merge-base).
+          fetch-depth: 0
       - id: decide
         run: |
           base="$(tr -d '[:space:]' < mac-app/VERSION)"
@@ -88,8 +98,18 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             version="$base"
           elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            # A tag can be pushed on any commit; only one on main is released.
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+              echo "::error::${GITHUB_REF_NAME} is not on main - only commits on main are released."
+              exit 1
+            fi
             version="${GITHUB_REF_NAME#v}"
             release=true
+          elif [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            # "Run workflow" on another branch: dry run, never a release.
+            echo "::notice::${GITHUB_REF} is not main - dry run, nothing is published."
+            version="$base"
           elif git ls-remote --exit-code --tags origin "refs/tags/v${base}" >/dev/null; then
             # Base already released: next patch after the highest tag of
             # this major.minor. Sorted as versions, not strings (1.3.10 > 1.3.9).
@@ -124,7 +144,8 @@ jobs:
     permissions:
       contents: write
     env:
-      IS_RELEASE: ${{ needs.decide.outputs.release }}
+      # Second guard, independent of decide's script: main or a v* tag only.
+      IS_RELEASE: ${{ needs.decide.outputs.release == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
       VERSION: ${{ needs.decide.outputs.version }}
       # Read by build-app and make-dmg; the computed version must not be
       # written into mac-app/VERSION, which would mark every release dirty.
@@ -294,11 +315,14 @@ jobs:
             exit 1
           fi
 
-      # Token and the access probe run on EVERY build, not only on release:
-      # an app that lost its installation (or a missing key) fails the PR,
-      # not the release after the DMG is already published.
+      # Token and the access probe run on pull requests too, not only on
+      # release: an app that lost its installation (or a missing key) fails
+      # the PR, not the release after the DMG is already published. Not on a
+      # dry run from another branch: its code has already run in the steps
+      # above and could read the token (2026-11-04).
       - name: Tap token
         id: tap-token
+        if: env.IS_RELEASE == 'true' || github.event_name == 'pull_request'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.TAP_APP_CLIENT_ID }}
@@ -307,6 +331,7 @@ jobs:
           repositories: homebrew-tap
 
       - name: Check tap access
+        if: env.IS_RELEASE == 'true' || github.event_name == 'pull_request'
         env:
           TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
         run: git ls-remote "https://x-access-token:${TAP_TOKEN}@github.com/RenaCode/homebrew-tap.git" HEAD
