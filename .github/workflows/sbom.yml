@@ -1,0 +1,31 @@
+name: sbom
+# SBOM (CycloneDX) jako artefakt `sbom` dla panelu Trivy (renacode-infra, docs/projekty/trivy/sbom-workflow.md).
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 2 * * *"   # nocą, przed skanem panelu; bez nowego przebiegu artefakt wygasa po 90 dniach
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          scan-type: fs
+          scan-ref: .
+          format: cyclonedx
+          output: ${{ github.event.repository.name }}.cdx.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: ${{ github.event.repository.name }}.cdx.json
+          retention-days: 90
+          if-no-files-found: error
