@@ -135,7 +135,7 @@ public enum SMBProbe {
   }
 
   /// One connection: connect, send, read the first 8 bytes - all within `timeout`.
-  public static func liveExchange(
+  @Sendable public static func liveExchange(
     host: String, port: UInt16, request: [UInt8], timeout: TimeInterval
   ) -> Exchange {
     let deadline = Date().addingTimeInterval(timeout)

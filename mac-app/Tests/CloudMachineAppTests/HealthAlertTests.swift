@@ -49,8 +49,9 @@ final class HealthAlertTests: XCTestCase {
     _ report: BackupHealth.Report, now: Date = Date(),
     deliver: @escaping @Sendable (String, String) async -> Bool
   ) async -> Bool {
-    await HealthAlert.report(
-      report, now: now, stateFile: stateFile, deliver: deliver, log: log.write)
+    let captured = log!
+    return await HealthAlert.report(
+      report, now: now, stateFile: stateFile, deliver: deliver, log: { captured.write($0) })
   }
 
   // MARK: - Finding 3: tests do not write to the production log
