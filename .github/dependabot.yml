@@ -1,0 +1,27 @@
+# Aktualizacje zaleznosci jako PR-y do przegladu (scalanie robi wlasciciel).
+# Raz w tygodniu; podbicia minor/patch zebrane w jeden PR na wpis, wersje major
+# osobno, bo wymagaja przegladu zmian lamiacych.
+# open-pull-requests-limit: 3 w kazdym wpisie - kazdy PR odpala CI na macos-15
+# (minuty GitHuba liczone x10) i ubuntu-latest, wiec nie wiecej niz kilka naraz.
+version: 2
+updates:
+  # Akcje GitHuba w .github/workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+
+  # Pakiet SwiftPM aplikacji (mac-app/Package.swift + Package.resolved):
+  # swift-argument-parser.
+  - package-ecosystem: swift
+    directory: /mac-app
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      swift-minor-patch:
+        update-types: [minor, patch]
