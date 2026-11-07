@@ -1,0 +1,48 @@
+name: trivy
+
+# Skan repozytorium Trivym (trivy fs): zależności z plików blokad (lockfile, np.
+# requirements.txt, package-lock.json, uv.lock, Package.resolved) oraz sekrety w kodzie.
+# Polityka: CRITICAL i HIGH z dostępną poprawką (`ignore-unfixed`) blokują PR. Wyjątki
+# wpisuje się do `.trivyignore` z uzasadnieniem i datą wygaśnięcia, nie łagodzi się progu.
+# Wynik jest tabelą w logu przebiegu (bez SARIF i code scanningu).
+#
+# Wersje przypięte: akcja do pełnego SHA commita, sam Trivy parametrem `version`. Podbijaj
+# oba razem, w osobnym PR-ze.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Nowy push do tej samej gałęzi PR przerywa przebieg dla starego commita.
+concurrency:
+  group: trivy-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fs:
+    name: Trivy (repozytorium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Trivy fs (podatności i sekrety)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          version: v0.76.1
+          cache: true
