@@ -170,9 +170,10 @@ for step in "Import signing certificate" "Tap token" "Check tap access" \
 done
 
 # The tap token is also taken on pull requests, on purpose: an app that lost
-# its installation fails the PR, not the release. Never on a dry run from
+# its installation fails the PR, not the release. Not on Dependabot PRs: they get
+# Dependabot secrets only, without TAP_APP_KEY (2026-11-07). Never on a dry run from
 # another branch - that branch's code has already run in earlier steps.
-TAP_PROBE="env.IS_RELEASE == 'true' || github.event_name == 'pull_request'"
+TAP_PROBE="env.IS_RELEASE == 'true' || (github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]')"
 # Publishing steps that read no secret themselves: the gate that stops a build
 # which changed tracked files, the release action (job token), git push with
 # the tap checkout's credentials.

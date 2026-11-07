@@ -319,10 +319,11 @@ jobs:
       # release: an app that lost its installation (or a missing key) fails
       # the PR, not the release after the DMG is already published. Not on a
       # dry run from another branch: its code has already run in the steps
-      # above and could read the token (2026-11-04).
+      # above and could read the token (2026-11-04). Not on Dependabot PRs:
+      # they get only Dependabot secrets, so TAP_APP_KEY is empty (2026-11-07).
       - name: Tap token
         id: tap-token
-        if: env.IS_RELEASE == 'true' || github.event_name == 'pull_request'
+        if: env.IS_RELEASE == 'true' || (github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]')
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.TAP_APP_CLIENT_ID }}
@@ -331,7 +332,7 @@ jobs:
           repositories: homebrew-tap
 
       - name: Check tap access
-        if: env.IS_RELEASE == 'true' || github.event_name == 'pull_request'
+        if: env.IS_RELEASE == 'true' || (github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]')
         env:
           TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
         run: git ls-remote "https://x-access-token:${TAP_TOKEN}@github.com/RenaCode/homebrew-tap.git" HEAD
