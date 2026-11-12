@@ -25,31 +25,80 @@ public enum VMHold {
     public var status: @Sendable () async throws -> String?
     public var stop: @Sendable () async -> Bool
     public var log: @Sendable (String) -> Void
+    public var sleep: @Sendable (TimeInterval) async -> Void
 
     public init(
       start: @escaping @Sendable () async -> Bool,
       status: @escaping @Sendable () async throws -> String?,
       stop: @escaping @Sendable () async -> Bool,
-      log: @escaping @Sendable (String) -> Void
+      log: @escaping @Sendable (String) -> Void,
+      sleep: @escaping @Sendable (TimeInterval) async -> Void = {
+        try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000))
+      }
     ) {
       self.start = start
       self.status = status
       self.stop = stop
       self.log = log
+      self.sleep = sleep
+    }
+  }
+
+  /// How long a machine that `limactl start` gave up on may still take to
+  /// come up. The Mac often runs under a load of ~100 (renders); on 12.11
+  /// `limactl start` failed with "did not receive an event with the `running`
+  /// status" after 10 min and the machine was up a little later.
+  public static let startGrace: TimeInterval = 60 * 60
+  static let checkInterval: TimeInterval = 30
+
+  enum StartOutcome { case up, failed, terminated }
+
+  /// After a failed `limactl start`: is the machine coming up? Waits while
+  /// Lima says anything but gone/stopped/broken, or does not answer. Never
+  /// touches the machine.
+  static func waitForStart(
+    steps: Steps, terminated: @Sendable () -> Bool
+  ) async -> StartOutcome {
+    var waited: TimeInterval = 0
+    var seen = "unknown"
+    while true {
+      do {
+        let status = try await steps.status()
+        if status == "Running" { return .up }
+        guard let status, !["Stopped", "Broken"].contains(status) else { return .failed }
+        seen = status
+      } catch {
+        seen = "unreachable"  // Lima busy or slow under load: ask again
+      }
+      if terminated() { return .terminated }
+      if waited >= startGrace { return .failed }
+      steps.log("vm-hold: start did not finish, the machine is \(seen); waiting")
+      await steps.sleep(checkInterval)
+      waited += checkInterval
     }
   }
 
   /// The exit code of the job: 0 when the machine was started and then
   /// stopped (or was already stopped), 1 when it did not start or did not stop.
   public static func run(
-    steps: Steps, awaitTermination: @Sendable () async -> Void
+    steps: Steps, awaitTermination: @Sendable () async -> Void,
+    terminated: @Sendable () -> Bool = { false }
   ) async -> Int32 {
-    guard await steps.start() else {
+    var outcome = StartOutcome.up
+    if await !steps.start() {
+      steps.log("vm-hold: limactl start failed; checking whether the machine comes up anyway")
+      outcome = await waitForStart(steps: steps, terminated: terminated)
+    }
+    switch outcome {
+    case .failed:
       steps.log("vm-hold: the machine did not start")
       return 1
+    case .up:
+      steps.log("vm-hold: the machine is up, waiting for the job to be stopped")
+      await awaitTermination()
+    case .terminated:
+      break
     }
-    steps.log("vm-hold: the machine is up, waiting for the job to be stopped")
-    await awaitTermination()
 
     // `nil` = no such instance. When Lima does not answer we cannot tell, and
     // a machine left running is worse than a failed `limactl stop`, so we stop.

@@ -15,7 +15,8 @@ struct VMHoldCommand: AsyncParsableCommand {
     // that arrives during it is remembered and ends the wait at once.
     let signals = TerminationSignals()
     let code = await VMHold.run(
-      steps: VMHold.live, awaitTermination: { await signals.wait() })
+      steps: VMHold.live, awaitTermination: { await signals.wait() },
+      terminated: { signals.hasArrived })
     if code != 0 { throw ExitCode(code) }
   }
 }
@@ -44,6 +45,11 @@ private final class TerminationSignals: @unchecked Sendable {
     waiter = nil
     lock.unlock()
     w?.resume()
+  }
+
+  var hasArrived: Bool {
+    lock.lock(); defer { lock.unlock() }
+    return arrived
   }
 
   func wait() async {

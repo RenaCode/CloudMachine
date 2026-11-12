@@ -38,9 +38,10 @@ final class VMHoldTests: XCTestCase {
   func testFailedStartExitsNonZeroWithoutWaitingOrStopping() async {
     let rec = Recorder()
     let code = await VMHold.run(
-      steps: steps(rec, start: false), awaitTermination: { rec.add("wait") })
+      steps: steps(rec, start: false, status: "Stopped"), awaitTermination: { rec.add("wait") })
     XCTAssertEqual(code, 1)
-    XCTAssertEqual(rec.events.filter { !$0.hasPrefix("log") }, ["start"])
+    // Start failed, Lima says the machine is not there: not slow, failed.
+    XCTAssertEqual(rec.events.filter { !$0.hasPrefix("log") }, ["start", "status"])
   }
 
   /// The machine was already stopped (the app's Stop, prepare-shutdown):
@@ -73,6 +74,75 @@ final class VMHoldTests: XCTestCase {
     let code = await VMHold.run(steps: steps, awaitTermination: {})
     XCTAssertEqual(code, 0)
     XCTAssertTrue(rec.events.contains("stop"))
+  }
+
+  // MARK: - Slow start (Mac under load)
+
+  /// Statuses answered one per call; the last one repeats. Records sleeps.
+  private final class Script: @unchecked Sendable {
+    private let lock = NSLock()
+    private var statuses: [String?]
+    private(set) var slept: TimeInterval = 0
+    private(set) var stopCalls = 0
+    init(_ statuses: [String?]) { self.statuses = statuses }
+    func next() -> String? {
+      lock.lock(); defer { lock.unlock() }
+      return statuses.count > 1 ? statuses.removeFirst() : statuses[0]
+    }
+    func sleep(_ t: TimeInterval) { lock.lock(); slept += t; lock.unlock() }
+    func stopped() { lock.lock(); stopCalls += 1; lock.unlock() }
+  }
+
+  private func slowSteps(_ script: Script, startSucceeds: Bool) -> VMHold.Steps {
+    VMHold.Steps(
+      start: { startSucceeds },
+      status: { script.next() },
+      stop: { script.stopped(); return true },
+      log: { _ in },
+      sleep: { script.sleep($0) })
+  }
+
+  /// 12.11: `limactl start` gave up after 10 min ("did not receive an event
+  /// with the `running` status") although the machine came up. A failed start
+  /// is not a failed machine: keep asking Lima, do not stop or restart it.
+  func testFailedStartIsToleratedWhileTheMachineComesUp() async {
+    let script = Script(["Starting", "Starting", "Starting", "Running"])
+    let code = await VMHold.run(
+      steps: slowSteps(script, startSucceeds: false), awaitTermination: {})
+    XCTAssertEqual(code, 0)
+    XCTAssertGreaterThan(script.slept, 0, "it waited between checks")
+    // 3 "Starting" + 1 "Running" while waiting, then the status at shutdown.
+    XCTAssertEqual(script.stopCalls, 1, "stopped once, at termination - never during the wait")
+  }
+
+  func testWaitsLongerThanTenMinutes() async {
+    let script = Script(Array(repeating: "Starting", count: 100) + ["Running"])
+    let code = await VMHold.run(
+      steps: slowSteps(script, startSucceeds: false), awaitTermination: {})
+    XCTAssertEqual(code, 0)
+    XCTAssertGreaterThan(script.slept, 20 * 60)
+  }
+
+  /// A machine that never comes up within the grace period is a failure of
+  /// the job - but even then the machine is left alone (no stop, no kill).
+  func testNeverRunningFailsAfterGraceWithoutStopping() async {
+    let script = Script(["Starting"])
+    let code = await VMHold.run(
+      steps: slowSteps(script, startSucceeds: false), awaitTermination: {})
+    XCTAssertEqual(code, 1)
+    XCTAssertEqual(script.stopCalls, 0)
+    XCTAssertGreaterThanOrEqual(script.slept, VMHold.startGrace)
+  }
+
+  /// A SIGTERM during the wait ends it at once.
+  func testTerminationDuringStartEndsTheWait() async {
+    let script = Script(["Starting"])
+    let code = await VMHold.run(
+      steps: slowSteps(script, startSucceeds: false), awaitTermination: {},
+      terminated: { true })
+    XCTAssertEqual(script.slept, 0)
+    XCTAssertEqual(code, 0)
+    XCTAssertEqual(script.stopCalls, 0, "not Running: nothing to stop")
   }
 
   /// launchd sends SIGKILL ExitTimeOut seconds after SIGTERM: the stop's own
