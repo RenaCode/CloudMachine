@@ -18,6 +18,25 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertNil(VMLayout.instanceStatus(listJSON: ""))
   }
 
+  /// `limactl list --json` of ALL instances fails when any one of them cannot
+  /// be read ("bufio.Scanner: token too long", seen on 12.11 on a throwaway
+  /// machine during its first boot) and then blinds everything that asks about
+  /// `cmsmb`. Ask for the one instance; "unmatched instances" means it is not
+  /// there, any other failure is an unanswered question.
+  func testStatusOfOneInstanceDistinguishesMissingFromUnanswered() throws {
+    let one = #"{"name":"cmsmb","status":"Running"}"#
+    XCTAssertEqual(
+      try VMLayout.instanceStatus(exitCode: 0, stdout: one, stderr: ""), "Running")
+    XCTAssertNil(
+      try VMLayout.instanceStatus(
+        exitCode: 1, stdout: "",
+        stderr: "level=warning msg=\"No instance matching cmsmb found.\"\n"
+          + "level=fatal msg=\"unmatched instances\""))
+    XCTAssertThrowsError(
+      try VMLayout.instanceStatus(
+        exitCode: 1, stdout: "", stderr: "level=fatal msg=\"bufio.Scanner: token too long\""))
+  }
+
   /// Lima's user-mode network is not reachable by Time Machine; the vzNAT
   /// address is.
   func testAddressSkipsLimaUserNetwork() {

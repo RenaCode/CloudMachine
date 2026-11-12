@@ -356,13 +356,56 @@ public enum VMLayout {
 
   /// `Running`, `Stopped`, ... or `nil` when there is no instance. Throws
   /// when `limactl` itself does not answer.
-  public static func instanceStatus() async throws -> String? {
-    let result = try await limactl(["list", "--json"], timeout: 60)
-    guard result.succeeded else {
+  public static func instanceStatus(timeout: TimeInterval = 60) async throws -> String? {
+    let result = try await limactl(["list", "--json", instanceName], timeout: timeout)
+    return try instanceStatus(
+      exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr)
+  }
+
+  /// The answer of `limactl list --json <name>`: "unmatched instances" is the
+  /// instance not being there (`nil`); any other failure is no answer.
+  static func instanceStatus(exitCode: Int32, stdout: String, stderr: String) throws -> String? {
+    guard exitCode == 0 else {
+      if stderr.contains("unmatched instances") { return nil }
       throw ProcessRunnerError.launchFailed(
         L10n.tr(
-          "limactl list failed: %@", result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)))
+          "limactl list failed: %@", stderr.trimmingCharacters(in: .whitespacesAndNewlines)))
     }
-    return instanceStatus(listJSON: result.stdout)
+    return instanceStatus(listJSON: stdout)
+  }
+
+  /// Before `limactl stop`: stop smbd (no open files, no writes arriving) and
+  /// sync the guest. Lima's vz driver gives the guest only 30 s to power off;
+  /// this takes the Samba shutdown and the flush of the dirty cache disk out
+  /// of that budget. `;` and not `&&`: the sync matters most when smbd is
+  /// already gone, masked, or slow to stop.
+  static let quiesceScript = "systemctl stop smbd; sync"
+
+  public static func quiesceGuest(timeout: TimeInterval) async -> Bool {
+    let result = try? await rootShell(quiesceScript, timeout: timeout)
+    return result?.succeeded == true
+  }
+
+  /// One line for the log at the next start: did the guest's previous boot end
+  /// cleanly? The kernel's word at THIS boot is authoritative: ext4 says
+  /// "recovery required" when the journal of the root filesystem has to be
+  /// replayed (a hard stop, also one so early that the previous boot left no
+  /// journal at all). Otherwise the previous boot's journal must end with the
+  /// power-off sequence ("Journal stopped").
+  static let lastShutdownScript = """
+    if journalctl -k -b 0 --no-pager 2>/dev/null | grep -q "recovery required"; then \
+      echo "the previous boot did NOT end cleanly: ext4 needed journal recovery (hard stop)"; \
+    elif journalctl -b -1 --no-pager -o cat 2>/dev/null | tail -n 5 | grep -q "Journal stopped"; then \
+      echo "the previous boot ended cleanly"; \
+    elif journalctl -b -1 --no-pager -o cat 2>/dev/null | grep -q .; then \
+      echo "the previous boot's journal ends without a shutdown sequence (hard stop?)"; \
+    else echo "no journal of a previous boot"; fi
+    """
+
+  public static func lastShutdownSummary() async -> String? {
+    guard let result = try? await rootShell(lastShutdownScript, timeout: 60), result.succeeded
+    else { return nil }
+    let lines = result.stdout.split(separator: "\n").map(String.init)
+    return lines.isEmpty ? nil : "guest: " + lines.joined(separator: "; ")
   }
 }

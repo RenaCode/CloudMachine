@@ -12,57 +12,9 @@ struct VMHoldCommand: AsyncParsableCommand {
 
   func run() async throws {
     // The handlers must be in place before the (minutes long) start: a SIGTERM
-    // that arrives during it is remembered and ends the wait at once.
+    // that arrives during it is remembered and cancels the start.
     let signals = TerminationSignals()
-    let code = await VMHold.run(
-      steps: VMHold.live, awaitTermination: { await signals.wait() },
-      terminated: { signals.hasArrived })
+    let code = await VMHold.run(steps: VMHold.live, termination: signals.latch)
     if code != 0 { throw ExitCode(code) }
-  }
-}
-
-/// SIGTERM is what launchd sends; SIGINT and SIGHUP cover a terminal.
-private final class TerminationSignals: @unchecked Sendable {
-  private let lock = NSLock()
-  private var arrived = false
-  private var waiter: CheckedContinuation<Void, Never>?
-  private var sources: [DispatchSourceSignal] = []
-
-  init() {
-    for sig in [SIGTERM, SIGINT, SIGHUP] {
-      signal(sig, SIG_IGN)
-      let source = DispatchSource.makeSignalSource(signal: sig, queue: .global())
-      source.setEventHandler { [weak self] in self?.fire() }
-      source.resume()
-      sources.append(source)
-    }
-  }
-
-  private func fire() {
-    lock.lock()
-    arrived = true
-    let w = waiter
-    waiter = nil
-    lock.unlock()
-    w?.resume()
-  }
-
-  var hasArrived: Bool {
-    lock.lock()
-    defer { lock.unlock() }
-    return arrived
-  }
-
-  func wait() async {
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-      lock.lock()
-      if arrived {
-        lock.unlock()
-        continuation.resume()
-      } else {
-        waiter = continuation
-        lock.unlock()
-      }
-    }
   }
 }

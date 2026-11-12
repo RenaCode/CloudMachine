@@ -186,9 +186,71 @@ final class TimeoutTargets: @unchecked Sendable {
 /// only in the GUI as `Shell.run`; moved here so that the CLI watchdogs have
 /// exactly the same, already proven timeout semantics.
 public enum ProcessRunner {
+  /// After `timeout` the process gets SIGTERM, after `timeout + 5` SIGKILL, and
+  /// after `timeout + giveUpSlack` the call returns `timedOut` regardless.
+  /// A caller with a deadline (`VMHold`) adds this to every limit it sets.
+  public static let giveUpSlack: TimeInterval = 10
+
+  /// A cancelled call sends SIGTERM and, if the process is still there after
+  /// this many seconds, SIGKILL (a process that ignores SIGTERM must not hold
+  /// the caller past a launchd deadline). `VMHold` counts it in its budget.
+  public static let cancelKillDelay: TimeInterval = 5
+
+  /// Holds the process of one call, so that cancelling the calling task can
+  /// reach it (it is created before the process exists).
+  private final class CancelBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+    /// `true` when the call was cancelled before the process was set.
+    func set(_ process: Process) -> Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      self.process = process
+      return cancelled
+    }
+    /// Cancelled before the process existed: end it as soon as it does.
+    func terminateNow(_ process: Process) {
+      process.terminate()
+      let pid = process.processIdentifier
+      DispatchQueue.global().asyncAfter(deadline: .now() + ProcessRunner.cancelKillDelay) {
+        if process.isRunning { kill(pid, SIGKILL) }
+      }
+    }
+    func cancel() {
+      lock.lock()
+      cancelled = true
+      let target = process
+      lock.unlock()
+      guard let target, target.isRunning else { return }
+      target.terminate()
+      let pid = target.processIdentifier
+      DispatchQueue.global().asyncAfter(deadline: .now() + ProcessRunner.cancelKillDelay) {
+        // The pid cannot have been reused within seconds unless the process
+        // exited, and then `target` says so.
+        if target.isRunning { kill(pid, SIGKILL) }
+      }
+    }
+  }
+
+  /// Cancelling the calling task sends the process SIGTERM (`limactl start`
+  /// can run for 50 minutes and must end when the job is told to stop); the
+  /// call then returns when the process has exited.
   public static func run(
     _ executable: String, _ args: [String], env: [String: String] = [:],
     timeout: TimeInterval? = nil
+  ) async throws -> ProcessResult {
+    let box = CancelBox()
+    return try await withTaskCancellationHandler {
+      try await start(executable, args, env: env, timeout: timeout, box: box)
+    } onCancel: {
+      box.cancel()
+    }
+  }
+
+  private static func start(
+    _ executable: String, _ args: [String], env: [String: String], timeout: TimeInterval?,
+    box: CancelBox
   ) async throws -> ProcessResult {
     try await withCheckedThrowingContinuation { continuation in
       let process = Process()
@@ -260,6 +322,7 @@ public enum ProcessRunner {
         }
         return
       }
+      if box.set(process), process.isRunning { box.terminateNow(process) }
 
       if let timeout {
         // The closures below capture `targets` only - never `process` or a
@@ -288,7 +351,7 @@ public enum ProcessRunner {
         // the background (harmlessly - it will finish by itself some day, when
         // the kernel finally gets an answer, and `resumeGuard` prevents a
         // double resume if `terminationHandler` fires later).
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 10) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout + giveUpSlack) {
           if resumeGuard.claim() {
             // IMPORTANT: we do NOT stop reading - that leaves the pipe with NO
             // reader at all. If the process survived even SIGKILL (stuck in the
