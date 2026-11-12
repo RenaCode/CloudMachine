@@ -54,6 +54,8 @@
 #include <string.h>
 #include <limits.h>
 #include <dirent.h>
+#include <ctype.h>
+#include <ftw.h>
 #include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -98,6 +100,11 @@ struct lo_data {
 	int flock;
 	int xattr;
 	const char *source;
+	char *source_real; /* realpath(source), to turn an fd's path into a path below source */
+	/* -o syncfs=<dir>: after fsync, also syncfs() the filesystem of <dir>
+	 * (rclone's cache dir, whose metadata files are written without fsync) */
+	const char *syncfs;
+	int syncfs_fd;
 	double timeout;
 	int cache;
 	int timeout_set;
@@ -111,6 +118,8 @@ static const struct fuse_opt lo_opts[] = {
 	  offsetof(struct lo_data, writeback), 0 },
 	{ "source=%s",
 	  offsetof(struct lo_data, source), 0 },
+	{ "syncfs=%s",
+	  offsetof(struct lo_data, syncfs), 0 },
 	{ "flock",
 	  offsetof(struct lo_data, flock), 1 },
 	{ "no_flock",
@@ -136,6 +145,7 @@ static const struct fuse_opt lo_opts[] = {
 static void passthrough_ll_help(void)
 {
 	printf(
+"    -o syncfs=<dir>        After fsync also syncfs() the filesystem of <dir>\n"
 "    -o writeback           Enable writeback\n"
 "    -o no_writeback        Disable write back\n"
 "    -o source=/home/dir    Source directory to be mounted\n"
@@ -482,11 +492,23 @@ out_err:
 	fuse_reply_err(req, saverr);
 }
 
+/* extended attributes by path, see below */
+static int xmirror_child(struct lo_data *lo, struct lo_inode *parent, const char *name,
+			 char *buf, size_t n);
+static void xattr_forget(const char *mirror);
+static void xattr_move(const char *from, const char *to);
+
 static void lo_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
 	int res;
 
+	char mirror[PATH_MAX + 320];
+	int have = xmirror_child(lo_data(req), lo_inode(req, parent), name,
+				 mirror, sizeof(mirror)) == 0;
+
 	res = unlinkat(lo_fd(req, parent), name, AT_REMOVEDIR);
+	if (res == 0 && have)
+		xattr_forget(mirror);
 
 	fuse_reply_err(req, res == -1 ? errno : 0);
 }
@@ -502,8 +524,16 @@ static void lo_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
 		return;
 	}
 
+	char from[PATH_MAX + 320], to[PATH_MAX + 320];
+	int have = xmirror_child(lo_data(req), lo_inode(req, parent), name,
+				 from, sizeof(from)) == 0
+		&& xmirror_child(lo_data(req), lo_inode(req, newparent), newname,
+				 to, sizeof(to)) == 0;
+
 	res = renameat(lo_fd(req, parent), name,
 			lo_fd(req, newparent), newname);
+	if (res == 0 && have)
+		xattr_move(from, to);
 
 	fuse_reply_err(req, res == -1 ? errno : 0);
 }
@@ -512,7 +542,13 @@ static void lo_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
 	int res;
 
+	char mirror[PATH_MAX + 320];
+	int have = xmirror_child(lo_data(req), lo_inode(req, parent), name,
+				 mirror, sizeof(mirror)) == 0;
+
 	res = unlinkat(lo_fd(req, parent), name, 0);
+	if (res == 0 && have)
+		xattr_forget(mirror);
 
 	fuse_reply_err(req, res == -1 ? errno : 0);
 }
@@ -790,6 +826,16 @@ static void lo_create(fuse_req_t req, fuse_ino_t parent, const char *name,
 		fuse_reply_create(req, &e, fi);
 }
 
+/* 0 or an errno. Without -o syncfs this does nothing. */
+static int lo_syncfs(fuse_req_t req)
+{
+	struct lo_data *lo = lo_data(req);
+
+	if (lo->syncfs_fd < 0)
+		return 0;
+	return syncfs(lo->syncfs_fd) == -1 ? errno : 0;
+}
+
 static void lo_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
 			struct fuse_file_info *fi)
 {
@@ -800,7 +846,11 @@ static void lo_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
 		res = fdatasync(fd);
 	else
 		res = fsync(fd);
-	fuse_reply_err(req, res == -1 ? errno : 0);
+	if (res == -1) {
+		fuse_reply_err(req, errno);
+		return;
+	}
+	fuse_reply_err(req, lo_syncfs(req));
 }
 
 static void lo_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
@@ -867,7 +917,11 @@ static void lo_fsync(fuse_req_t req, fuse_ino_t ino, int datasync,
 		res = fdatasync(fi->fh);
 	else
 		res = fsync(fi->fh);
-	fuse_reply_err(req, res == -1 ? errno : 0);
+	if (res == -1) {
+		fuse_reply_err(req, errno);
+		return;
+	}
+	fuse_reply_err(req, lo_syncfs(req));
 }
 
 static void lo_read(fuse_req_t req, fuse_ino_t ino, size_t size,
@@ -976,13 +1030,169 @@ static void lo_flock(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi,
 /* CloudMachine: rclone has no extended attributes, but Samba keeps the
  * sparse flag (user.DOSATTRIB) and the Apple metadata streams in them; without
  * them macOS treats the band files as non-sparse and refuses to erase a band.
- * Attributes live in side files on local disk: XDIR/<inode hex>/<name>. rclone's
- * inode is a hash of the path, so it is stable for a given band. */
+ * Attributes live in side files on local disk, keyed by the PATH of the file
+ * relative to -o source: XROOT/<path>/#xattr#/<name>.
+ *
+ * Not by inode: rclone's mount2 (go-fuse) gives inodes from a counter of the
+ * process (vfs inodeCount), so they change at every restart of rclone and the
+ * attributes of a band would be lost or end up on another file. The path is
+ * what stays. unlink/rmdir remove the attributes of the path, rename moves
+ * them (the mirror tree makes a directory rename move its children's too).
+ * The old layout (XDIR/<inode hex>) is wrong-keyed and is removed at start. */
 #define XDIR "/srv/tm-xattr"
+#define XROOT XDIR "/p"
+#define XLEAF "#xattr#"
 
-static void xdir_of(char *buf, size_t n, struct lo_inode *in)
+/* 0 or an errno. rel gets the path of the inode below the source directory
+ * ("" for the root), from the kernel's idea of the O_PATH descriptor. */
+static int rel_path_of(struct lo_data *lo, struct lo_inode *in, char *rel, size_t n)
 {
-	snprintf(buf, n, XDIR "/%llx", (unsigned long long)in->ino);
+	char link[64], full[PATH_MAX + 16];
+	size_t sl = strlen(lo->source_real);
+	const char *rest;
+	ssize_t r;
+
+	snprintf(link, sizeof(link), "/proc/self/fd/%d", in->fd);
+	r = readlink(link, full, sizeof(full) - 1);
+	if (r < 0)
+		return errno;
+	full[r] = 0;
+	/* The kernel appends " (deleted)" for an unlinked file; a file that is
+	 * really called that exists under that very path. */
+	if (r >= 10 && !strcmp(full + r - 10, " (deleted)")) {
+		struct stat st;
+		if (lstat(full, &st) == -1)
+			return ENOENT;
+	}
+	if (sl == 1)
+		sl = 0; /* source is "/" */
+	if (strncmp(full, lo->source_real, sl) || (full[sl] && full[sl] != '/'))
+		return EIO;
+	rest = full + sl;
+	while (*rest == '/')
+		rest++;
+	if (strlen(rest) >= n)
+		return ENAMETOOLONG;
+	strcpy(rel, rest);
+	return 0;
+}
+
+/* Mirror directory (no XLEAF) of rel, and of the name below a parent. */
+static int xmirror(char *buf, size_t n, const char *rel)
+{
+	int w = snprintf(buf, n, "%s%s%s", XROOT, *rel ? "/" : "", rel);
+	return (w < 0 || (size_t)w >= n) ? ENAMETOOLONG : 0;
+}
+
+static int xmirror_child(struct lo_data *lo, struct lo_inode *parent, const char *name,
+			 char *buf, size_t n)
+{
+	char rel[PATH_MAX];
+	char full[PATH_MAX + 256];
+	int err = rel_path_of(lo, parent, rel, sizeof(rel));
+
+	if (err)
+		return err;
+	/* the leaf directory's name would mirror onto its parent's attributes */
+	if (!strcmp(name, XLEAF))
+		return EINVAL;
+	snprintf(full, sizeof(full), "%s%s%s", rel, *rel ? "/" : "", name);
+	return xmirror(buf, n, full);
+}
+
+/* The directory that holds the attributes of an inode. */
+static int xdir_of(struct lo_data *lo, struct lo_inode *in, char *buf, size_t n)
+{
+	char rel[PATH_MAX], mirror[PATH_MAX + 64];
+	int err = rel_path_of(lo, in, rel, sizeof(rel));
+
+	if (!err)
+		err = xmirror(mirror, sizeof(mirror), rel);
+	if (!err && snprintf(buf, n, "%s/" XLEAF, mirror) >= (int)n)
+		err = ENAMETOOLONG;
+	return err;
+}
+
+static int mkdirs(const char *path)
+{
+	char tmp[PATH_MAX + 64];
+	char *p;
+
+	if (strlen(path) >= sizeof(tmp))
+		return ENAMETOOLONG;
+	strcpy(tmp, path);
+	for (p = tmp + 1; *p; p++) {
+		if (*p != '/')
+			continue;
+		*p = 0;
+		if (mkdir(tmp, 0700) == -1 && errno != EEXIST)
+			return errno;
+		*p = '/';
+	}
+	if (mkdir(tmp, 0700) == -1 && errno != EEXIST)
+		return errno;
+	return 0;
+}
+
+static int rm_node(const char *path, const struct stat *sb, int flag, struct FTW *ftw)
+{
+	(void) sb; (void) flag; (void) ftw;
+	return remove(path);
+}
+
+/* Best effort: attributes of a path that is gone. */
+static void xattr_forget(const char *mirror)
+{
+	nftw(mirror, rm_node, 16, FTW_DEPTH | FTW_PHYS);
+}
+
+/* Best effort: after a rename the attributes follow the path. */
+static void xattr_move(const char *from, const char *to)
+{
+	char parent[PATH_MAX + 320], *slash;
+	struct stat st;
+
+	/* whatever the target had is gone, also when the source has none */
+	xattr_forget(to);
+	if (lstat(from, &st) == -1)
+		return;
+	snprintf(parent, sizeof(parent), "%s", to);
+	slash = strrchr(parent, '/');
+	if (slash && slash != parent) {
+		*slash = 0;
+		if (mkdirs(parent))
+			return;
+	}
+	rename(from, to);
+}
+
+/* At start: the pre-path layout keyed by inode (XDIR/<hex>) cannot be used and
+ * would only be read by a file that happens to get the same number. */
+static void xattr_drop_old_layout(void)
+{
+	DIR *d = opendir(XDIR);
+	struct dirent *e;
+	int dropped = 0;
+
+	if (!d)
+		return;
+	while ((e = readdir(d))) {
+		char path[PATH_MAX];
+		const char *c;
+		if (e->d_name[0] == '.' || !strcmp(e->d_name, "p"))
+			continue;
+		for (c = e->d_name; *c && isxdigit((unsigned char)*c); c++)
+			;
+		if (*c)
+			continue;
+		snprintf(path, sizeof(path), XDIR "/%s", e->d_name);
+		xattr_forget(path);
+		dropped++;
+	}
+	closedir(d);
+	if (dropped)
+		fuse_log(FUSE_LOG_INFO, "removed %d extended attribute sets of the old inode-keyed layout\n",
+			 dropped);
 }
 
 static int xname_ok(const char *name)
@@ -993,14 +1203,15 @@ static int xname_ok(const char *name)
 static void lo_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
 			size_t size)
 {
-	char dir[256], path[1024];
+	char dir[PATH_MAX + 64], path[PATH_MAX + 512];
 	struct stat st;
 	char *value;
 	ssize_t r;
-	int fd;
+	int fd, err;
 
 	if (!xname_ok(name)) { fuse_reply_err(req, ENODATA); return; }
-	xdir_of(dir, sizeof(dir), lo_inode(req, ino));
+	err = xdir_of(lo_data(req), lo_inode(req, ino), dir, sizeof(dir));
+	if (err) { fuse_reply_err(req, err); return; }
 	snprintf(path, sizeof(path), "%s/%s", dir, name);
 	fd = open(path, O_RDONLY);
 	if (fd == -1) { fuse_reply_err(req, errno == ENOENT ? ENODATA : errno); return; }
@@ -1018,13 +1229,14 @@ static void lo_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
 
 static void lo_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
 {
-	char dir[256];
+	char dir[PATH_MAX + 64];
 	DIR *d;
 	struct dirent *e;
 	char *buf = NULL;
 	size_t len = 0;
+	int err = xdir_of(lo_data(req), lo_inode(req, ino), dir, sizeof(dir));
 
-	xdir_of(dir, sizeof(dir), lo_inode(req, ino));
+	if (err) { fuse_reply_err(req, err); return; }
 	d = opendir(dir);
 	if (d) {
 		while ((e = readdir(d))) {
@@ -1050,13 +1262,16 @@ static void lo_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
 static void lo_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
 			const char *value, size_t size, int flags)
 {
-	char dir[256], path[1024], tmp[1100];
-	int fd, exists;
+	char dir[PATH_MAX + 64], path[PATH_MAX + 512], tmp[PATH_MAX + 640];
+	int fd, exists, err;
 
 	if (!xname_ok(name)) { fuse_reply_err(req, EINVAL); return; }
-	xdir_of(dir, sizeof(dir), lo_inode(req, ino));
-	if (mkdir(XDIR, 0700) == -1 && errno != EEXIST) { fuse_reply_err(req, errno); return; }
-	if (mkdir(dir, 0700) == -1 && errno != EEXIST) { fuse_reply_err(req, errno); return; }
+	err = xdir_of(lo_data(req), lo_inode(req, ino), dir, sizeof(dir));
+	if (err) { fuse_reply_err(req, err); return; }
+	/* a file named like the leaf directory would mix up with its attributes */
+	if (strstr(dir, "/" XLEAF "/")) { fuse_reply_err(req, EINVAL); return; }
+	err = mkdirs(dir);
+	if (err) { fuse_reply_err(req, err); return; }
 	snprintf(path, sizeof(path), "%s/%s", dir, name);
 	exists = access(path, F_OK) == 0;
 	if ((flags & XATTR_CREATE) && exists) { fuse_reply_err(req, EEXIST); return; }
@@ -1072,10 +1287,12 @@ static void lo_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
 
 static void lo_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name)
 {
-	char dir[256], path[1024];
+	char dir[PATH_MAX + 64], path[PATH_MAX + 512];
+	int err;
 
 	if (!xname_ok(name)) { fuse_reply_err(req, ENODATA); return; }
-	xdir_of(dir, sizeof(dir), lo_inode(req, ino));
+	err = xdir_of(lo_data(req), lo_inode(req, ino), dir, sizeof(dir));
+	if (err) { fuse_reply_err(req, err); return; }
 	snprintf(path, sizeof(path), "%s/%s", dir, name);
 	if (unlink(path) == -1) { fuse_reply_err(req, errno == ENOENT ? ENODATA : errno); return; }
 	fuse_reply_err(req, 0);
@@ -1167,7 +1384,8 @@ int main(int argc, char *argv[])
 	struct fuse_cmdline_opts opts;
 	struct fuse_loop_config config;
 	struct lo_data lo = { .debug = 0,
-	                      .writeback = 0 };
+	                      .writeback = 0,
+	                      .syncfs_fd = -1 };
 	int ret = -1;
 
 	/* Don't mask creation mode, kernel already did that */
@@ -1224,6 +1442,12 @@ int main(int argc, char *argv[])
 	} else {
 		lo.source = "/";
 	}
+	lo.source_real = realpath(lo.source, NULL);
+	if (!lo.source_real) {
+		fuse_log(FUSE_LOG_ERR, "realpath(\"%s\"): %m\n", lo.source);
+		exit(1);
+	}
+	xattr_drop_old_layout();
 	if (!lo.timeout_set) {
 		switch (lo.cache) {
 		case CACHE_NEVER:
@@ -1249,6 +1473,15 @@ int main(int argc, char *argv[])
 		fuse_log(FUSE_LOG_ERR, "open(\"%s\", O_PATH): %m\n",
 			 lo.source);
 		exit(1);
+	}
+
+	if (lo.syncfs) {
+		lo.syncfs_fd = open(lo.syncfs, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+		if (lo.syncfs_fd == -1) {
+			fuse_log(FUSE_LOG_ERR, "open(\"%s\") for syncfs: %m\n",
+				 lo.syncfs);
+			exit(1);
+		}
 	}
 
 	se = fuse_session_new(&args, &lo_oper, sizeof(lo_oper), &lo);
@@ -1283,6 +1516,8 @@ err_out1:
 
 	if (lo.root.fd >= 0)
 		close(lo.root.fd);
+	if (lo.syncfs_fd >= 0)
+		close(lo.syncfs_fd);
 
 	return ret ? 1 : 0;
 }

@@ -174,6 +174,78 @@ final class LaunchdInstallerTests: XCTestCase {
     XCTAssertTrue(outcome.failed.isEmpty, "a README is not a failed agent")
   }
 
+  // MARK: - vm-start holds the machine
+
+  private let vmStart = "com.renacode.cloudmachine.vm-start"
+
+  /// `vm-start` is `vm-hold`: while it runs, the machine runs under it. A
+  /// reload (`unload` = SIGTERM, then `load`) would stop the machine in the
+  /// middle of a backup and race the old and the new process. A running job
+  /// gets its new plist written, and takes it over at the next login or boot.
+  func testRunningVMHoldIsNotReloaded() async {
+    let reloaded = Captured()
+    let written = Captured()
+    let outcome = await LaunchdInstaller.installAgents(
+      templates: templates([vmStart, "com.renacode.cloudmachine.buffer-guard"]),
+      into: destination, agentBin: agentBin, logDir: logDir,
+      read: { _ in "x" }, write: { content, url in written.add(content, url) },
+      reload: { url in
+        reloaded.add("", url)
+        return true
+      },
+      isRunning: { $0 == "com.renacode.cloudmachine.vm-start" },
+      log: { _ in })
+    XCTAssertEqual(
+      reloaded.paths,
+      [destination.appendingPathComponent("com.renacode.cloudmachine.buffer-guard.plist").path],
+      "only the other agent is reloaded")
+    XCTAssertEqual(written.paths.count, 2, "the new plist of vm-start is still written")
+    XCTAssertTrue(outcome.failed.isEmpty)
+    XCTAssertTrue(outcome.installed.contains(vmStart), "left running counts as installed")
+  }
+
+  /// Not running (the old `limactl start` job that has exited, or a first
+  /// installation): reload as usual, that is what starts `vm-hold` now.
+  func testStoppedVMStartIsReloaded() async {
+    let reloaded = Captured()
+    _ = await LaunchdInstaller.installAgents(
+      templates: templates([vmStart]),
+      into: destination, agentBin: agentBin, logDir: logDir,
+      read: { _ in "x" }, write: { _, _ in },
+      reload: { url in
+        reloaded.add("", url)
+        return true
+      },
+      isRunning: { _ in false }, log: { _ in })
+    XCTAssertEqual(reloaded.paths.count, 1)
+  }
+
+  /// Other agents are one-shot checks: a running one is still reloaded.
+  func testOtherAgentsAreReloadedEvenWhenRunning() async {
+    let reloaded = Captured()
+    _ = await LaunchdInstaller.installAgents(
+      templates: templates(["com.renacode.cloudmachine.buffer-guard"]),
+      into: destination, agentBin: agentBin, logDir: logDir,
+      read: { _ in "x" }, write: { _, _ in },
+      reload: { url in
+        reloaded.add("", url)
+        return true
+      },
+      isRunning: { _ in true }, log: { _ in })
+    XCTAssertEqual(reloaded.paths.count, 1)
+  }
+
+  /// `launchctl list <label>` prints a `"PID" = n;` line only while it runs.
+  func testParsesWhetherAJobIsRunning() {
+    XCTAssertTrue(
+      LaunchdInstaller.jobIsRunning(
+        listOutput: "{\n\t\"Label\" = \"x\";\n\t\"PID\" = 4242;\n\t\"Program\" = \"y\";\n};"))
+    XCTAssertFalse(
+      LaunchdInstaller.jobIsRunning(
+        listOutput: "{\n\t\"Label\" = \"x\";\n\t\"LastExitStatus\" = 0;\n};"))
+    XCTAssertFalse(LaunchdInstaller.jobIsRunning(listOutput: ""))
+  }
+
   // MARK: - Helpers
 
   /// Classes, because the substituted closures are `@Sendable`.

@@ -5,20 +5,21 @@
   <key>Label</key>
   <string>com.renacode.cloudmachine.vm-start</string>
   <!--
-    Starts the machine at login. `limactl start` on a running machine only
-    says so and exits, which is why RunAtLoad without KeepAlive is enough.
-    limactl comes from Homebrew, found through PATH below.
+    Starts the machine at login and stays alive (`vm-hold`): launchd's SIGTERM
+    at logout or shutdown becomes a clean `limactl stop` of the machine, which
+    otherwise dies hard with the Mac. ExitTimeOut is how long launchd waits
+    before SIGKILL; it must exceed VMHold.stopTimeout (a test keeps them
+    together). limactl comes from Homebrew, found through PATH below.
   -->
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/env</string>
-    <string>limactl</string>
-    <string>start</string>
-    <string>--tty=false</string>
-    <string>cmsmb</string>
+    <string>__CM_AGENT_BIN__</string>
+    <string>vm-hold</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>ExitTimeOut</key>
+  <integer>120</integer>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>

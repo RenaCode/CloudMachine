@@ -16,7 +16,9 @@ tm-meta-sync (every 15 min): /srv/tm-local minus bands/ -> gdrive:CloudMachine/<
 Each layer is there for a reason:
 
 - Samba straight on rclone fails with `NT_STATUS_SHARING_VIOLATION`: rclone
-  derives inodes from a hash of the path, and they change under a rename.
+  derives inodes from a hash of the path (`mount`) or from a counter of the
+  process (`mount2`, which production uses), and they change under a rename
+  (and, with `mount2`, at every restart of rclone).
   So the image's small files stay on local ext4 and only `bands/` goes to Drive.
 - macOS frees bands with a hole punch and keeps Samba's sparse flag and Apple
   streams in extended attributes; rclone supports neither. `punchfs` fills
@@ -50,9 +52,67 @@ Each layer is there for a reason:
     cloudmachine-agent vm-update           # after an app upgrade: move the machine onto its template
 
 `install-launchd` (also run by `--install-agents`) installs four agents:
-`app`, `backup-health`, `vm-start` (boots the machine at login) and `vm-guard`
+`app`, `backup-health`, `vm-start` (runs `vm-hold`: boots the machine at login and stays alive, so launchd's SIGTERM at logout/shutdown becomes a clean stop: `systemctl stop smbd; sync` in the guest, then `limactl stop`) and `vm-guard`
 (pauses Time Machine when more than 110 GiB waits to be uploaded or the
 machine has less than 40 GiB free, resumes below 40 GiB - only what it paused).
+
+### What `vm-hold` does, and does not
+
+- It starts the machine and stays alive even when `limactl start` fails or
+  times out (a loaded Mac needs longer than Lima's 10 minutes; the machine may
+  come up later). It never exits on its own, so nobody leaves a machine
+  running unattended.
+- On SIGTERM (logout, shutdown, `launchctl bootout`) it cancels a start in
+  progress and stops everything Lima does not report as `Stopped` (also
+  `Broken`, `Installing`, ...): status, quiesce, `limactl stop`, with limits
+  that together fit launchd's `ExitTimeOut` of 120 s. Lima's vz driver gives
+  the guest only 30 s to power off, which is why smbd is stopped and the guest
+  synced first. At the next start it logs how the guest's previous boot ended.
+- `install-launchd` does NOT reload a running `vm-start`: `unload` would stop
+  the machine mid-backup. A new plist takes effect at the next login or boot.
+- Not covered: power loss or a crash of the Mac itself. Lima's vz driver
+  flushes the guest disk with `fsync`, not `F_FULLFSYNC`, so the host's cache
+  can still lose the last seconds. `rclone`'s cache metadata is written
+  non-atomically (`Item._save`); a hard stop in that instant can lose it,
+  which `punchfs`'s `syncfs` narrows to the instant of the write.
+- `VMDurabilityTests` check the templates by text. The machine test
+  (`punchfs/test-punchfs.sh`) and the hard-kill proof are what exercise the
+  behaviour.
+
+## The hard-kill proof (`vm/tests/crash-loop.sh`)
+
+A sparsebundle APFS image (32 MB bands) on the SMB share of a throwaway
+machine, written with `F_FULLFSYNC` after every operation, the machine killed
+with `kill -9` (Lima host agent and Virtualization process) at a random moment,
+then restarted, the image re-attached, `fsck_apfs -n` run and every file that
+was durable before the kill compared with a ledger. Setup and use are in the
+header of the script. Result of 12.11.2026 (the machine was a vz machine with a
+local backend, so this tests the guest side of the chain, not Drive):
+
+| configuration | iterations | `fsck_apfs -n` clean | files equal to the ledger |
+|---|---|---|---|
+| `rclone mount`, no `syncfs` (before #58) | 8 | 8 | 0 (every run lost durable files, up to 100+ files and tens of MB each) |
+| `rclone mount2` + `syncfs` (this PR) | 39 | 39 | 38 (one run: 2 files with wrong content, `fsck` clean, not reproduced in 25 further runs) |
+
+The kills landed with dirty guest pages in 24 of 39 runs of the new
+configuration (median dirty 2 MB before the kill, against 150 MB in the old
+one). `punchfs -d` during a 25 s write showed macOS sending 1000 `FSYNC`
+requests for 14 bands (about 7 per `F_FULLFSYNC`) and every written band had an
+`FSYNC` after its last `WRITE`; nothing in the chain needs a "fsync all fds"
+barrier of its own.
+
+## Deploying a change to the fsync chain
+
+Verify the PROCESSES, not the unit files (a unit file on disk says nothing
+about the binary that runs):
+
+    limactl shell cmsmb -- pgrep -a rclone        # "rclone mount2 ...", not "rclone mount ..."
+    limactl shell cmsmb -- pgrep -a punchfs       # "-o source=/srv/tm,syncfs=/var/cache/rclone,..."
+    limactl shell cmsmb -- sudo systemctl is-failed punchfs   # a binary without -o syncfs ends once with 78
+
+Restart `punchfs` and `rclone-tm` only when no backup runs. smbd stays
+masked (`systemctl mask smbd`, permanent) until all of the above is verified
+and a fresh image has been created.
 
 ## Updating the machine
 

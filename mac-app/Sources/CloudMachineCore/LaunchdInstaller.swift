@@ -50,8 +50,11 @@ public enum LaunchdInstaller {
     // app bundle.
     CMTooling.linkCommandIntoPath()
 
-    // Reloading touches nothing that holds data: `vm-start` on a running
-    // machine only says so, the others are one-shot checks.
+    // Reloading is `unload` (SIGTERM) and `load`. The one-shot agents are
+    // checks and lose nothing. `vm-start` is `vm-hold`, which stops the
+    // machine on SIGTERM: a running one is NOT reloaded (see
+    // `installAgents(isRunning:)`), its new plist is picked up at the next
+    // login or boot.
     guard let templatesDir = CMPaths.launchdTemplatesDir else {
       return CMActionResult(
         succeeded: false, message: L10n.tr("Could not find the launchd/ directory with templates."))
@@ -131,6 +134,21 @@ public enum LaunchdInstaller {
     var failed: [Failure] = []
   }
 
+  /// Agents whose process IS the machine's lifetime: never reloaded while running.
+  static let holdingLabels: Set<String> = ["com.renacode.cloudmachine.vm-start"]
+
+  /// `launchctl list <label>` prints `"PID" = n;` only while the job runs.
+  static func jobIsRunning(listOutput: String) -> Bool {
+    listOutput.contains("\"PID\" =")
+  }
+
+  static func launchctlJobIsRunning(label: String) async -> Bool {
+    guard let result = try? await ProcessRunner.run("/bin/launchctl", ["list", label]),
+      result.succeeded
+    else { return false }
+    return jobIsRunning(listOutput: result.stdout)
+  }
+
   /// Generates `.plist` files from the templates and reloads the agents,
   /// COLLECTING failures.
   ///
@@ -151,6 +169,7 @@ public enum LaunchdInstaller {
       try $0.write(to: $1, atomically: true, encoding: .utf8)
     },
     reload: @Sendable (URL) async -> Bool = { await launchctlReload($0) },
+    isRunning: @Sendable (String) async -> Bool = { await launchctlJobIsRunning(label: $0) },
     log: @Sendable (String) -> Void = { CMLogger.log($0) }
   ) async -> InstallOutcome {
     var outcome = InstallOutcome()
@@ -192,6 +211,20 @@ public enum LaunchdInstaller {
         continue
       }
       log("Generated \(destURL.path)")
+
+      // `vm-start` holds the machine: unloading it stops the machine (in the
+      // middle of a backup, if one runs) and the new job would race the old
+      // one's `limactl stop`. Leave a running one alone; it reads the plist
+      // written above at its next start. A job that is not running (the old
+      // `limactl start` job has exited, or a first installation) is loaded
+      // as usual - that is what starts `vm-hold`.
+      if holdingLabels.contains(label), await isRunning(label) {
+        outcome.installed.append(label)
+        log(
+          "Left \(label) running: reloading would stop the machine; the new plist takes effect at the next login or boot"
+        )
+        continue
+      }
 
       if await reload(destURL) {
         outcome.installed.append(label)

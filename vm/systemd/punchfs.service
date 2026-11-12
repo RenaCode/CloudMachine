@@ -12,7 +12,18 @@ Type=simple
 # passthrough_ll keeps one descriptor open for every inode the kernel has seen;
 # a full backup has tens of thousands of bands, and the default 1024 ran out (EMFILE).
 LimitNOFILE=524288
-ExecStart=/usr/local/bin/punchfs -f -o source=/srv/tm,allow_other /srv/tm-punch
+# syncfs=<dir>: after fsync(fd) punchfs also syncfs() the filesystem of rclone's
+# --cache-dir, so the cache metadata (vfsMeta, written without fsync) is durable too.
+#
+# Partial deployment: this unit reaches the machine before the binary is rebuilt
+# (and a failed rebuild leaves the old binary). An old punchfs does not know
+# -o syncfs and would exit at once, over and over, with Restart=always. Instead
+# the start checks that the binary has it and otherwise ends with 78, which
+# RestartPreventExitStatus turns into ONE visible failure (`systemctl --failed`,
+# the units that Require punchfs do not start): no backup that is not durable,
+# no restart loop. `cloudmachine-agent vm-update` rebuilds the binary.
+ExecStart=/bin/sh -c '/usr/local/bin/punchfs --help 2>&1 | grep -q "syncfs=<dir>" || { echo "punchfs: /usr/local/bin/punchfs has no -o syncfs (old binary): not starting, rebuild it (cloudmachine-agent vm-update)" >&2; exit 78; }; exec /usr/local/bin/punchfs -f -o source=/srv/tm,syncfs=/var/cache/rclone,allow_other /srv/tm-punch'
+RestartPreventExitStatus=78
 ExecStop=/bin/fusermount3 -uz /srv/tm-punch
 Restart=always
 RestartSec=5
