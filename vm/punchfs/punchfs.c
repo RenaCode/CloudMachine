@@ -98,6 +98,10 @@ struct lo_data {
 	int flock;
 	int xattr;
 	const char *source;
+	/* -o syncfs=<dir>: after fsync, also syncfs() the filesystem of <dir>
+	 * (rclone's cache dir, whose metadata files are written without fsync) */
+	const char *syncfs;
+	int syncfs_fd;
 	double timeout;
 	int cache;
 	int timeout_set;
@@ -111,6 +115,8 @@ static const struct fuse_opt lo_opts[] = {
 	  offsetof(struct lo_data, writeback), 0 },
 	{ "source=%s",
 	  offsetof(struct lo_data, source), 0 },
+	{ "syncfs=%s",
+	  offsetof(struct lo_data, syncfs), 0 },
 	{ "flock",
 	  offsetof(struct lo_data, flock), 1 },
 	{ "no_flock",
@@ -136,6 +142,7 @@ static const struct fuse_opt lo_opts[] = {
 static void passthrough_ll_help(void)
 {
 	printf(
+"    -o syncfs=<dir>        After fsync also syncfs() the filesystem of <dir>\n"
 "    -o writeback           Enable writeback\n"
 "    -o no_writeback        Disable write back\n"
 "    -o source=/home/dir    Source directory to be mounted\n"
@@ -790,6 +797,16 @@ static void lo_create(fuse_req_t req, fuse_ino_t parent, const char *name,
 		fuse_reply_create(req, &e, fi);
 }
 
+/* 0 or an errno. Without -o syncfs this does nothing. */
+static int lo_syncfs(fuse_req_t req)
+{
+	struct lo_data *lo = lo_data(req);
+
+	if (lo->syncfs_fd < 0)
+		return 0;
+	return syncfs(lo->syncfs_fd) == -1 ? errno : 0;
+}
+
 static void lo_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
 			struct fuse_file_info *fi)
 {
@@ -800,7 +817,11 @@ static void lo_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
 		res = fdatasync(fd);
 	else
 		res = fsync(fd);
-	fuse_reply_err(req, res == -1 ? errno : 0);
+	if (res == -1) {
+		fuse_reply_err(req, errno);
+		return;
+	}
+	fuse_reply_err(req, lo_syncfs(req));
 }
 
 static void lo_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
@@ -867,7 +888,11 @@ static void lo_fsync(fuse_req_t req, fuse_ino_t ino, int datasync,
 		res = fdatasync(fi->fh);
 	else
 		res = fsync(fi->fh);
-	fuse_reply_err(req, res == -1 ? errno : 0);
+	if (res == -1) {
+		fuse_reply_err(req, errno);
+		return;
+	}
+	fuse_reply_err(req, lo_syncfs(req));
 }
 
 static void lo_read(fuse_req_t req, fuse_ino_t ino, size_t size,
@@ -1167,7 +1192,8 @@ int main(int argc, char *argv[])
 	struct fuse_cmdline_opts opts;
 	struct fuse_loop_config config;
 	struct lo_data lo = { .debug = 0,
-	                      .writeback = 0 };
+	                      .writeback = 0,
+	                      .syncfs_fd = -1 };
 	int ret = -1;
 
 	/* Don't mask creation mode, kernel already did that */
@@ -1251,6 +1277,15 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
+	if (lo.syncfs) {
+		lo.syncfs_fd = open(lo.syncfs, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+		if (lo.syncfs_fd == -1) {
+			fuse_log(FUSE_LOG_ERR, "open(\"%s\") for syncfs: %m\n",
+				 lo.syncfs);
+			exit(1);
+		}
+	}
+
 	se = fuse_session_new(&args, &lo_oper, sizeof(lo_oper), &lo);
 	if (se == NULL)
 	    goto err_out1;
@@ -1283,6 +1318,8 @@ err_out1:
 
 	if (lo.root.fd >= 0)
 		close(lo.root.fd);
+	if (lo.syncfs_fd >= 0)
+		close(lo.syncfs_fd);
 
 	return ret ? 1 : 0;
 }

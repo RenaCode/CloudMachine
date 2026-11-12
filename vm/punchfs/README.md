@@ -30,7 +30,18 @@ The machine's provisioning builds it (`vm/cmsmb.yaml`):
     gcc -Wall -O2 -D_FILE_OFFSET_BITS=64 -DHAVE_FALLOCATE punchfs.c \
       $(pkg-config fuse3 --cflags --libs) -o /usr/local/bin/punchfs
 
-`test-punchfs.sh` checks both changes on a throwaway rclone mount of a local
+### Durable fsync (`-o syncfs=<dir>`)
+
+`rclone mount` answers fsync with OK and does nothing, and rclone writes its
+cache metadata (`vfsMeta`, with the list of cached ranges `Rs`) without fsync,
+so APFS barriers inside the Time Machine image were not durable and a hard stop
+of the machine lost writes APFS considered safe. Production therefore uses
+`rclone mount2` (passes fsync to the cache item) and `-o syncfs=/var/cache/rclone`:
+after a successful fsync/fsyncdir punchfs also calls `syncfs()` on that
+directory's filesystem and replies with its errno on failure. Without the
+option nothing changes.
+
+`test-punchfs.sh` checks all of this: both changes above and the fsync on a throwaway rclone mount of a local
 directory, without touching Google Drive:
 
     limactl shell cmsmb sudo /opt/cloudmachine/punchfs/test-punchfs.sh

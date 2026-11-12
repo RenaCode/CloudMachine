@@ -50,7 +50,7 @@ Each layer is there for a reason:
     cloudmachine-agent vm-update           # after an app upgrade: move the machine onto its template
 
 `install-launchd` (also run by `--install-agents`) installs four agents:
-`app`, `backup-health`, `vm-start` (boots the machine at login) and `vm-guard`
+`app`, `backup-health`, `vm-start` (runs `vm-hold`: boots the machine at login and stays alive, so launchd's SIGTERM at logout/shutdown becomes a clean `limactl stop`) and `vm-guard`
 (pauses Time Machine when more than 110 GiB waits to be uploaded or the
 machine has less than 40 GiB free, resumes below 40 GiB - only what it paused).
 

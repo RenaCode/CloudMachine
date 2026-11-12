@@ -12,7 +12,9 @@ Type=simple
 # passthrough_ll keeps one descriptor open for every inode the kernel has seen;
 # a full backup has tens of thousands of bands, and the default 1024 ran out (EMFILE).
 LimitNOFILE=524288
-ExecStart=/usr/local/bin/punchfs -f -o source=/srv/tm,allow_other /srv/tm-punch
+# syncfs=<dir>: after fsync(fd) punchfs also syncfs() the filesystem of rclone's
+# --cache-dir, so the cache metadata (vfsMeta, written without fsync) is durable too.
+ExecStart=/usr/local/bin/punchfs -f -o source=/srv/tm,syncfs=/var/cache/rclone,allow_other /srv/tm-punch
 ExecStop=/bin/fusermount3 -uz /srv/tm-punch
 Restart=always
 RestartSec=5
