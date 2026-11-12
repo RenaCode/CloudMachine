@@ -79,6 +79,28 @@ machine has less than 40 GiB free, resumes below 40 GiB - only what it paused).
   (`punchfs/test-punchfs.sh`) and the hard-kill proof are what exercise the
   behaviour.
 
+## The hard-kill proof (`vm/tests/crash-loop.sh`)
+
+A sparsebundle APFS image (32 MB bands) on the SMB share of a throwaway
+machine, written with `F_FULLFSYNC` after every operation, the machine killed
+with `kill -9` (Lima host agent and Virtualization process) at a random moment,
+then restarted, the image re-attached, `fsck_apfs -n` run and every file that
+was durable before the kill compared with a ledger. Setup and use are in the
+header of the script. Result of 12.11.2026 (the machine was a vz machine with a
+local backend, so this tests the guest side of the chain, not Drive):
+
+| configuration | iterations | `fsck_apfs -n` clean | files equal to the ledger |
+|---|---|---|---|
+| `rclone mount`, no `syncfs` (before #58) | 8 | 8 | 0 (every run lost durable files, up to 100+ files and tens of MB each) |
+| `rclone mount2` + `syncfs` (this PR) | 39 | 39 | 38 (one run: 2 files with wrong content, `fsck` clean, not reproduced in 25 further runs) |
+
+The kills landed with dirty guest pages in 24 of 39 runs of the new
+configuration (median dirty 2 MB before the kill, against 150 MB in the old
+one). `punchfs -d` during a 25 s write showed macOS sending 1000 `FSYNC`
+requests for 14 bands (about 7 per `F_FULLFSYNC`) and every written band had an
+`FSYNC` after its last `WRITE`; nothing in the chain needs a "fsync all fds"
+barrier of its own.
+
 ## Deploying a change to the fsync chain
 
 Verify the PROCESSES, not the unit files (a unit file on disk says nothing
