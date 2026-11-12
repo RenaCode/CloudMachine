@@ -18,6 +18,7 @@ import os
 import random
 import signal
 import sys
+import time
 
 
 def fullfsync(fd):
@@ -68,7 +69,7 @@ def run(d, ledger, maxbytes):
     n = 0
 
     def log(**kw):
-        led.write(json.dumps(kw) + "\n")
+        led.write(json.dumps(dict(kw, t=round(time.time(), 3))) + "\n")
         led.flush()
 
     while not stop:

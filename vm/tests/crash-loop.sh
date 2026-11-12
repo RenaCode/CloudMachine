@@ -174,7 +174,11 @@ rm -rf /srv/tm-local-remote/* /var/cache/rclone/* /srv/tm-xattr/* /srv/tm-local/
       fsck_apfs -n "/dev/r${VOLDEV#/dev/}"; fsck=$?
       if diskutil mount "$VOLDEV"; then
         mountr=ok
-        python3 "$HERE/crash-loop-workload.py" verify "/Volumes/cmloop/it_$i" "$ledger"; verify=$?
+        python3 "$HERE/crash-loop-workload.py" verify "/Volumes/cmloop/it_$i" "$ledger" | tee "$OUT/verify-$i.txt"; verify=${PIPESTATUS[0]}
+        if [ "$verify" != 0 ]; then   # keep the evidence before the next iteration deletes it
+          mkdir -p "$OUT/evidence-$i"
+          awk '/^MISMATCH content differs/{print $4}' "$OUT/verify-$i.txt" | while read -r f; do cp "/Volumes/cmloop/it_$i/$f" "$OUT/evidence-$i/" 2>/dev/null; done
+        fi
       else
         mountr=FAIL
       fi
