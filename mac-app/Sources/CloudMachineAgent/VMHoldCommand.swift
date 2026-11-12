@@ -48,7 +48,8 @@ private final class TerminationSignals: @unchecked Sendable {
   }
 
   var hasArrived: Bool {
-    lock.lock(); defer { lock.unlock() }
+    lock.lock()
+    defer { lock.unlock() }
     return arrived
   }
 

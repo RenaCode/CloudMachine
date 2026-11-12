@@ -11,17 +11,34 @@ final class VMHoldTests: XCTestCase {
   private final class Recorder: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [String] = []
-    func add(_ item: String) { lock.lock(); items.append(item); lock.unlock() }
-    var events: [String] { lock.lock(); defer { lock.unlock() }; return items }
+    func add(_ item: String) {
+      lock.lock()
+      items.append(item)
+      lock.unlock()
+    }
+    var events: [String] {
+      lock.lock()
+      defer { lock.unlock() }
+      return items
+    }
   }
 
   private func steps(
     _ rec: Recorder, start: Bool = true, status: String? = "Running", stop: Bool = true
   ) -> VMHold.Steps {
     VMHold.Steps(
-      start: { rec.add("start"); return start },
-      status: { rec.add("status"); return status },
-      stop: { rec.add("stop"); return stop },
+      start: {
+        rec.add("start")
+        return start
+      },
+      status: {
+        rec.add("status")
+        return status
+      },
+      stop: {
+        rec.add("stop")
+        return stop
+      },
       log: { rec.add("log: \($0)") })
   }
 
@@ -70,7 +87,10 @@ final class VMHoldTests: XCTestCase {
     let rec = Recorder()
     let steps = VMHold.Steps(
       start: { true }, status: { throw ProcessRunnerError.launchFailed("x") },
-      stop: { rec.add("stop"); return true }, log: { _ in })
+      stop: {
+        rec.add("stop")
+        return true
+      }, log: { _ in })
     let code = await VMHold.run(steps: steps, awaitTermination: {})
     XCTAssertEqual(code, 0)
     XCTAssertTrue(rec.events.contains("stop"))
@@ -86,18 +106,30 @@ final class VMHoldTests: XCTestCase {
     private(set) var stopCalls = 0
     init(_ statuses: [String?]) { self.statuses = statuses }
     func next() -> String? {
-      lock.lock(); defer { lock.unlock() }
+      lock.lock()
+      defer { lock.unlock() }
       return statuses.count > 1 ? statuses.removeFirst() : statuses[0]
     }
-    func sleep(_ t: TimeInterval) { lock.lock(); slept += t; lock.unlock() }
-    func stopped() { lock.lock(); stopCalls += 1; lock.unlock() }
+    func sleep(_ t: TimeInterval) {
+      lock.lock()
+      slept += t
+      lock.unlock()
+    }
+    func stopped() {
+      lock.lock()
+      stopCalls += 1
+      lock.unlock()
+    }
   }
 
   private func slowSteps(_ script: Script, startSucceeds: Bool) -> VMHold.Steps {
     VMHold.Steps(
       start: { startSucceeds },
       status: { script.next() },
-      stop: { script.stopped(); return true },
+      stop: {
+        script.stopped()
+        return true
+      },
       log: { _ in },
       sleep: { script.sleep($0) })
   }
