@@ -54,16 +54,62 @@ public enum AgentRepair {
     return result.stdout
   }
 
-  /// Agents that are loaded but cannot start. Not loaded = not listed:
-  /// installing agents is a setup step, not a repair.
+  /// Agents launchd will not run: loaded but unable to start, or - for the
+  /// agents that are safe to reload - installed (plist on disk) but not
+  /// loaded. The second case is what a failed reload leaves behind: on 12 Nov
+  /// 2026 `bootout` succeeded, every `bootstrap` failed, and `backup-health`
+  /// stayed unloaded for two days while this check said nothing. No plist =
+  /// never installed = a setup step, not a repair. `vm-start` is not reloaded
+  /// just for being unloaded: loading it starts the machine.
   public static func brokenAgents() async -> [String] {
+    await brokenAgents(
+      names: all,
+      plistExists: { FileManager.default.fileExists(atPath: plist($0).path) },
+      lookup: { await lookup(label: $0) })
+  }
+
+  static func brokenAgents(
+    names: [String],
+    plistExists: (String) -> Bool,
+    lookup: (String) async -> JobLookup
+  ) async -> [String] {
     var broken: [String] = []
-    for name in all {
-      if let output = await printOutput(label: name), cannotStart(printOutput: output) {
-        broken.append(name)
+    for name in names {
+      switch await lookup(name) {
+      case .loaded(let output):
+        if cannotStart(printOutput: output) { broken.append(name) }
+      case .notFound:
+        if safeToReload.contains(name) && plistExists(name) { broken.append(name) }
+      case .unknown:
+        break
       }
     }
     return broken
+  }
+
+  /// What `launchctl print` said about one agent. Only launchd's own "not
+  /// found" means unloaded; a timeout or a session without a GUI domain (SSH,
+  /// sudo) is `unknown` and never a reason to reload.
+  enum JobLookup: Equatable {
+    case loaded(String)
+    case notFound
+    case unknown
+  }
+
+  static func jobLookup(exitCode: Int32, stdout: String, stderr: String) -> JobLookup {
+    if exitCode == 0 { return .loaded(stdout) }
+    if exitCode == 113 && (stderr + stdout).contains("Could not find service") {
+      return .notFound
+    }
+    return .unknown
+  }
+
+  static func lookup(label: String) async -> JobLookup {
+    guard
+      let result = try? await ProcessRunner.run(
+        "/bin/launchctl", ["print", "gui/\(getuid())/\(prefix)\(label)"], timeout: 15)
+    else { return .unknown }
+    return jobLookup(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr)
   }
 
   // MARK: - Reloading
@@ -101,7 +147,7 @@ public enum AgentRepair {
   public static func repairBroken() async -> [String] {
     var repaired: [String] = []
     for name in await brokenAgents() {
-      CMLogger.log("launchd agent \(name) cannot start (spawn failed) - reloading")
+      CMLogger.log("launchd agent \(name) is not loaded or cannot start - reloading")
       if await reload(name) { repaired.append(name) }
     }
     return repaired

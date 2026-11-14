@@ -13,6 +13,12 @@ ConditionPathExists=/etc/cloudmachine/bundle.env
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=/etc/cloudmachine/bundle.env
+# punchfs is Type=simple: systemd calls it started before its FUSE mount is up.
+# Binding then fails ("special device /srv/tm-punch/bands does not exist") and
+# Samba, which Requires this unit, stays down - it happened at boot on 12 Nov
+# and after a restart on 13 Nov 2026, a day without backups. Wait for the mount.
+TimeoutStartSec=150
+ExecStartPre=/usr/bin/timeout 120 /bin/sh -c 'until mountpoint -q /srv/tm-punch && [ -d /srv/tm-punch/bands ]; do sleep 1; done'
 ExecStart=/bin/mount --bind /srv/tm-punch/bands "/srv/tm-local/${CM_BUNDLE}/bands"
 ExecStop=/bin/umount -l "/srv/tm-local/${CM_BUNDLE}/bands"
 

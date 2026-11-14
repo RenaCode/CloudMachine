@@ -76,6 +76,9 @@ provision:
 - mode: data
   path: /etc/systemd/system/tm-meta-sync.timer
   file: systemd/tm-meta-sync.timer
+- mode: data
+  path: /etc/needrestart/conf.d/cloudmachine.conf
+  file: needrestart-cloudmachine.conf
 - mode: system
   script: |
     #!/bin/bash
