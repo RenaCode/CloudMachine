@@ -63,6 +63,72 @@ final class AgentRepairTests: XCTestCase {
     XCTAssertTrue(Set(AgentRepair.all).isDisjoint(with: AgentRepair.retired))
   }
 
+  /// 12 Nov 2026: after the 1.3.28 upgrade the reload did `bootout`, then
+  /// every `bootstrap` failed - `backup-health` stayed UNLOADED for two days,
+  /// while `brokenAgents` (which skipped agents that are not loaded) and
+  /// `vm-status` said "Agents: OK". A plist on disk means the agent was
+  /// installed; not being loaded is then a fault to repair.
+  func testInstalledButUnloadedAgentIsBroken() async {
+    let healthy = "\tstate = not running\n\tlast exit code = 0\n"
+    let broken = await AgentRepair.brokenAgents(
+      names: ["backup-health", "vm-guard"],
+      plistExists: { _ in true },
+      lookup: { $0 == "vm-guard" ? .loaded(healthy) : .notFound })
+    XCTAssertEqual(broken, ["backup-health"])
+  }
+
+  /// A `launchctl print` that timed out, or ran where there is no GUI domain
+  /// (SSH, sudo), says nothing about the agent. Reloading on that would
+  /// `bootout` a healthy agent - possibly the very `backup-health` running
+  /// the check, which launchd then kills before it can bootstrap itself.
+  func testUnknownLaunchdAnswerIsNotBroken() async {
+    let broken = await AgentRepair.brokenAgents(
+      names: ["backup-health", "vm-guard"], plistExists: { _ in true },
+      lookup: { _ in .unknown })
+    XCTAssertEqual(broken, [])
+  }
+
+  /// Without a plist the agent was never installed - that is setup, not repair.
+  func testAgentThatWasNeverInstalledIsNotBroken() async {
+    let broken = await AgentRepair.brokenAgents(
+      names: ["backup-health"], plistExists: { _ in false }, lookup: { _ in .notFound })
+    XCTAssertEqual(broken, [])
+  }
+
+  /// `vm-start` is reloaded only when launchd cannot START it: loading it
+  /// starts the machine, which someone may have stopped on purpose.
+  func testUnloadedMachineStartIsNotReloaded() async {
+    let broken = await AgentRepair.brokenAgents(
+      names: ["vm-start"], plistExists: { _ in true }, lookup: { _ in .notFound })
+    XCTAssertEqual(broken, [])
+  }
+
+  func testSpawnFailedLoadedAgentIsStillBroken() async {
+    let failed = "\tstate = not running\n\tjob state = spawn failed\n"
+    let broken = await AgentRepair.brokenAgents(
+      names: ["vm-start"], plistExists: { _ in true }, lookup: { _ in .loaded(failed) })
+    XCTAssertEqual(broken, ["vm-start"])
+  }
+
+  /// Copied from `launchctl print` on 14 Nov 2026 (macOS 27.2): an unknown
+  /// label exits 113 with "Could not find service" on stderr.
+  func testOnlyLaunchdsOwnNotFoundCountsAsUnloaded() {
+    XCTAssertEqual(
+      AgentRepair.jobLookup(
+        exitCode: 113, stdout: "",
+        stderr:
+          "Bad request.\nCould not find service \"com.renacode.cloudmachine.backup-health\" in domain for user gui: 501\n"
+      ), .notFound)
+    XCTAssertEqual(
+      AgentRepair.jobLookup(exitCode: 0, stdout: "\tstate = running\n", stderr: ""),
+      .loaded("\tstate = running\n"))
+    XCTAssertEqual(
+      AgentRepair.jobLookup(
+        exitCode: 125, stdout: "", stderr: "Domain does not support specified action"),
+      .unknown)
+    XCTAssertEqual(AgentRepair.jobLookup(exitCode: 1, stdout: "", stderr: ""), .unknown)
+  }
+
   // MARK: - The retired layout
 
   /// Records what the migration did, without launchd.

@@ -222,6 +222,36 @@ final class VMLayoutTests: XCTestCase {
     }
   }
 
+  /// 12 and 13 Nov 2026: punchfs was (re)started and the bind ran before its
+  /// FUSE mount showed `bands` ("special device /srv/tm-punch/bands does not
+  /// exist"); the bind failed, and Samba, which Requires it, stayed down for
+  /// a day. The bind must wait for the mount instead of racing it.
+  func testBandsBindWaitsForThePunchfsMount() throws {
+    let unit = try String(
+      contentsOf: Self.repoRoot.appendingPathComponent("vm/systemd/tm-bands-bind.service"),
+      encoding: .utf8)
+    let pre = unit.split(separator: "\n").first { $0.hasPrefix("ExecStartPre=") }
+    XCTAssertNotNil(pre, "tm-bands-bind needs an ExecStartPre that waits for punchfs")
+    XCTAssertTrue(pre?.contains("mountpoint -q /srv/tm-punch") ?? false)
+    XCTAssertTrue(pre?.contains("/srv/tm-punch/bands") ?? false)
+    XCTAssertTrue(unit.contains("TimeoutStartSec="))
+  }
+
+  /// 13 Nov 2026 06:10: unattended-upgrades updated libc and needrestart
+  /// restarted punchfs and Samba in the middle of a backup. The backup stack
+  /// is restarted only by CloudMachine (vm-update) or at the next boot.
+  func testUpgradesDoNotRestartTheBackupStack() throws {
+    let vm = Self.repoRoot.appendingPathComponent("vm")
+    let yaml = try String(contentsOf: vm.appendingPathComponent("cmsmb.yaml"), encoding: .utf8)
+    XCTAssertTrue(yaml.contains("path: /etc/needrestart/conf.d/cloudmachine.conf"))
+    let conf = try String(
+      contentsOf: vm.appendingPathComponent("needrestart-cloudmachine.conf"), encoding: .utf8)
+    for unit in ["rclone-tm", "punchfs", "tm-bands-bind", "smbd", "nmbd", "smb-throttle"] {
+      XCTAssertTrue(conf.contains(unit), "needrestart may still restart \(unit)")
+    }
+    XCTAssertTrue(conf.contains("$nrconf{override_rc}"))
+  }
+
   /// The rclone download is pinned to a version AND a checksum, checked
   /// before anything is installed.
   func testRcloneIsPinnedWithAChecksum() throws {
