@@ -28,24 +28,38 @@ final class CloudMachineController: ObservableObject {
   /// good as one from five seconds ago.
   private static let backupCycleInterval: TimeInterval = 300
   private var backupCycleCheckedAt: Date?
+  /// `AgentRepair.afterLaunch`, started once per process.
+  private var agentMaintenance: Task<Void, Never>?
   /// One failed read of the Time Machine preferences is not "no Full Disk Access".
   private var preferencesReads = BackupHealth.ReadConfirmation()
 
   // MARK: - Refresh cycle
 
   func startAutoRefresh(interval: TimeInterval = 10) {
+    // Homebrew quits the app for an upgrade and reopens it afterwards, so
+    // this is the first code that runs after the bundle was replaced - see
+    // `AgentRepair` for what breaks if nobody reloads the agents. ONCE per
+    // process and detached: the dashboard and the menu bar both call
+    // `startAutoRefresh`, and each call cancels the previous refresh task -
+    // on 12 Nov 2026 that cancelled a reload between `bootout` and
+    // `bootstrap` and left the watchdogs unloaded.
+    if agentMaintenance == nil {
+      agentMaintenance = Task.detached { await AgentRepair.afterLaunch() }
+    }
+    let maintenance = agentMaintenance
     refreshTask?.cancel()
     refreshTask = Task { [weak self] in
-      // Homebrew quits the app for an upgrade and reopens it afterwards, so
-      // this is the first code that runs after the bundle was replaced - see
-      // `AgentRepair` for what breaks if nobody reloads the agents.
-      await AgentRepair.afterLaunch()
       var cycles = 0
       while !Task.isCancelled {
         await self?.refreshAll()
-        // An agent can stop being startable later too, so check every few minutes.
+        // An agent can stop being startable later too, so check every few
+        // minutes - never while the launch reload is still running (a failing
+        // bootstrap can take tens of seconds; the panel does not wait for it).
         cycles += 1
-        if cycles % 30 == 0 { await AgentRepair.repairBroken() }
+        if cycles % 30 == 0 {
+          await maintenance?.value
+          await AgentRepair.repairBroken()
+        }
         try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
       }
     }

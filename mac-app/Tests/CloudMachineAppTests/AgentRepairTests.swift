@@ -129,6 +129,112 @@ final class AgentRepairTests: XCTestCase {
     XCTAssertEqual(AgentRepair.jobLookup(exitCode: 1, stdout: "", stderr: ""), .unknown)
   }
 
+  // MARK: - Reloading
+
+  /// Records a reload without launchd. `bootstrap` behaves like
+  /// `ProcessRunner` does: in a cancelled task the process is terminated at
+  /// once, so the call fails.
+  private final class FakeLaunchctl: @unchecked Sendable {
+    let lock = NSLock()
+    var calls: [String] = []
+    var logs: [String] = []
+    var bootstrapSucceeds = true
+
+    private func record(_ call: String) {
+      lock.lock()
+      calls.append(call)
+      lock.unlock()
+    }
+
+    var steps: AgentRepair.ReloadSteps {
+      AgentRepair.ReloadSteps(
+        plistExists: { _ in true },
+        bootout: { self.record("bootout \($0)") },
+        bootstrap: {
+          self.record("bootstrap \($0)")
+          return self.bootstrapSucceeds && !Task.isCancelled
+        },
+        pause: {},
+        log: { message in
+          self.lock.lock()
+          self.logs.append(message)
+          self.lock.unlock()
+        })
+    }
+  }
+
+  /// 12 Nov 2026 14:53: the dashboard and the menu bar both called
+  /// `startAutoRefresh`, the second call cancelled the first task right after
+  /// its `bootout`, and all ten `bootstrap` attempts failed within ONE second
+  /// (`Task.sleep` returns at once in a cancelled task, `ProcessRunner` kills
+  /// the process). backup-health and vm-guard were left unloaded.
+  func testReloadFinishesEvenWhenTheCallerIsCancelled() async {
+    let fake = FakeLaunchctl()
+    let task = Task { await AgentRepair.reload("backup-health", steps: fake.steps) }
+    task.cancel()
+    let reloaded = await task.value
+    XCTAssertTrue(reloaded)
+    XCTAssertEqual(fake.calls, ["bootout backup-health", "bootstrap backup-health"])
+  }
+
+  func testReloadGivesUpAfterTenFailedBootstraps() async {
+    let fake = FakeLaunchctl()
+    fake.bootstrapSucceeds = false
+    let reloaded = await AgentRepair.reload("vm-guard", steps: fake.steps)
+    XCTAssertFalse(reloaded)
+    XCTAssertEqual(fake.calls.filter { $0.hasPrefix("bootstrap") }.count, 10)
+    XCTAssertTrue(fake.logs.contains { $0.contains("bootstrap kept failing") })
+  }
+
+  /// The stamp says "the agents run this version". Written after a failed
+  /// reload, it stopped every later launch from trying again.
+  func testUpgradeStampOnlyAfterEveryReloadSucceeded() async {
+    var tried: [String] = []
+    let allOK = await AgentRepair.reloadAfterUpgrade(["backup-health", "vm-guard"]) {
+      tried.append($0)
+      return $0 == "vm-guard"
+    }
+    XCTAssertFalse(allOK)
+    XCTAssertEqual(tried, ["backup-health", "vm-guard"], "one failure must not skip the rest")
+    let fine = await AgentRepair.reloadAfterUpgrade(["backup-health"]) { _ in true }
+    XCTAssertTrue(fine)
+  }
+
+  /// The whole upgrade step: no stamp after a failed reload (the next launch
+  /// tries again), a stamp after a good one, nothing at all when the version
+  /// did not change.
+  func testUpgradeStepWritesTheStampOnlyWhenTheReloadWorked() async {
+    var written: [String] = []
+    var reloaded: [String] = []
+    await AgentRepair.reloadIfUpgraded(
+      current: "1.3.29 (211) e2eb360", stamp: "1.3.28 (210) aca535e",
+      installed: ["backup-health", "vm-guard"],
+      reload: {
+        reloaded.append($0)
+        return false
+      },
+      writeStamp: { written.append($0) })
+    XCTAssertEqual(reloaded, ["backup-health", "vm-guard"])
+    XCTAssertEqual(written, [])
+
+    await AgentRepair.reloadIfUpgraded(
+      current: "1.3.29 (211) e2eb360", stamp: "1.3.28 (210) aca535e",
+      installed: ["backup-health"], reload: { _ in true }, writeStamp: { written.append($0) })
+    XCTAssertEqual(written, ["1.3.29 (211) e2eb360"])
+
+    reloaded = []
+    await AgentRepair.reloadIfUpgraded(
+      current: "1.3.29 (211) e2eb360", stamp: "1.3.29 (211) e2eb360\n",
+      installed: ["backup-health"],
+      reload: {
+        reloaded.append($0)
+        return true
+      },
+      writeStamp: { written.append($0) })
+    XCTAssertEqual(reloaded, [])
+    XCTAssertEqual(written.count, 1)
+  }
+
   // MARK: - The retired layout
 
   /// Records what the migration did, without launchd.

@@ -122,24 +122,68 @@ public enum AgentRepair {
   /// `bootout` + `bootstrap`. `bootout` finishes asynchronously and a
   /// `bootstrap` right after it fails with error 5, so it is retried.
   @discardableResult
-  static func reload(_ name: String) async -> Bool {
-    let plist = plist(name)
-    guard FileManager.default.fileExists(atPath: plist.path) else { return false }
-    let domain = "gui/\(getuid())"
-    _ = try? await ProcessRunner.run(
-      "/bin/launchctl", ["bootout", "\(domain)/\(prefix)\(name)"], timeout: 30)
-    for _ in 0..<10 {
-      try? await Task.sleep(nanoseconds: 1_000_000_000)
-      if let result = try? await ProcessRunner.run(
-        "/bin/launchctl", ["bootstrap", domain, plist.path], timeout: 30),
-        result.succeeded
-      {
-        CMLogger.log("Reloaded launchd agent \(name)")
-        return true
+  static func reload(_ name: String, steps: ReloadSteps = .live) async -> Bool {
+    guard steps.plistExists(name) else { return false }
+    // `bootout` and `bootstrap` must finish together, so the reload runs
+    // detached from the caller: cancelling the caller must not stop it
+    // between the two. 12 Nov 2026 14:53 the app's refresh task was cancelled
+    // (a second `startAutoRefresh`) right after `bootout`; `Task.sleep`
+    // returned at once, `ProcessRunner` killed every `launchctl bootstrap`,
+    // ten attempts failed within one second and backup-health stayed unloaded.
+    return await Task.detached {
+      await steps.bootout(name)
+      for _ in 0..<10 {
+        await steps.pause()
+        if await steps.bootstrap(name) {
+          steps.log("Reloaded launchd agent \(name)")
+          return true
+        }
       }
-    }
-    CMLogger.log("Could not reload launchd agent \(name) - bootstrap kept failing")
-    return false
+      steps.log("Could not reload launchd agent \(name) - bootstrap kept failing")
+      return false
+    }.value
+  }
+
+  /// The launchd calls of a reload - replaceable, so the tests run it
+  /// without launchd.
+  struct ReloadSteps: Sendable {
+    var plistExists: @Sendable (String) -> Bool
+    var bootout: @Sendable (String) async -> Void
+    var bootstrap: @Sendable (String) async -> Bool
+    /// `bootout` finishes asynchronously; a `bootstrap` right after it fails
+    /// with error 5, hence a pause before every attempt.
+    var pause: @Sendable () async -> Void
+    var log: @Sendable (String) -> Void
+
+    static let live = ReloadSteps(
+      plistExists: { FileManager.default.fileExists(atPath: plist($0).path) },
+      bootout: { name in
+        _ = try? await ProcessRunner.run(
+          "/bin/launchctl", ["bootout", "gui/\(getuid())/\(prefix)\(name)"], timeout: 30)
+      },
+      bootstrap: { name in
+        guard
+          let result = try? await ProcessRunner.run(
+            "/bin/launchctl", ["bootstrap", "gui/\(getuid())", plist(name).path], timeout: 30)
+        else { return false }
+        if !result.succeeded {
+          let text = (result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines)
+          CMLogger.log("launchctl bootstrap \(name): code \(result.exitCode) \(text)")
+        }
+        return result.succeeded
+      },
+      pause: { try? await Task.sleep(nanoseconds: 1_000_000_000) },
+      log: { CMLogger.log($0) })
+  }
+
+  /// Reloads every agent in `names` (a failure does not skip the rest).
+  /// `true` only when all of them were reloaded.
+  static func reloadAfterUpgrade(
+    _ names: [String], reload: (String) async -> Bool
+  ) async -> Bool {
+    var allReloaded = true
+    for name in names where !(await reload(name)) { allReloaded = false }
+    return allReloaded
   }
 
   /// Reloads every agent launchd cannot start. Returns the ones reloaded.
@@ -283,14 +327,24 @@ public enum AgentRepair {
     await removeRetiredAgents()
     guard let version = AppVersionReader.current() else { return }
     let current = version.summary
-    let stamp = try? String(contentsOf: stampFile, encoding: .utf8)
-    if versionChanged(current: current, stamp: stamp) {
-      CMLogger.log("App version is now \(current) - reloading the launchd agents")
-      for name in safeToReload where FileManager.default.fileExists(atPath: plist(name).path) {
-        await reload(name)
-      }
-      try? current.write(to: stampFile, atomically: true, encoding: .utf8)
-    }
+    await reloadIfUpgraded(
+      current: current,
+      stamp: try? String(contentsOf: stampFile, encoding: .utf8),
+      installed: safeToReload.filter { FileManager.default.fileExists(atPath: plist($0).path) },
+      reload: { await reload($0) },
+      writeStamp: { try? $0.write(to: stampFile, atomically: true, encoding: .utf8) })
     await repairBroken()
+  }
+
+  /// After an upgrade, reloads the installed safe agents. The stamp means
+  /// "the agents run this version": written after a failed reload, it would
+  /// stop every later launch from trying again.
+  static func reloadIfUpgraded(
+    current: String, stamp: String?, installed: [String],
+    reload: (String) async -> Bool, writeStamp: (String) -> Void
+  ) async {
+    guard versionChanged(current: current, stamp: stamp) else { return }
+    CMLogger.log("App version is now \(current) - reloading the launchd agents")
+    if await reloadAfterUpgrade(installed, reload: reload) { writeStamp(current) }
   }
 }
