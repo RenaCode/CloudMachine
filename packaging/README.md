@@ -20,8 +20,9 @@ the workaround for a failed push (see "The tap repository" below).
 
 Nothing to do by hand: **every merge to `main` that changes the app is
 released.** "Changes the app" means `mac-app/Sources`, `mac-app/Resources`,
-`Package.swift`/`Package.resolved`, `mac-app/VERSION`, `launchd/`, `config/`
-or the cask template; docs-only and test-only merges are not released.
+`Package.swift`/`Package.resolved`, `mac-app/VERSION`, `launchd/`, `vm/`
+(the machine template ships inside the app), `config/` or the cask template;
+other docs-only and test-only merges are not released.
 
 The version number:
 
@@ -40,8 +41,9 @@ as a GitHub Release tagged on the merge commit, and updates the cask. Users
 get it with `brew upgrade`.
 
 **Run workflow** on the Actions tab releases the current `main` the same way,
-for example after a failed run. A `vX.Y.Z` tag pushed by hand releases exactly
-that version.
+for example after a failed run; started on any other branch it is a dry run.
+A `vX.Y.Z` tag pushed by hand releases exactly that version, but only when the
+tagged commit is on `main` - a tag on any other commit fails.
 
 A pull request that touches the build or the cask runs the same pipeline dry:
 ad-hoc signature, no release, no tap push; the DMG and the rendered cask are
