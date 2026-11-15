@@ -1,10 +1,10 @@
 {
-  "_comment": "Copy this file to machines.json and adjust it. The sum of limit_gb for both Macs should stay below the real capacity of the Google drive (leave a safety margin, e.g. 10-15%, for rclone/Google overhead and accidental growth between watchdog checks).",
+  "_comment": "The shape of ~/Library/Application Support/CloudMachine/machines.json, which CloudMachine creates itself. Only limit_gb is used: set it with `cloudmachine-agent set-limit --gb N` or the Space limit card, which store it under this Mac's Drive folder name. Keep the sum of limit_gb of all Macs on one Google account below its real capacity, with a safety margin.",
   "drive_total_gb": 5000,
   "safety_margin_percent": 10,
   "remote_name": "gdrive-cloudmachine",
   "remote_root_folder": "CloudMachine",
-  "_bwlimit_comment": "Upload speed limit in Mbps (megabits/s, as internet providers quote it) - this setting is per-Mac, so each machine can have a different value in its local machines.json. 0 = no limit.",
+  "_bwlimit_comment": "Read but not used: the upload from the machine has no rclone --bwlimit; incoming SMB is shaped inside the machine (vm/smb-throttle.sh). drive_total_gb, safety_margin_percent, remote_name and remote_root_folder are likewise read and not used (the Drive remote and root folder are fixed in code: gdrive:CloudMachine).",
   "bwlimit_mbps": 0,
   "machines": {
     "macbook-pro": {

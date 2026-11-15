@@ -53,13 +53,20 @@ so they read the same whoever sends them to you.
 - **Not notarised.** Releases are signed with a self-signed certificate, not
   with an Apple Developer ID. The Homebrew cask clears the quarantine flag; a
   DMG downloaded by hand gets Gatekeeper's "unidentified developer" warning.
-- **No client-side encryption.** The backup's bands are stored on Google
-  Drive as they are, unencrypted by CloudMachine: anyone who can read the
-  Google account (and Google itself) can read the backup, which is a copy of
-  the whole Mac. Do not use it for data you may not hand to Google, such as
-  a company's or clients' data on a private Google account. Time Machine's
-  own "Encrypt backups" is not supported yet: `vm-prepare-bundle` refuses an
-  encrypted image.
+- **Client-side encryption is opt-in, from Terminal only.** By default the
+  backup's bands are stored on Google Drive as they are, unencrypted by
+  CloudMachine: anyone who can read the Google account (and Google itself)
+  can read the backup, which is a copy of the whole Mac. Until encryption is
+  switched on, do not use it for data you may not hand to Google, such as a
+  company's or clients' data on a private Google account.
+  `cloudmachine-agent vm-encrypt` moves an existing backup under rclone
+  `crypt` encryption, into `gdrive:CloudMachine/<folder>-crypt`, without a
+  new full backup: `setup`, `copy`, `switch`, then `delete-plain`
+  (`rollback` undoes `switch` until `delete-plain`). The password and salt
+  are kept in the macOS Keychain; keep both outside the Mac too, without
+  them the encrypted backup cannot be read. The app window does not offer
+  this yet. Time Machine's own "Encrypt backups" is not supported:
+  `vm-prepare-bundle` refuses an encrypted image.
 - **A full Google Drive is not named as such.** It shows up as an upload
   that hangs and a growing backlog, with the guard pausing Time Machine.
   Google's daily upload limit (750 GB) is named: `cloudmachine-agent

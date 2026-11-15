@@ -18,11 +18,11 @@ public struct MachinesConfig: Codable, Equatable {
   public var safetyMarginPercent: Int
   public var remoteName: String
   public var remoteRootFolder: String
-  /// rclone upload speed limit (Mbps - megabits/s, as internet providers
-  /// quote it), passed as `--bwlimit` (which expects megabytes/s - conversion
-  /// in `CloudArchiveService.bwLimitArgs`). `0` = no limit. Used by the cloud
-  /// archiving layer (`CloudArchiveService`) on every `rclone copy` of a
-  /// finished backup to Google Drive.
+  /// Upload speed limit in Mbps (megabits/s), `0` = no limit. Read and kept
+  /// for compatibility, but used nowhere: the cloud archiving layer
+  /// (`CloudArchiveService`) that passed it as `--bwlimit` is gone, and the
+  /// machine's rclone runs without `--bwlimit` (incoming SMB is shaped by
+  /// `vm/smb-throttle.sh` instead).
   public var bwLimitMbps: Int
   public var machines: [MachineEntry]
 
