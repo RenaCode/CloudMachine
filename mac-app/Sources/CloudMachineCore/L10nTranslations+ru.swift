@@ -603,8 +603,6 @@ extension L10nTranslations {
       "ГРЯЗНОЕ-ДЕРЕВО",
     "Cannot create the working directory: %@":
       "Не удаётся создать рабочий каталог: %@",
-    "Could not read the rclone version number.":
-      "Не удалось прочитать номер версии rclone.",
     "Could not download %@.":
       "Не удалось скачать %@.",
     "No entry for %@ in SHA256SUMS.":

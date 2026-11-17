@@ -603,8 +603,6 @@ extension L10nTranslations {
       "ARBORESCENCE-MODIFIÉE",
     "Cannot create the working directory: %@":
       "Impossible de créer le dossier de travail : %@",
-    "Could not read the rclone version number.":
-      "Impossible de lire le numéro de version de rclone.",
     "Could not download %@.":
       "Impossible de télécharger %@.",
     "No entry for %@ in SHA256SUMS.":

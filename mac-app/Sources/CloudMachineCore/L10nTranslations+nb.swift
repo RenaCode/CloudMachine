@@ -603,8 +603,6 @@ extension L10nTranslations {
       "SKITTENT-TRE",
     "Cannot create the working directory: %@":
       "Kan ikke opprette arbeidsmappen: %@",
-    "Could not read the rclone version number.":
-      "Kunne ikke lese versjonsnummeret til rclone.",
     "Could not download %@.":
       "Kunne ikke laste ned %@.",
     "No entry for %@ in SHA256SUMS.":

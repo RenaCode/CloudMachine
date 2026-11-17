@@ -603,8 +603,6 @@ extension L10nTranslations {
       "未コミットの変更あり",
     "Cannot create the working directory: %@":
       "作業ディレクトリを作成できません: %@",
-    "Could not read the rclone version number.":
-      "rcloneのバージョン番号を読み取れませんでした。",
     "Could not download %@.":
       "%@ をダウンロードできませんでした。",
     "No entry for %@ in SHA256SUMS.":

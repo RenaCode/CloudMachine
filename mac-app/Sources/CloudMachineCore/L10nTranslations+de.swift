@@ -603,8 +603,6 @@ extension L10nTranslations {
       "UNSAUBERER-BAUM",
     "Cannot create the working directory: %@":
       "Das Arbeitsverzeichnis kann nicht angelegt werden: %@",
-    "Could not read the rclone version number.":
-      "Die Versionsnummer von rclone konnte nicht gelesen werden.",
     "Could not download %@.":
       "%@ konnte nicht geladen werden.",
     "No entry for %@ in SHA256SUMS.":

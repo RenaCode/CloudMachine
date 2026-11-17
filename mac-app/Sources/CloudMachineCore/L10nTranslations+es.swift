@@ -603,8 +603,6 @@ extension L10nTranslations {
       "ÁRBOL-SUCIO",
     "Cannot create the working directory: %@":
       "No se puede crear el directorio de trabajo: %@",
-    "Could not read the rclone version number.":
-      "No se pudo leer el número de versión de rclone.",
     "Could not download %@.":
       "No se pudo descargar %@.",
     "No entry for %@ in SHA256SUMS.":

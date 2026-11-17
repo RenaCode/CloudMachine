@@ -603,8 +603,6 @@ extension L10nTranslations {
       "OSTÄDAT-TRÄD",
     "Cannot create the working directory: %@":
       "Kan inte skapa arbetskatalogen: %@",
-    "Could not read the rclone version number.":
-      "Kunde inte läsa versionsnumret för rclone.",
     "Could not download %@.":
       "Kunde inte hämta %@.",
     "No entry for %@ in SHA256SUMS.":

@@ -603,8 +603,6 @@ extension L10nTranslations {
       "커밋되지 않은 변경",
     "Cannot create the working directory: %@":
       "작업 디렉터리를 만들 수 없습니다: %@",
-    "Could not read the rclone version number.":
-      "rclone 버전 번호를 읽을 수 없습니다.",
     "Could not download %@.":
       "%@을(를) 다운로드할 수 없습니다.",
     "No entry for %@ in SHA256SUMS.":

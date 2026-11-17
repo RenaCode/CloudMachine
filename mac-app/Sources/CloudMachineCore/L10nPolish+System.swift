@@ -50,8 +50,6 @@ extension L10nPolish {
       "BRUDNE-DRZEWO",
     "Cannot create the working directory: %@":
       "Nie mogę utworzyć katalogu roboczego: %@",
-    "Could not read the rclone version number.":
-      "Nie udało się odczytać numeru wersji rclone.",
     "Could not download %@.":
       "Nie udało się pobrać %@.",
     "No entry for %@ in SHA256SUMS.":

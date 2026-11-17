@@ -603,8 +603,6 @@ extension L10nTranslations {
       "未提交更改",
     "Cannot create the working directory: %@":
       "无法创建工作目录：%@",
-    "Could not read the rclone version number.":
-      "无法读取 rclone 的版本号。",
     "Could not download %@.":
       "无法下载 %@。",
     "No entry for %@ in SHA256SUMS.":

@@ -199,9 +199,13 @@ final class RcloneAutoInstallTests: XCTestCase {
     let first = Task { await auto.tick() }
     while auto.state != .installing { await Task.yield() }
     fakes.advance(7200)
-    await auto.tick()  // ignored: one is running
-    XCTAssertEqual(fakes.installs, 1)
+    // Second tick in its own task: if the guard were missing it would start a
+    // second install and park on the gate - the test must FAIL, not hang.
+    let second = Task { await auto.tick() }
+    for _ in 0..<50 { await Task.yield() }
+    XCTAssertEqual(fakes.installs, 1, "a second install must not start while one runs")
     await gate.open()
+    await second.value
     await first.value
     XCTAssertEqual(seen, [.installing, .installed])
   }

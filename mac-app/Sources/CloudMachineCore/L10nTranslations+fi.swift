@@ -603,8 +603,6 @@ extension L10nTranslations {
       "LIKAINEN-PUU",
     "Cannot create the working directory: %@":
       "Työhakemistoa ei voi luoda: %@",
-    "Could not read the rclone version number.":
-      "rclonen versionumeroa ei voitu lukea.",
     "Could not download %@.":
       "Kohdetta %@ ei voitu ladata.",
     "No entry for %@ in SHA256SUMS.":

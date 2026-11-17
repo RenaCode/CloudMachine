@@ -603,8 +603,6 @@ extension L10nTranslations {
       "POKOK-KOTOR",
     "Cannot create the working directory: %@":
       "Tidak dapat mencipta direktori kerja: %@",
-    "Could not read the rclone version number.":
-      "Tidak dapat membaca nombor versi rclone.",
     "Could not download %@.":
       "Tidak dapat memuat turun %@.",
     "No entry for %@ in SHA256SUMS.":

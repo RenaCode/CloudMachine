@@ -603,8 +603,6 @@ extension L10nTranslations {
       "DIRTY-TREE",
     "Cannot create the working directory: %@":
       "לא ניתן ליצור את תיקיית העבודה: %@",
-    "Could not read the rclone version number.":
-      "לא ניתן היה לקרוא את מספר הגרסה של rclone.",
     "Could not download %@.":
       "לא ניתן היה להוריד את %@.",
     "No entry for %@ in SHA256SUMS.":

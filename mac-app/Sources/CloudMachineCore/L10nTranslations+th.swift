@@ -603,8 +603,6 @@ extension L10nTranslations {
       "ต้นไม้สกปรก",
     "Cannot create the working directory: %@":
       "สร้างไดเรกทอรีทำงานไม่ได้: %@",
-    "Could not read the rclone version number.":
-      "อ่านหมายเลขเวอร์ชันของ rclone ไม่ได้",
     "Could not download %@.":
       "ดาวน์โหลด %@ ไม่ได้",
     "No entry for %@ in SHA256SUMS.":

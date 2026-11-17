@@ -34,6 +34,7 @@ final class CloudMachineController: ObservableObject {
   /// old; the state shows in the window instead of a bare "missing".
   private let rcloneAuto = RcloneAutoInstaller.live()
   private var rcloneObserverSet = false
+  private var rcloneError = RcloneErrorSlot()
   /// One failed read of the Time Machine preferences is not "no Full Disk Access".
   private var preferencesReads = BackupHealth.ReadConfirmation()
 
@@ -54,12 +55,10 @@ final class CloudMachineController: ObservableObject {
       rcloneAuto.onChange = { [weak self] state in
         guard let self else { return }
         self.status.rcloneInstall = state
-        switch state {
-        case .failed(let message, _): self.status.errorMessage = message
-        case .installing: self.status.errorMessage = nil
-        case .installed, .idle:
-          self.status.errorMessage = nil
-          Task { await self.refreshAll() }
+        self.rcloneError.apply(state, to: &self.status.errorMessage)
+        // Only what depends on rclone; the regular cycle does the rest.
+        if state == .installed || state == .idle {
+          Task { await self.refreshDependencies() }
         }
       }
       rcloneObserverSet = true

@@ -132,3 +132,29 @@ public final class RcloneAutoInstaller: ObservableObject {
     }
   }
 }
+
+extension ToolInstallState {
+  public var isFailure: Bool {
+    if case .failed = self { return true }
+    return false
+  }
+}
+
+/// Remembers which error text on the window came from the rclone install, so
+/// that the install's own progress clears only that - never an unrelated error
+/// such as a failed machine setup.
+public struct RcloneErrorSlot {
+  private var owned: String?
+  public init() {}
+
+  public mutating func apply(_ state: ToolInstallState, to message: inout String?) {
+    switch state {
+    case .failed(let text, _):
+      message = text
+      owned = text
+    case .installing, .installed, .idle:
+      if let owned, message == owned { message = nil }
+      owned = nil
+    }
+  }
+}

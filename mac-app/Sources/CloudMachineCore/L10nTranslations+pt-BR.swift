@@ -603,8 +603,6 @@ extension L10nTranslations {
       "ÁRVORE-SUJA",
     "Cannot create the working directory: %@":
       "Não foi possível criar o diretório de trabalho: %@",
-    "Could not read the rclone version number.":
-      "Não foi possível ler o número de versão do rclone.",
     "Could not download %@.":
       "Não foi possível baixar %@.",
     "No entry for %@ in SHA256SUMS.":

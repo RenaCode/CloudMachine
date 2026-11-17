@@ -603,8 +603,6 @@ extension L10nTranslations {
       "SNAVSET-TRÆ",
     "Cannot create the working directory: %@":
       "Kan ikke oprette arbejdsmappen: %@",
-    "Could not read the rclone version number.":
-      "Kunne ikke læse rclones versionsnummer.",
     "Could not download %@.":
       "Kunne ikke hente %@.",
     "No entry for %@ in SHA256SUMS.":

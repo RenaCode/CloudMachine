@@ -603,8 +603,6 @@ extension L10nTranslations {
       "KİRLİ-AĞAÇ",
     "Cannot create the working directory: %@":
       "Çalışma klasörü oluşturulamıyor: %@",
-    "Could not read the rclone version number.":
-      "rclone sürüm numarası okunamadı.",
     "Could not download %@.":
       "%@ indirilemedi.",
     "No entry for %@ in SHA256SUMS.":

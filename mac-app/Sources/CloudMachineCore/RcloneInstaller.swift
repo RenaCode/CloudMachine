@@ -8,7 +8,23 @@ import Foundation
 /// The machine has its own rclone (`vm/cmsmb.yaml`).
 public enum RcloneInstaller {
 
-  private static let versionURL = "https://downloads.rclone.org/version.txt"
+  /// The version the machine runs too (`RCLONE_VERSION` in `vm/cmsmb.yaml`;
+  /// a test keeps the two equal). Pinned instead of "latest": an unattended
+  /// install must not move to a build nobody has looked at.
+  ///
+  /// Only an install that is NEEDED (missing, too old, unreadable) uses it -
+  /// a working rclone at or above `RcloneVersion.minimum` is never replaced,
+  /// so a Mac that already has a newer one is not downgraded.
+  public static let pinnedVersion = "v1.75.1"
+
+  /// SHA256 of the release zips, from
+  /// https://downloads.rclone.org/v1.75.1/SHA256SUMS. In the code, not
+  /// downloaded: a checksum fetched from the same server as the archive proves
+  /// nothing about a compromised server.
+  public static let pinnedChecksums: [String: String] = [
+    "osx-arm64": "c61d7a371c62bcbbe882c3423aa4b8bf63485c248dd0f692997b8f0c3f6d0c6f",
+    "osx-amd64": "29253d0288b8fbbac46baad6e5f6add6cb01d462c79f10805bbd4631c4cdf82c",
+  ]
 
   public static func install() async -> CMActionResult {
     let workDir = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -23,25 +39,19 @@ public enum RcloneInstaller {
         message: L10n.tr("Cannot create the working directory: %@", error.localizedDescription))
     }
 
-    guard let version = await latestVersion() else {
-      return CMActionResult(
-        succeeded: false, message: L10n.tr("Could not read the rclone version number."))
-    }
-
+    let version = pinnedVersion
     let arch = currentArch()
     let zipName = "rclone-\(version)-\(arch).zip"
     let zipURL = "https://downloads.rclone.org/\(version)/\(zipName)"
-    let sumsURL = "https://downloads.rclone.org/\(version)/SHA256SUMS"
     let zipPath = workDir.appendingPathComponent(zipName)
-    let sumsPath = workDir.appendingPathComponent("SHA256SUMS")
 
-    guard await download(zipURL, to: zipPath), await download(sumsURL, to: sumsPath) else {
+    guard await download(zipURL, to: zipPath) else {
       return CMActionResult(succeeded: false, message: L10n.tr("Could not download %@.", zipName))
     }
 
     // Verifying the checksum is not decoration: we are downloading an
     // executable binary that will have access to the whole Google Drive.
-    guard let expected = expectedChecksum(sumsFile: sumsPath, zipName: zipName) else {
+    guard let expected = pinnedChecksums[arch] else {
       return CMActionResult(
         succeeded: false, message: L10n.tr("No entry for %@ in SHA256SUMS.", zipName))
     }
@@ -69,21 +79,9 @@ public enum RcloneInstaller {
       .appendingPathComponent("rclone-\(version)-\(arch)")
       .appendingPathComponent("rclone")
     let destination = CMTooling.managedRclonePath
-    // Copy beside the target, then swap: a failed copy must not leave the Mac
-    // without rclone (this now runs unattended).
-    let staged = destination.deletingLastPathComponent()
-      .appendingPathComponent(".rclone-new-\(UUID().uuidString)")
     do {
-      try FileManager.default.copyItem(at: extracted, to: staged)
-      try FileManager.default.setAttributes(
-        [.posixPermissions: 0o755], ofItemAtPath: staged.path)
-      if FileManager.default.fileExists(atPath: destination.path) {
-        _ = try FileManager.default.replaceItemAt(destination, withItemAt: staged)
-      } else {
-        try FileManager.default.moveItem(at: staged, to: destination)
-      }
+      try swapIn(source: extracted, destination: destination)
     } catch {
-      try? FileManager.default.removeItem(at: staged)
       return CMActionResult(
         succeeded: false,
         message: L10n.tr("Could not install the binary: %@", error.localizedDescription))
@@ -123,15 +121,33 @@ public enum RcloneInstaller {
     return expectedChecksum(sumsContent: content, zipName: zipName)
   }
 
-  private static func latestVersion() async -> String? {
-    guard
-      let result = try? await ProcessRunner.run(
-        "/usr/bin/curl", ["-fsSL", versionURL], timeout: 60),
-      result.succeeded
-    else { return nil }
-    // Format: "rclone v1.75.1"
-    return result.stdout.split(separator: " ").last.map {
-      String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+  /// Copies `source` beside `destination` and swaps it in atomically: a failed
+  /// copy leaves the old binary untouched, and two installs finishing together
+  /// (the app and `install-rclone`) cannot fail with "file exists" - the loser
+  /// of the race simply replaces the winner's file.
+  static func swapIn(source: URL, destination: URL) throws {
+    let fm = FileManager.default
+    let staged = destination.deletingLastPathComponent()
+      .appendingPathComponent(".rclone-new-\(UUID().uuidString)")
+    do {
+      try fm.copyItem(at: source, to: staged)
+      try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staged.path)
+      if fm.fileExists(atPath: destination.path) {
+        _ = try fm.replaceItemAt(destination, withItemAt: staged)
+      } else {
+        do {
+          try fm.moveItem(at: staged, to: destination)
+        } catch {
+          // Someone created it between the check and the move.
+          guard fm.fileExists(atPath: destination.path) else { throw error }
+          _ = try fm.replaceItemAt(destination, withItemAt: staged)
+        }
+      }
+      // `replaceItemAt` can keep the old file's mode; the binary must run.
+      try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
+    } catch {
+      try? fm.removeItem(at: staged)
+      throw error
     }
   }
 

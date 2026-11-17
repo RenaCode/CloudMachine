@@ -603,8 +603,6 @@ extension L10nTranslations {
       "VUILE-BOOM",
     "Cannot create the working directory: %@":
       "Kan de werkmap niet aanmaken: %@",
-    "Could not read the rclone version number.":
-      "Kon het versienummer van rclone niet lezen.",
     "Could not download %@.":
       "Kon %@ niet downloaden.",
     "No entry for %@ in SHA256SUMS.":
