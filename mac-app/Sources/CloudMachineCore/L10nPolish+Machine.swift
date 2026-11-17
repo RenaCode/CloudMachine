@@ -46,8 +46,6 @@ extension L10nPolish {
       "Generuje i instaluje agentów launchd (aplikacja, czujka kopii, start maszyny, strażnik maszyny).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Zainstaluj Limę, która uruchamia maszynę CloudMachine: wykonaj to w Terminalu",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "Zainstaluj rclone (loguje maszynę do Google Drive)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Zainstaluj agentów w tle (start maszyny, strażnik bufora, czujka kopii)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":

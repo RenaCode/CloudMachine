@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Mac마다 폴더 하나를 사용합니다. 한 번만 설정할 수 있으며 연결 후에는 변경할 수 없습니다.",
     "Use lowercase letters, digits and dashes.":
       "소문자, 숫자, 하이픈을 사용하세요.",
-    "Install rclone":
-      "rclone 설치",
     "Open System Settings":
       "시스템 설정 열기",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "launchd 에이전트(앱, 백업 감시, 머신 시작, 머신 가드)를 생성하고 설치합니다.",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "CloudMachine 머신을 실행하는 Lima 설치: 터미널에서 다음을 실행하세요",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "rclone 설치(머신을 위해 Google Drive에 로그인합니다)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "백그라운드 에이전트 설치(머신 시작, 버퍼 가드, 백업 감시)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -607,8 +603,6 @@ extension L10nTranslations {
       "커밋되지 않은 변경",
     "Cannot create the working directory: %@":
       "작업 디렉터리를 만들 수 없습니다: %@",
-    "Could not read the rclone version number.":
-      "rclone 버전 번호를 읽을 수 없습니다.",
     "Could not download %@.":
       "%@을(를) 다운로드할 수 없습니다.",
     "No entry for %@ in SHA256SUMS.":
@@ -977,5 +971,13 @@ extension L10nTranslations {
       "Mac에서 Samba:    %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "이 Mac이 %@(으)로 가는 경로를 찾지 못했습니다(%@). 머신으로 가는 경로가 사라졌거나 macOS의 '로컬 네트워크' 개인정보 보호가 CloudMachine을 허용하지 않았습니다 - 그렇다면 시스템 설정 > 개인정보 보호 및 보안 > 로컬 네트워크에서 허용하세요. 확인: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "rclone 설치 중 - 다운로드하고 검증하는 중입니다",
+    "rclone could not be installed: %@":
+      "rclone을 설치할 수 없습니다: %@",
+    "Next attempt: %@":
+      "다음 시도: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima가 설치되어 있지 않습니다. 터미널에서 실행하세요: %@",
   ]
 }

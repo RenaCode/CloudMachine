@@ -181,8 +181,6 @@ extension L10nTranslations {
       "مجلد واحد لكل Mac. يُضبط مرة واحدة - لا يمكن تغييره بعد الاتصال.",
     "Use lowercase letters, digits and dashes.":
       "استخدم أحرفًا لاتينية صغيرة وأرقامًا وشرطات.",
-    "Install rclone":
-      "تثبيت rclone",
     "Open System Settings":
       "فتح إعدادات النظام",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "ينشئ وكلاء launchd ويثبّتهم (التطبيق، مراقب النسخ الاحتياطي، تشغيل الجهاز الافتراضي، حارس الجهاز الافتراضي).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "ثبّت Lima التي تشغّل الجهاز الافتراضي لـ CloudMachine: شغّل هذا في الطرفية",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "ثبّت rclone (يسجّل الدخول إلى Google Drive للجهاز الافتراضي)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "ثبّت وكلاء الخلفية (تشغيل الجهاز الافتراضي، حارس المخزن المؤقت، مراقب النسخ الاحتياطي)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -607,8 +603,6 @@ extension L10nTranslations {
       "DIRTY-TREE",
     "Cannot create the working directory: %@":
       "تعذّر إنشاء مجلد العمل: %@",
-    "Could not read the rclone version number.":
-      "تعذّرت قراءة رقم إصدار rclone.",
     "Could not download %@.":
       "تعذّر تنزيل %@.",
     "No entry for %@ in SHA256SUMS.":
@@ -977,5 +971,13 @@ extension L10nTranslations {
       "Samba من الـ Mac: %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "لم يجد هذا الـ Mac مسارًا إلى %@ (%@). إما أن المسار إلى الجهاز اختفى، أو أن خصوصية «الشبكة المحلية» في macOS لم تسمح لـ CloudMachine - عندها اسمح بذلك من إعدادات النظام > الخصوصية والأمن > الشبكة المحلية. تحقّق: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "جارٍ تثبيت rclone - تنزيله والتحقق منه",
+    "rclone could not be installed: %@":
+      "تعذّر تثبيت rclone: %@",
+    "Next attempt: %@":
+      "المحاولة التالية: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima غير مثبّتة - شغّل في Terminal: %@",
   ]
 }

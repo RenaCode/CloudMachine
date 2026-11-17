@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Her Mac için bir klasör. Bir kez ayarlanır - bağlandıktan sonra değiştirilemez.",
     "Use lowercase letters, digits and dashes.":
       "Küçük harf, rakam ve tire kullanın.",
-    "Install rclone":
-      "rclone'u yükle",
     "Open System Settings":
       "Sistem Ayarları'nı aç",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "launchd aracılarını oluşturur ve kurar (uygulama, yedek gözcüsü, makine başlatma, makine bekçisi).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "CloudMachine makinesini çalıştıran Lima'yı kurun: bunu Terminal'de çalıştırın",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "rclone'u kurun (makine için Google Drive'da oturum açar)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Arka plan aracılarını kurun (makine başlatma, arabellek bekçisi, yedek gözcüsü)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -607,8 +603,6 @@ extension L10nTranslations {
       "KİRLİ-AĞAÇ",
     "Cannot create the working directory: %@":
       "Çalışma klasörü oluşturulamıyor: %@",
-    "Could not read the rclone version number.":
-      "rclone sürüm numarası okunamadı.",
     "Could not download %@.":
       "%@ indirilemedi.",
     "No entry for %@ in SHA256SUMS.":
@@ -977,5 +971,13 @@ extension L10nTranslations {
       "Mac'ten Samba:    %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Bu Mac %@ için yol bulamadı (%@). Ya makineye giden yol yok oldu ya da macOS'in Yerel Ağ gizliliği CloudMachine'e izin vermedi - bu durumda Sistem Ayarları > Gizlilik ve Güvenlik > Yerel Ağ bölümünden izin verin. Kontrol edin: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "rclone kuruluyor - indiriliyor ve doğrulanıyor",
+    "rclone could not be installed: %@":
+      "rclone kurulamadı: %@",
+    "Next attempt: %@":
+      "Sonraki deneme: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima kurulu değil - Terminal'de çalıştırın: %@",
   ]
 }

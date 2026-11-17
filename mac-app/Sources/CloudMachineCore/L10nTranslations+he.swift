@@ -181,8 +181,6 @@ extension L10nTranslations {
       "תיקייה אחת לכל Mac. נקבעת פעם אחת - אי אפשר לשנות אחרי החיבור.",
     "Use lowercase letters, digits and dashes.":
       "השתמש באותיות לטיניות קטנות, ספרות ומקפים.",
-    "Install rclone":
-      "התקן את rclone",
     "Open System Settings":
       "פתח את הגדרות המערכת",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "יוצר ומתקין את סוכני launchd (אפליקציה, משגיח גיבוי, הפעלת המכונה, שומר המכונה).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "התקן את Lima, שמריצה את המכונה של CloudMachine: הרץ זאת במסוף",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "התקן את rclone (מתחבר ל-Google Drive עבור המכונה)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "התקן את סוכני הרקע (הפעלת המכונה, שומר מאגר הביניים, משגיח הגיבוי)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -607,8 +603,6 @@ extension L10nTranslations {
       "DIRTY-TREE",
     "Cannot create the working directory: %@":
       "לא ניתן ליצור את תיקיית העבודה: %@",
-    "Could not read the rclone version number.":
-      "לא ניתן היה לקרוא את מספר הגרסה של rclone.",
     "Could not download %@.":
       "לא ניתן היה להוריד את %@.",
     "No entry for %@ in SHA256SUMS.":
@@ -977,5 +971,13 @@ extension L10nTranslations {
       "Samba מה-Mac:     %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "ה-Mac הזה לא מצא נתיב אל %@ (%@). או שהנתיב למכונה נעלם, או שפרטיות \"רשת מקומית\" של macOS לא התירה ל-CloudMachine - במקרה כזה התירו זאת בהגדרות המערכת > פרטיות ואבטחה > רשת מקומית. בדיקה: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "מתקין את rclone - מוריד ומאמת אותו",
+    "rclone could not be installed: %@":
+      "לא ניתן היה להתקין את rclone: %@",
+    "Next attempt: %@":
+      "הניסיון הבא: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima לא מותקן - הרץ ב-Terminal: %@",
   ]
 }

@@ -807,7 +807,6 @@ private struct DashboardContent: View {
 
   private func setupActionTitle(_ action: SetupStep.Action) -> String {
     switch action {
-    case .installRclone: return L10n.tr("Install rclone")
     case .setUpMachine: return L10n.tr("Set up the machine")
     case .startMachine: return L10n.tr("Start the machine")
     case .grantFullDiskAccess: return L10n.tr("Open System Settings")
@@ -818,7 +817,6 @@ private struct DashboardContent: View {
 
   private func perform(_ action: SetupStep.Action) async {
     switch action {
-    case .installRclone: await controller.installRclone()
     case .setUpMachine: await controller.setUpMachine()
     case .startMachine: await controller.startMachine()
     case .grantFullDiskAccess: controller.openFullDiskAccessSettings()
@@ -848,6 +846,10 @@ private struct DashboardContent: View {
               Text(step.title)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(RenaCodeTheme.textMain)
+            }
+
+            if step.inProgress {
+              ProgressView().controlSize(.small)
             }
 
             if let action = step.action {

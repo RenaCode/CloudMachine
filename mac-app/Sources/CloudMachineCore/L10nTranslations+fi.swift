@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Yksi kansio per Mac. Asetetaan kerran - sitä ei voi muuttaa yhdistämisen jälkeen.",
     "Use lowercase letters, digits and dashes.":
       "Käytä pieniä kirjaimia, numeroita ja tavuviivoja.",
-    "Install rclone":
-      "Asenna rclone",
     "Open System Settings":
       "Avaa Järjestelmäasetukset",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "Luo ja asentaa launchd-agentit (appi, varmuuskopioinnin valvoja, virtuaalikoneen käynnistys, virtuaalikoneen vartija).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Asenna Lima, joka ajaa CloudMachine-virtuaalikonetta: suorita tämä Päätteessä",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "Asenna rclone (kirjaa virtuaalikoneen Google Driveen)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Asenna taustaagentit (virtuaalikoneen käynnistys, puskurin vartija, varmuuskopioinnin valvoja)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -607,8 +603,6 @@ extension L10nTranslations {
       "LIKAINEN-PUU",
     "Cannot create the working directory: %@":
       "Työhakemistoa ei voi luoda: %@",
-    "Could not read the rclone version number.":
-      "rclonen versionumeroa ei voitu lukea.",
     "Could not download %@.":
       "Kohdetta %@ ei voitu ladata.",
     "No entry for %@ in SHA256SUMS.":
@@ -977,5 +971,13 @@ extension L10nTranslations {
       "Samba Macista:    %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Tämä Mac ei löytänyt reittiä kohteeseen %@ (%@). Joko reitti koneeseen on poissa, tai macOS:n Paikallisverkko-tietosuoja ei ole sallinut CloudMachinea - salli se silloin kohdassa Järjestelmäasetukset > Tietosuoja ja turvallisuus > Paikallisverkko. Tarkista: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "Asennetaan rclonea - ladataan ja tarkistetaan se",
+    "rclone could not be installed: %@":
+      "rclonea ei voitu asentaa: %@",
+    "Next attempt: %@":
+      "Seuraava yritys: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima ei ole asennettu - suorita Terminalissa: %@",
   ]
 }

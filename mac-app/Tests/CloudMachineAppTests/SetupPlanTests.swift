@@ -36,7 +36,8 @@ final class SetupPlanTests: XCTestCase {
     input.hasFullDiskAccess = false
     input.agentsInstalled = false
     let steps = SetupPlan.steps(input)
-    XCTAssertEqual(steps.map(\.action), [.installRclone, nil])
+    XCTAssertEqual(steps.map(\.action), [nil, nil])
+    XCTAssertEqual(steps.first?.inProgress, true)
     XCTAssertEqual(steps.last?.command, "connect")
   }
 

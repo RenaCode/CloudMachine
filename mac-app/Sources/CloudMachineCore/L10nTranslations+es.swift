@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Una carpeta por Mac. Se define una sola vez: no se puede cambiar después de conectar.",
     "Use lowercase letters, digits and dashes.":
       "Usa letras minúsculas, dígitos y guiones.",
-    "Install rclone":
-      "Instalar rclone",
     "Open System Settings":
       "Abrir Ajustes del Sistema",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "Genera e instala los agentes de launchd (app, supervisor de copias, arranque de la máquina, guardián de la máquina).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Instala Lima, que ejecuta la máquina de CloudMachine: ejecuta esto en Terminal",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "Instalar rclone (inicia sesión en Google Drive para la máquina)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Instalar los agentes en segundo plano (arranque de la máquina, guardián del búfer, supervisor de copias)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -607,8 +603,6 @@ extension L10nTranslations {
       "ÁRBOL-SUCIO",
     "Cannot create the working directory: %@":
       "No se puede crear el directorio de trabajo: %@",
-    "Could not read the rclone version number.":
-      "No se pudo leer el número de versión de rclone.",
     "Could not download %@.":
       "No se pudo descargar %@.",
     "No entry for %@ in SHA256SUMS.":
@@ -977,5 +971,13 @@ extension L10nTranslations {
       "Samba desde Mac:  %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Este Mac no encontró ninguna ruta a %@ (%@). O la ruta a la máquina ha desaparecido, o la privacidad de «Red local» de macOS no ha permitido CloudMachine; en ese caso, permítelo en Ajustes del Sistema > Privacidad y seguridad > Red local. Comprueba: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "Instalando rclone: descargándolo y verificándolo",
+    "rclone could not be installed: %@":
+      "No se pudo instalar rclone: %@",
+    "Next attempt: %@":
+      "Próximo intento: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima no está instalado. Ejecuta en Terminal: %@",
   ]
 }

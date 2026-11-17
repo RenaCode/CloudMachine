@@ -34,7 +34,6 @@ extension L10nPolish {
     "One folder per Mac. Set once - it cannot be changed after connecting.":
       "Jeden folder na Maca. Ustawiany raz - po połączeniu nie da się go zmienić.",
     "Use lowercase letters, digits and dashes.": "Użyj małych liter, cyfr i myślników.",
-    "Install rclone": "Zainstaluj rclone",
     "Open System Settings": "Otwórz Ustawienia systemowe",
     "Install agents": "Zainstaluj agentów",
     // AppStatus
@@ -117,5 +116,13 @@ extension L10nPolish {
     "Time Machine starts the next one on its own schedule.":
       "Time Machine uruchomi kolejny według własnego harmonogramu.",
     "Backup cycle": "Cykl kopii",
+    "Installing rclone - downloading and verifying it":
+      "Instaluję rclone - pobieranie i weryfikacja",
+    "rclone could not be installed: %@":
+      "Nie udało się zainstalować rclone: %@",
+    "Next attempt: %@":
+      "Następna próba: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima nie jest zainstalowana - uruchom w Terminalu: %@",
   ]
 }

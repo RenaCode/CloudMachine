@@ -181,8 +181,6 @@ extension L10nTranslations {
       "每台 Mac 一个文件夹。只能设置一次，连接后无法更改。",
     "Use lowercase letters, digits and dashes.":
       "请使用小写字母、数字和连字符。",
-    "Install rclone":
-      "安装 rclone",
     "Open System Settings":
       "打开系统设置",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "生成并安装 launchd 代理（App、备份监测、虚拟机启动、虚拟机守护）。",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "安装运行 CloudMachine 虚拟机的 Lima：在终端中运行以下命令",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "安装 rclone（为虚拟机登录 Google Drive）",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "安装后台代理（虚拟机启动、缓冲区守护、备份监测）",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -607,8 +603,6 @@ extension L10nTranslations {
       "未提交更改",
     "Cannot create the working directory: %@":
       "无法创建工作目录：%@",
-    "Could not read the rclone version number.":
-      "无法读取 rclone 的版本号。",
     "Could not download %@.":
       "无法下载 %@。",
     "No entry for %@ in SHA256SUMS.":
@@ -977,5 +971,13 @@ extension L10nTranslations {
       "从 Mac 到 Samba:  %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "此 Mac 找不到到 %@ 的路由(%@)。要么到机器的路由已消失,要么 macOS 的“本地网络”隐私设置未允许 CloudMachine——此时请在 系统设置 > 隐私与安全性 > 本地网络 中允许。检查:cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "正在安装 rclone - 下载并验证中",
+    "rclone could not be installed: %@":
+      "无法安装 rclone：%@",
+    "Next attempt: %@":
+      "下次尝试：%@",
+    "Lima is not installed - run in Terminal: %@":
+      "未安装 Lima - 请在“终端”中运行：%@",
   ]
 }

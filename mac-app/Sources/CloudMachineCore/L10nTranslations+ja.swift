@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Macごとに1つのフォルダを使用します。一度だけ設定でき、接続後は変更できません。",
     "Use lowercase letters, digits and dashes.":
       "小文字、数字、ハイフンを使用してください。",
-    "Install rclone":
-      "rcloneをインストール",
     "Open System Settings":
       "システム設定を開く",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "launchdエージェント(App、バックアップ監視、マシンの起動、マシンのガード)を生成してインストールします。",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "CloudMachineマシンを動かすLimaをインストール: ターミナルで次を実行してください",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "rcloneをインストール(マシン用にGoogle Driveへサインインします)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "バックグラウンドエージェントをインストール(マシンの起動、バッファのガード、バックアップ監視)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -607,8 +603,6 @@ extension L10nTranslations {
       "未コミットの変更あり",
     "Cannot create the working directory: %@":
       "作業ディレクトリを作成できません: %@",
-    "Could not read the rclone version number.":
-      "rcloneのバージョン番号を読み取れませんでした。",
     "Could not download %@.":
       "%@ をダウンロードできませんでした。",
     "No entry for %@ in SHA256SUMS.":
@@ -977,5 +971,13 @@ extension L10nTranslations {
       "Mac からの Samba: %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "この Mac は %@ への経路を見つけられませんでした(%@)。マシンへの経路がなくなったか、macOS の「ローカルネットワーク」プライバシーが CloudMachine を許可していません - その場合は システム設定 > プライバシーとセキュリティ > ローカルネットワーク で許可してください。確認: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "rclone をインストール中 - ダウンロードして検証しています",
+    "rclone could not be installed: %@":
+      "rclone をインストールできませんでした: %@",
+    "Next attempt: %@":
+      "次の試行: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima がインストールされていません。ターミナルで実行してください: %@",
   ]
 }

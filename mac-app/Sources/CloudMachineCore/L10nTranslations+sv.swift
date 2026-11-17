@@ -181,8 +181,6 @@ extension L10nTranslations {
       "En mapp per Mac. Anges en gång - kan inte ändras efter anslutning.",
     "Use lowercase letters, digits and dashes.":
       "Använd små bokstäver, siffror och bindestreck.",
-    "Install rclone":
-      "Installera rclone",
     "Open System Settings":
       "Öppna Systeminställningar",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "Genererar och installerar launchd-agenterna (appen, säkerhetskopieringsbevakaren, maskinstart, maskinvakten).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Installera Lima, som kör CloudMachine-maskinen: kör det här i Terminal",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "Installera rclone (loggar in maskinen på Google Drive)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Installera bakgrundsagenterna (maskinstart, buffertvakt, säkerhetskopieringsbevakare)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -607,8 +603,6 @@ extension L10nTranslations {
       "OSTÄDAT-TRÄD",
     "Cannot create the working directory: %@":
       "Kan inte skapa arbetskatalogen: %@",
-    "Could not read the rclone version number.":
-      "Kunde inte läsa versionsnumret för rclone.",
     "Could not download %@.":
       "Kunde inte hämta %@.",
     "No entry for %@ in SHA256SUMS.":
@@ -977,5 +971,13 @@ extension L10nTranslations {
       "Samba från Mac:   %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Den här Macen hittade ingen väg till %@ (%@). Antingen är vägen till maskinen borta, eller så har integritetsskyddet för ”Lokalt nätverk” i macOS inte tillåtit CloudMachine – tillåt det då i Systeminställningar > Integritet och säkerhet > Lokalt nätverk. Kontrollera: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "Installerar rclone - hämtar och kontrollerar den",
+    "rclone could not be installed: %@":
+      "rclone kunde inte installeras: %@",
+    "Next attempt: %@":
+      "Nästa försök: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima är inte installerat - kör i Terminal: %@",
   ]
 }

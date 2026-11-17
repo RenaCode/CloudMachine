@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Ein Ordner pro Mac. Wird einmal festgelegt und lässt sich nach dem Verbinden nicht mehr ändern.",
     "Use lowercase letters, digits and dashes.":
       "Nur Kleinbuchstaben, Ziffern und Bindestriche verwenden.",
-    "Install rclone":
-      "rclone installieren",
     "Open System Settings":
       "Systemeinstellungen öffnen",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "Erzeugt und installiert die launchd-Agents (App, Backup-Wächter, Maschinenstart, Maschinenwächter).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Lima installieren, das die CloudMachine-Maschine ausführt: im Terminal ausführen",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "rclone installieren (meldet die Maschine bei Google Drive an)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Die Hintergrund-Agents installieren (Maschinenstart, Pufferwächter, Backup-Wächter)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -607,8 +603,6 @@ extension L10nTranslations {
       "UNSAUBERER-BAUM",
     "Cannot create the working directory: %@":
       "Das Arbeitsverzeichnis kann nicht angelegt werden: %@",
-    "Could not read the rclone version number.":
-      "Die Versionsnummer von rclone konnte nicht gelesen werden.",
     "Could not download %@.":
       "%@ konnte nicht geladen werden.",
     "No entry for %@ in SHA256SUMS.":
@@ -977,5 +971,13 @@ extension L10nTranslations {
       "Samba vom Mac:    %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Dieser Mac hat keine Route zu %@ gefunden (%@). Entweder ist die Route zur Maschine weg, oder der macOS-Datenschutz „Lokales Netzwerk“ hat CloudMachine nicht erlaubt – dann unter Systemeinstellungen > Datenschutz & Sicherheit > Lokales Netzwerk erlauben. Prüfen: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "rclone wird installiert – Download und Prüfung laufen",
+    "rclone could not be installed: %@":
+      "rclone konnte nicht installiert werden: %@",
+    "Next attempt: %@":
+      "Nächster Versuch: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima ist nicht installiert – im Terminal ausführen: %@",
   ]
 }

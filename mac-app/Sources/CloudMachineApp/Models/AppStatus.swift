@@ -252,6 +252,8 @@ struct BackupProgressInfo: Equatable {
 @MainActor
 final class AppStatus: ObservableObject {
   @Published var dependencyState: DependencyState = .unknown
+  /// The automatic rclone install started when the app launches.
+  @Published var rcloneInstall: ToolInstallState = .idle
   @Published var remoteConfigured: Bool = false
   @Published var machine = MachineStatus()
   /// The answer to "when was a BACKUP last made" - the only measure
@@ -298,7 +300,13 @@ final class AppStatus: ObservableObject {
 
   /// A one-sentence answer to the question "is my data safe".
   var headline: String {
-    if case .missing(let what, _) = dependencyState {
+    if case .missing(let what, let remedies) = dependencyState {
+      // Same rule as the setup card: anything but a failure is "installing".
+      if what == ["rclone"], !rcloneInstall.isFailure { return L10n.tr("Installing rclone") }
+      // Lima comes from Homebrew; the app never runs brew itself.
+      if what == ["Lima"], let remedy = remedies.first {
+        return L10n.tr("Lima is not installed - run in Terminal: %@", remedy)
+      }
       return L10n.tr("Missing: %@", what.joined(separator: ", "))
     }
     if !remoteConfigured { return L10n.tr("Google Drive not connected") }
