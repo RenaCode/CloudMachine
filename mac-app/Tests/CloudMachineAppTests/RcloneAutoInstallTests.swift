@@ -15,7 +15,8 @@ final class RcloneAutoInstallTests: XCTestCase {
 
   func testParsesRcloneVersionOutput() {
     XCTAssertEqual(
-      RcloneVersion.parse("rclone v1.75.1\n- os/version: darwin 26.1 (64 bit)\n- go/version: go1.25"),
+      RcloneVersion.parse(
+        "rclone v1.75.1\n- os/version: darwin 26.1 (64 bit)\n- go/version: go1.25"),
       [1, 75, 1])
     XCTAssertEqual(RcloneVersion.parse("rclone v1.68.0-beta.123.abc"), [1, 68, 0])
   }
@@ -239,8 +240,10 @@ final class RcloneAutoInstallTests: XCTestCase {
 
   func testCardShowsTheErrorAndTheNextAttemptButNoButton() {
     let at = Date(timeIntervalSince1970: 2_000_000)
-    let step = SetupPlan.steps(inputs(hasRclone: false, install: .failed("no network", retryAt: at)))
-      .first
+    let step = SetupPlan.steps(
+      inputs(hasRclone: false, install: .failed("no network", retryAt: at))
+    )
+    .first
     XCTAssertNil(step?.action)
     XCTAssertNil(step?.command)
     XCTAssertEqual(step?.inProgress, false)

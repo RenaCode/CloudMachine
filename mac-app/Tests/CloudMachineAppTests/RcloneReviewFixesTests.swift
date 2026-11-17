@@ -1,7 +1,7 @@
-@testable import CloudMachineCore
 import XCTest
 
 @testable import CloudMachineApp
+@testable import CloudMachineCore
 
 /// Second review of the automatic rclone install.
 @MainActor
