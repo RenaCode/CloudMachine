@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Én mappe pr. Mac. Angives én gang - kan ikke ændres efter tilslutning.",
     "Use lowercase letters, digits and dashes.":
       "Brug små bogstaver, cifre og bindestreger.",
-    "Install rclone":
-      "Installer rclone",
     "Open System Settings":
       "Åbn Systemindstillinger",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "Opretter og installerer launchd-agenterne (appen, backup-vagthunden, maskinstart, maskinens vagt).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Installer Lima, som kører CloudMachine-maskinen: kør dette i Terminal",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "Installer rclone (logger maskinen ind på Google Drive)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Installer baggrundsagenterne (maskinstart, buffervagt, backup-vagthund)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -977,5 +973,13 @@ extension L10nTranslations {
       "Samba fra Mac:    %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Denne Mac fandt ingen rute til %@ (%@). Enten er ruten til maskinen væk, eller macOS' anonymitet for \"Lokalt netværk\" har ikke tilladt CloudMachine - tillad det så i Systemindstillinger > Anonymitet & sikkerhed > Lokalt netværk. Tjek: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "Installerer rclone - henter og kontrollerer det",
+    "rclone could not be installed: %@":
+      "rclone kunne ikke installeres: %@",
+    "Next attempt: %@":
+      "Næste forsøg: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima er ikke installeret - kør i Terminal: %@",
   ]
 }

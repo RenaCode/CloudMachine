@@ -30,6 +30,10 @@ final class CloudMachineController: ObservableObject {
   private var backupCycleCheckedAt: Date?
   /// `AgentRepair.afterLaunch`, started once per process.
   private var agentMaintenance: Task<Void, Never>?
+  /// Installs rclone by itself when the app starts and it is missing or too
+  /// old; the state shows in the window instead of a bare "missing".
+  private let rcloneAuto = RcloneAutoInstaller.live()
+  private var rcloneObserverSet = false
   /// One failed read of the Time Machine preferences is not "no Full Disk Access".
   private var preferencesReads = BackupHealth.ReadConfirmation()
 
@@ -46,12 +50,32 @@ final class CloudMachineController: ObservableObject {
     if agentMaintenance == nil {
       agentMaintenance = Task.detached { await AgentRepair.afterLaunch() }
     }
+    if !rcloneObserverSet {
+      rcloneAuto.onChange = { [weak self] state in
+        guard let self else { return }
+        self.status.rcloneInstall = state
+        switch state {
+        case .failed(let message, _): self.status.errorMessage = message
+        case .installing: self.status.errorMessage = nil
+        case .installed, .idle:
+          self.status.errorMessage = nil
+          Task { await self.refreshAll() }
+        }
+      }
+      rcloneObserverSet = true
+    }
     let maintenance = agentMaintenance
     refreshTask?.cancel()
     refreshTask = Task { [weak self] in
       var cycles = 0
       while !Task.isCancelled {
         await self?.refreshAll()
+        // Cheap when not due: acts at start and then once an hour.
+        // Own task: a download must not stall the status refresh.
+        if let auto = self?.rcloneAuto {
+          if !CMTooling.hasManagedRclone { auto.checkNow() }
+          Task { await auto.tick() }
+        }
         // An agent can stop being startable later too, so check every few
         // minutes - never while the launch reload is still running (a failing
         // bootstrap can take tens of seconds; the panel does not wait for it).
@@ -288,7 +312,8 @@ final class CloudMachineController: ObservableObject {
     let password = VMSetup.storedPassword()
     return SetupPlan.steps(
       SetupPlan.Inputs(
-        hasRclone: CMTooling.hasManagedRclone, remoteConfigured: status.remoteConfigured,
+        hasRclone: CMTooling.hasManagedRclone && !rcloneAuto.replacementNeeded,
+        remoteConfigured: status.remoteConfigured,
         hasLima: VMLayout.limactlPath != nil, machineExists: machineExists,
         machineRunning: status.machine.isRunning, hasFullDiskAccess: status.hasFullDiskAccess,
         agentsInstalled: status.agentsInstalled,
@@ -298,14 +323,9 @@ final class CloudMachineController: ObservableObject {
         setDestinationCommand: address.flatMap { address in
           password.map { VMSetup.destinationCommand(password: $0, address: address) }
         },
-        maskedSetDestinationCommand: address.map { VMSetup.maskedDestinationCommand(address: $0) })
+        maskedSetDestinationCommand: address.map { VMSetup.maskedDestinationCommand(address: $0) },
+        rcloneInstall: status.rcloneInstall)
     )
-  }
-
-  func installRclone() async {
-    await run(L10n.tr("Installing rclone"), log: "Installing rclone") {
-      await RcloneInstaller.install()
-    }
   }
 
   /// Connecting to Google Drive is done from the terminal, not from the GUI: OAuth opens

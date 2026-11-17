@@ -69,12 +69,21 @@ public enum RcloneInstaller {
       .appendingPathComponent("rclone-\(version)-\(arch)")
       .appendingPathComponent("rclone")
     let destination = CMTooling.managedRclonePath
-    try? FileManager.default.removeItem(at: destination)
+    // Copy beside the target, then swap: a failed copy must not leave the Mac
+    // without rclone (this now runs unattended).
+    let staged = destination.deletingLastPathComponent()
+      .appendingPathComponent(".rclone-new-\(UUID().uuidString)")
     do {
-      try FileManager.default.copyItem(at: extracted, to: destination)
+      try FileManager.default.copyItem(at: extracted, to: staged)
       try FileManager.default.setAttributes(
-        [.posixPermissions: 0o755], ofItemAtPath: destination.path)
+        [.posixPermissions: 0o755], ofItemAtPath: staged.path)
+      if FileManager.default.fileExists(atPath: destination.path) {
+        _ = try FileManager.default.replaceItemAt(destination, withItemAt: staged)
+      } else {
+        try FileManager.default.moveItem(at: staged, to: destination)
+      }
     } catch {
+      try? FileManager.default.removeItem(at: staged)
       return CMActionResult(
         succeeded: false,
         message: L10n.tr("Could not install the binary: %@", error.localizedDescription))

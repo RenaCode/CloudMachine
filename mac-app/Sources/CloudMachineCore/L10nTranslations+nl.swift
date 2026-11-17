@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Eén map per Mac. Eenmalig in te stellen - na het verbinden niet meer te wijzigen.",
     "Use lowercase letters, digits and dashes.":
       "Gebruik kleine letters, cijfers en streepjes.",
-    "Install rclone":
-      "rclone installeren",
     "Open System Settings":
       "Systeeminstellingen openen",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "Genereert en installeert de launchd-agents (app, back-upwaakhond, machinestart, machinebewaker).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Installeer Lima, waarmee de CloudMachine-machine draait: voer dit uit in Terminal",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "Installeer rclone (meldt de machine aan bij Google Drive)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Installeer de achtergrondagents (machinestart, bufferbewaker, back-upwaakhond)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -977,5 +973,13 @@ extension L10nTranslations {
       "Samba vanaf Mac:  %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Deze Mac vond geen route naar %@ (%@). Of de route naar de machine is weg, of de macOS-privacy 'Lokaal netwerk' heeft CloudMachine niet toegestaan - sta het dan toe in Systeeminstellingen > Privacy en beveiliging > Lokaal netwerk. Controleer: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "rclone wordt geïnstalleerd - downloaden en controleren",
+    "rclone could not be installed: %@":
+      "rclone kon niet worden geïnstalleerd: %@",
+    "Next attempt: %@":
+      "Volgende poging: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima is niet geïnstalleerd - voer uit in Terminal: %@",
   ]
 }

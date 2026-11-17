@@ -79,12 +79,19 @@ CloudMachine lives in the menu bar. Its window opens on a **Required Setup
 Steps** card listing what is left to do on this Mac, in order, each with a
 button — or, for the steps an app cannot do, a command to copy:
 
-1. **Install rclone.** CloudMachine downloads its own copy; it signs in to
-   Google Drive and writes the configuration the machine gets a copy of.
+1. **rclone** is downloaded automatically. At start and then every hour
+   CloudMachine checks its own copy; if rclone is missing or too old it
+   fetches it in the background (checked against the official SHA256 sums)
+   and the window shows the state. It signs in to Google Drive and writes
+   the configuration the machine gets a copy of. If the download fails (no
+   network, wrong checksum) the window shows the error and when the next
+   attempt is; there is no button and no retry faster than hourly.
 2. **Connect Google Drive** — a command to run in Terminal. It opens Google's
    sign-in in the browser and waits for your approval. Enter your own OAuth
    credentials first (see [below](#your-own-google-oauth-credentials)).
-3. **Install Lima** — `brew install lima`, to copy.
+3. **Install Lima.** The cask installs it with Homebrew; if it is missing
+   (an app installed outside brew), the window says so and gives
+   `brew install lima` to copy — the app never runs Homebrew itself.
 4. **Set up the machine** — creates and starts `cmsmb` (the first start
    downloads Ubuntu and installs packages, several minutes), copies rclone's
    configuration into it and sets its SMB password.

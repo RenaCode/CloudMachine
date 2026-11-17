@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Satu folder bagi setiap Mac. Ditetapkan sekali - tidak boleh diubah selepas disambungkan.",
     "Use lowercase letters, digits and dashes.":
       "Gunakan huruf kecil, digit dan tanda sempang.",
-    "Install rclone":
-      "Pasang rclone",
     "Open System Settings":
       "Buka Tetapan Sistem",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "Menjana dan memasang ejen launchd (app, pengawas sandaran, permulaan mesin, pengawal mesin).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Pasang Lima, yang menjalankan mesin CloudMachine: jalankan ini dalam Terminal",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "Pasang rclone (log masuk ke Google Drive untuk mesin)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Pasang ejen latar belakang (permulaan mesin, pengawal penimbal, pengawas sandaran)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -977,5 +973,13 @@ extension L10nTranslations {
       "Samba dari Mac:   %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Mac ini tidak menemui laluan ke %@ (%@). Sama ada laluan ke mesin sudah hilang, atau privasi Rangkaian Setempat macOS belum membenarkan CloudMachine - jika begitu, benarkannya dalam Seting Sistem > Privasi & Keselamatan > Rangkaian Setempat. Semak: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "Memasang rclone - memuat turun dan mengesahkannya",
+    "rclone could not be installed: %@":
+      "rclone tidak dapat dipasang: %@",
+    "Next attempt: %@":
+      "Percubaan seterusnya: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima belum dipasang - jalankan dalam Terminal: %@",
   ]
 }

@@ -181,8 +181,6 @@ extension L10nTranslations {
       "หนึ่งโฟลเดอร์ต่อ Mac หนึ่งเครื่อง ตั้งครั้งเดียว - เปลี่ยนไม่ได้หลังจากเชื่อมต่อแล้ว",
     "Use lowercase letters, digits and dashes.":
       "ใช้ตัวพิมพ์เล็ก ตัวเลข และขีดกลาง",
-    "Install rclone":
-      "ติดตั้ง rclone",
     "Open System Settings":
       "เปิดการตั้งค่าระบบ",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "สร้างและติดตั้งเอเจนต์ launchd (แอป ตัวเฝ้าระวังการสำรองข้อมูล การเริ่มเครื่องเสมือน ตัวป้องกันเครื่องเสมือน)",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "ติดตั้ง Lima ซึ่งเรียกใช้เครื่องเสมือน CloudMachine: เรียกใช้คำสั่งนี้ในเทอร์มินัล",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "ติดตั้ง rclone (ลงชื่อเข้าใช้ Google Drive ให้เครื่องเสมือน)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "ติดตั้งเอเจนต์เบื้องหลัง (การเริ่มเครื่องเสมือน ตัวป้องกันบัฟเฟอร์ ตัวเฝ้าระวังการสำรองข้อมูล)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -977,5 +973,13 @@ extension L10nTranslations {
       "Samba จาก Mac:    %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Mac เครื่องนี้หาเส้นทางไปยัง %@ ไม่พบ (%@) อาจเป็นเพราะเส้นทางไปยังเครื่องหายไป หรือความเป็นส่วนตัว \"เครือข่ายเฉพาะที่\" ของ macOS ยังไม่อนุญาต CloudMachine - หากเป็นเช่นนั้นให้อนุญาตใน การตั้งค่าระบบ > ความเป็นส่วนตัวและความปลอดภัย > เครือข่ายเฉพาะที่ ตรวจสอบ: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "กำลังติดตั้ง rclone - กำลังดาวน์โหลดและตรวจสอบ",
+    "rclone could not be installed: %@":
+      "ติดตั้ง rclone ไม่สำเร็จ: %@",
+    "Next attempt: %@":
+      "ความพยายามครั้งถัดไป: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "ยังไม่ได้ติดตั้ง Lima - รันใน Terminal: %@",
   ]
 }

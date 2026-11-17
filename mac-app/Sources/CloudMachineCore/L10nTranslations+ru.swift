@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Одна папка на каждый Mac. Задаётся один раз - после подключения изменить нельзя.",
     "Use lowercase letters, digits and dashes.":
       "Используйте строчные латинские буквы, цифры и дефисы.",
-    "Install rclone":
-      "Установить rclone",
     "Open System Settings":
       "Открыть Системные настройки",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "Создаёт и устанавливает агентов launchd (приложение, наблюдатель копий, запуск машины, страж машины).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Установите Lima, которая запускает машину CloudMachine: выполните это в Терминале",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "Установите rclone (выполняет вход машины в Google Drive)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Установите фоновых агентов (запуск машины, страж буфера, наблюдатель копий)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -977,5 +973,13 @@ extension L10nTranslations {
       "Samba с Mac:      %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Этот Mac не нашёл маршрута к %@ (%@). Либо маршрут к машине пропал, либо конфиденциальность «Локальная сеть» в macOS не разрешила CloudMachine - тогда разрешите это в Системных настройках > Конфиденциальность и безопасность > Локальная сеть. Проверьте: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "Установка rclone: загрузка и проверка",
+    "rclone could not be installed: %@":
+      "Не удалось установить rclone: %@",
+    "Next attempt: %@":
+      "Следующая попытка: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima не установлена - выполните в Терминале: %@",
   ]
 }

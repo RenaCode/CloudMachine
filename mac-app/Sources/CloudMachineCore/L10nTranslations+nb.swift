@@ -181,8 +181,6 @@ extension L10nTranslations {
       "Én mappe per Mac. Angis én gang - kan ikke endres etter tilkobling.",
     "Use lowercase letters, digits and dashes.":
       "Bruk små bokstaver, sifre og bindestreker.",
-    "Install rclone":
-      "Installer rclone",
     "Open System Settings":
       "Åpne Systeminnstillinger",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "Genererer og installerer launchd-agentene (appen, vakthund for sikkerhetskopi, maskinstart, maskinens vakt).",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "Installer Lima, som kjører CloudMachine-maskinen: kjør dette i Terminal",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "Installer rclone (logger maskinen på Google Drive)",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "Installer bakgrunnsagentene (maskinstart, buffervakt, vakthund for sikkerhetskopi)",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -977,5 +973,13 @@ extension L10nTranslations {
       "Samba fra Mac:    %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Denne Macen fant ingen rute til %@ (%@). Enten er ruten til maskinen borte, eller personvernet for «Lokalt nettverk» i macOS har ikke tillatt CloudMachine - tillat det da i Systeminnstillinger > Personvern og sikkerhet > Lokalt nettverk. Sjekk: cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "Installerer rclone – laster ned og kontrollerer den",
+    "rclone could not be installed: %@":
+      "Kunne ikke installere rclone: %@",
+    "Next attempt: %@":
+      "Neste forsøk: %@",
+    "Lima is not installed - run in Terminal: %@":
+      "Lima er ikke installert – kjør i Terminal: %@",
   ]
 }

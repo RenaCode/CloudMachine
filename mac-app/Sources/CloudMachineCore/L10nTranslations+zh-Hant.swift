@@ -181,8 +181,6 @@ extension L10nTranslations {
       "每台 Mac 一個資料夾。只能設定一次，連接後無法更改。",
     "Use lowercase letters, digits and dashes.":
       "請使用小寫字母、數字與連字號。",
-    "Install rclone":
-      "安裝 rclone",
     "Open System Settings":
       "打開系統設定",
     "Install agents":
@@ -367,8 +365,6 @@ extension L10nTranslations {
       "產生並安裝 launchd 代理程式（App、備份監測、虛擬機器啟動、虛擬機器守護）。",
     "Install Lima, which runs the CloudMachine machine: run this in Terminal":
       "安裝執行 CloudMachine 虛擬機器的 Lima：在終端機中執行以下指令",
-    "Install rclone (signs in to Google Drive for the machine)":
-      "安裝 rclone（為虛擬機器登入 Google Drive）",
     "Install the background agents (machine start, buffer guard, backup watchdog)":
       "安裝背景代理程式（虛擬機器啟動、緩衝區守護、備份監測）",
     "Installs rclone through Homebrew - CloudMachine itself uses the one from install-rclone.":
@@ -977,5 +973,13 @@ extension L10nTranslations {
       "從 Mac 到 Samba:  %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "此 Mac 找不到通往 %@ 的路由(%@)。可能是通往機器的路由已消失,或 macOS 的「區域網路」隱私權未允許 CloudMachine——此時請在 系統設定 > 隱私權與安全性 > 區域網路 中允許。檢查:cloudmachine-agent vm-status",
+    "Installing rclone - downloading and verifying it":
+      "正在安裝 rclone - 下載並驗證中",
+    "rclone could not be installed: %@":
+      "無法安裝 rclone：%@",
+    "Next attempt: %@":
+      "下次嘗試：%@",
+    "Lima is not installed - run in Terminal: %@":
+      "未安裝 Lima - 請在「終端機」中執行：%@",
   ]
 }

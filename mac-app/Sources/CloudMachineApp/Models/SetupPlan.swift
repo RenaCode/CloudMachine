@@ -17,7 +17,6 @@ import Foundation
 /// already exists is worse than showing the step a few seconds late.
 struct SetupStep: Equatable {
   enum Action: Equatable {
-    case installRclone
     case setUpMachine
     case startMachine
     case grantFullDiskAccess
@@ -35,6 +34,8 @@ struct SetupStep: Equatable {
   /// What the card shows instead of `command`, when `command` holds a secret
   /// (the SMB password): the Copy button still copies `command`.
   var displayedCommand: String?
+  /// Something runs now: the card shows a spinner and no button.
+  var inProgress = false
 }
 
 enum SetupPlan {
@@ -53,6 +54,8 @@ enum SetupPlan {
     /// `nil` while the machine has no address or no stored password.
     var setDestinationCommand: String?
     var maskedSetDestinationCommand: String?
+    /// The automatic rclone install the app starts on launch.
+    var rcloneInstall: ToolInstallState = .idle
   }
 
   /// `configure-remote`, with `--folder` only for a valid name - an invalid
@@ -68,10 +71,19 @@ enum SetupPlan {
   static func steps(_ input: Inputs) -> [SetupStep] {
     var steps: [SetupStep] = []
     if !input.hasRclone {
-      steps.append(
-        SetupStep(
-          title: L10n.tr("Install rclone (signs in to Google Drive for the machine)"),
-          command: nil, action: .installRclone))
+      // No button: the app installs rclone itself, and retries hourly.
+      if case .failed(let message, let retryAt) = input.rcloneInstall {
+        steps.append(
+          SetupStep(
+            title: L10n.tr("rclone could not be installed: %@", message) + " "
+              + L10n.tr("Next attempt: %@", retryAt.formatted(date: .omitted, time: .shortened)),
+            command: nil, action: nil))
+      } else {
+        steps.append(
+          SetupStep(
+            title: L10n.tr("Installing rclone - downloading and verifying it"),
+            command: nil, action: nil, inProgress: true))
+      }
     }
     // The Drive folder of this Mac is chosen here, before the machine is
     // created: the machine takes its folder from it.
