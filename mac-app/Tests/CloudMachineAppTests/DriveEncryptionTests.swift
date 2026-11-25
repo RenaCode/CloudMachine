@@ -282,6 +282,14 @@ final class DriveEncryptionTests: XCTestCase {
   /// The order is the safety: the queue is checked empty before anything
   /// changes, the way back is armed before the units stop, and only the old
   /// remote's buffer is deleted.
+  /// The bands counted before the move are those of the image tm-bundle
+  /// names: after a rename by Time Machine the stored name is stale.
+  func testRepointFindsTheImageThroughTMBundle() {
+    let script = DriveEncryption.repointScript(
+      oldRemote: "gdrive:CloudMachine/m-tm", newRemote: "gdrive-crypt:tm", stamp: "S")
+    XCTAssertTrue(script.contains("\(VMLayout.Guest.bundleTool) resolve"), script)
+  }
+
   func testRepointOrder() {
     let script = DriveEncryption.repointScript(
       oldRemote: "gdrive:CloudMachine/m-tm", newRemote: "gdrive-crypt:tm", stamp: "S")

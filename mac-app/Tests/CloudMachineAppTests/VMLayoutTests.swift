@@ -355,8 +355,8 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(unit.contains("${CM_REMOTE}-meta/"))
     XCTAssertTrue(unit.contains(#"--exclude "*/bands/**""#))
     XCTAssertTrue(unit.contains(#"--exclude "*/lock""#))
-    XCTAssertTrue(
-      unit.contains(#"ExecCondition=/usr/bin/test -s "/srv/tm-local/${CM_BUNDLE}/Info.plist""#))
+    // No Info.plist, no copy; TMBundleScriptTests checks what `has-info` decides.
+    XCTAssertTrue(unit.contains("ExecCondition=/usr/local/sbin/tm-bundle has-info\n"))
     XCTAssertTrue(unit.contains("ExecStartPost=/usr/bin/touch \(VMLayout.Guest.metaSyncStamp)"))
     XCTAssertTrue(timer.contains("OnUnitActiveSec=15min"))
     XCTAssertTrue(yaml.contains("file: systemd/tm-meta-sync.service"))

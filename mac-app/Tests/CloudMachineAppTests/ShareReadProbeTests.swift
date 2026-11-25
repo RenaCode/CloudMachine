@@ -135,6 +135,43 @@ final class ShareReadProbeTests: XCTestCase {
       .replacingOccurrences(of: root.path + "/", with: "")
   }
 
+  /// 25.11.2026: Time Machine renamed the image while the machine ran; the
+  /// stored name went stale and the probe read a band that is not there.
+  /// With tm-bundle installed, the probe asks it which image is the one.
+  func testRenamedImageIsFoundThroughTMBundle() throws {
+    let dir = try scratch()
+    let root = dir.appendingPathComponent("tm-local")
+    let image = root.appendingPathComponent("New.sparsebundle")
+    try FileManager.default.createDirectory(
+      at: image.appendingPathComponent("bands"), withIntermediateDirectories: true)
+    try """
+    <plist version="1.0"><dict>
+    <key>band-size</key>
+    <integer>\(VMBundlePrep.bandBytes)</integer>
+    </dict></plist>
+    """.write(to: image.appendingPathComponent("Info.plist"), atomically: true, encoding: .utf8)
+    let envFile = dir.appendingPathComponent("bundle.env")
+    try "CM_BUNDLE=\"Old.sparsebundle\"\n".write(to: envFile, atomically: true, encoding: .utf8)
+    let repoScript = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().appendingPathComponent("vm/tm-bundle.sh")
+    let tool = dir.appendingPathComponent("tm-bundle")
+    try """
+    #!/bin/sh
+    CM_LOCAL='\(root.path)' CM_BUNDLE_ENV='\(envFile.path)' exec /bin/sh '\(repoScript.path)' "$@"
+
+    """.write(to: tool, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+
+    let locate = ShareReadProbe.locateFirstBand(
+      bundleEnv: envFile.path, localRoot: root.path, tool: tool.path)
+    let (output, _) = try bash("\(locate); echo \"F=$f\"")
+
+    XCTAssertEqual(
+      output.trimmingCharacters(in: .whitespacesAndNewlines),
+      "F=\(root.path)/New.sparsebundle/bands/0")
+  }
+
   func testLocatesNothingWithoutAnImage() throws {
     XCTAssertEqual(try located(env: nil, images: [:]), "F=")
   }
