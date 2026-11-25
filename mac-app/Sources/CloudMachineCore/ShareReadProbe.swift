@@ -90,10 +90,18 @@ public enum ShareReadProbe {
   /// is on the machine's own disk, and Time Machine creating it writes the
   /// directory a moment before band 0 - there `[ -e ]` is a safe local check,
   /// and an image without its band yet is "no image yet", not a dead share.
-  static func locateFirstBand(bundleEnv: String, localRoot: String) -> String {
+  ///
+  /// Time Machine renames the image when the Mac's name changes (25.11.2026),
+  /// so `tool` (tm-bundle) is asked first; the stored name is the fallback on
+  /// machines without it.
+  static func locateFirstBand(
+    bundleEnv: String, localRoot: String, tool: String = VMLayout.Guest.bundleTool
+  ) -> String {
     let env = VMLayout.shellQuoted(bundleEnv)
     let root = VMLayout.shellQuoted(localRoot)
-    return "B=$(sed -n 's/^CM_BUNDLE=//p' \(env) 2>/dev/null | tr -d '\"'); f=; "
+    let tm = VMLayout.shellQuoted(tool)
+    return "B=; if [ -x \(tm) ]; then B=$(\(tm) resolve 2>/dev/null); fi; "
+      + "[ -n \"$B\" ] || B=$(sed -n 's/^CM_BUNDLE=//p' \(env) 2>/dev/null | tr -d '\"'); f=; "
       + "if [ -n \"$B\" ]; then f=\(root)/\"$B\"/bands/0; else "
       + "B=$(cd \(root) 2>/dev/null && ls -d *.sparsebundle 2>/dev/null | head -1); "
       + "if [ -n \"$B\" ] && [ -e \(root)/\"$B\"/bands/0 ]; then f=\(root)/\"$B\"/bands/0; fi; "

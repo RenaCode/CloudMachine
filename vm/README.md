@@ -38,6 +38,12 @@ Each layer is there for a reason:
   Machine-specific values come from files `cloudmachine-agent` writes:
   `/etc/cloudmachine/vm.env` (the Drive folder) and
   `/etc/cloudmachine/bundle.env` (the image name, from the computer name).
+- `tm-bundle.sh` - installed as `/usr/local/sbin/tm-bundle`. Time Machine
+  renames the image when the Mac's name changes; before the bands are bound
+  and before the metadata is copied, `tm-bundle resolve` checks the stored
+  name and follows such a rename, but only to the one image that has 32 MB
+  bands and none on the local disk. Otherwise it refuses and names what it
+  found (`journalctl -u tm-bands-bind`).
 - `punchfs/` - the FUSE layer and its test.
 
 ## Commands

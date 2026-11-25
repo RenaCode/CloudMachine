@@ -378,6 +378,7 @@ public enum DriveEncryption {
     let env = VMLayout.Guest.vmEnv
     let saved = "\(env).before-\(stamp)"
     let units = "rclone-tm punchfs tm-bands-bind"
+    let tool = VMLayout.Guest.bundleTool
     let queue =
       "curl -s -m 20 -X POST http://\(VMLayout.Guest.rcAddress)/vfs/queue"
       + " | python3 -c 'import json,sys; print(sum(i.get(\"size\",0) for i in json.load(sys.stdin)[\"queue\"]))'"
@@ -387,7 +388,11 @@ public enum DriveEncryption {
       "set -euo pipefail",
       "trap 'systemctl start smbd' ERR",
       preflightScript(oldRemote: oldRemote),
-      "B=$(. /etc/cloudmachine/bundle.env && echo \"/srv/tm-local/$CM_BUNDLE/bands\")",
+      // tm-bundle follows a rename of the image by Time Machine; older
+      // machines without it keep the stored name.
+      "if [ -x \(tool) ]; then B=$(\(tool) resolve); "
+        + "else B=$(. \(VMLayout.Guest.bundleEnv) && echo \"$CM_BUNDLE\"); fi",
+      "B=\"\(VMLayout.Guest.localRoot)/$B/bands\"",
       "before=$(find \"$B/\" -type f | wc -l)",
       "test \"$before\" -gt 0",
       "systemctl stop smbd",

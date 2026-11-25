@@ -33,6 +33,9 @@ public enum VMLayout {
     public static let rcloneConfig = "/etc/rclone/rclone.conf"
     public static let vmEnv = "/etc/cloudmachine/vm.env"
     public static let bundleEnv = "/etc/cloudmachine/bundle.env"
+    /// vm/tm-bundle.sh: the image's current name, following a rename by Time
+    /// Machine. Machines made from an older template do not have it yet.
+    public static let bundleTool = "/usr/local/sbin/tm-bundle"
     public static let cacheDir = "/var/cache/rclone"
     public static let backupDir = "/var/lib/cloudmachine/prepare-backup"
     public static let rcAddress = "127.0.0.1:5572"

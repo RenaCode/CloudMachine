@@ -53,6 +53,10 @@ provision:
   path: /etc/systemd/system/tm-bands-bind.service
   file: systemd/tm-bands-bind.service
 - mode: data
+  path: /usr/local/sbin/tm-bundle
+  file: tm-bundle.sh
+  permissions: 755
+- mode: data
   path: /etc/systemd/system/smbd.service.d/cloudmachine.conf
   file: systemd/smbd.service.d/cloudmachine.conf
 - mode: data
