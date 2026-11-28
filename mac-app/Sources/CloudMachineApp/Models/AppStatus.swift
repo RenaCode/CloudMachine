@@ -204,16 +204,23 @@ extension AppStatus {
     if machine.servicesHealthy == false {
       return .servicesDown(names: machine.servicesDown.joined(separator: ", "))
     }
-    if backupCycle.known && !backupCycle.isFresh() {
-      let headline: String
-      if let age = backupCycle.age() {
-        headline = L10n.tr("No completed backup for %@", BackupHealth.formatAge(age))
-      } else {
-        headline = L10n.tr("There is no completed backup at all")
-      }
-      return .backupStale(headline: headline, detail: backupCycle.problems.first ?? headline)
-    }
-    return state
+    // Only an idle upload is doubted by an old backup: a moving one may well be
+    // the backup itself (first backup, after sleep), and so may a running one.
+    // `isFresh` uses backup-health's own threshold; no backup at all = unknown.
+    guard state == .upToDate, backupProgress == nil, backupCycle.known,
+      let age = backupCycle.age(), !backupCycle.isFresh()
+    else { return state }
+    let headline = L10n.tr("No completed backup for %@", BackupHealth.formatAge(age))
+    return .backupStale(headline: headline, detail: backupCycle.problems.first ?? headline)
+  }
+}
+
+extension UploadState {
+  /// Red needs a person, amber passes by itself or is unknown, green is nominal.
+  var tone: StatusTone {
+    if needsAttention { return .danger }
+    if !isNominal { return .warning }
+    return .success
   }
 }
 

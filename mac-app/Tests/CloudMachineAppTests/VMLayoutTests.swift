@@ -242,37 +242,81 @@ final class VMLayoutTests: XCTestCase {
       contentsOf: Self.repoRoot.appendingPathComponent(path), encoding: .utf8)
   }
 
-  /// 27.11.2026 19:33: the kernel OOM-killed rclone, punchfs restarted by
-  /// itself, the one-shot bind ran once, failed, and Samba stayed down 13 h.
-  /// The bind must retry on its own, follow a punchfs restart, and start Samba
-  /// itself when it succeeds.
-  func testBandsBindRetriesAndFollowsPunchfsRestarts() throws {
-    let bind = try unit("vm/systemd/tm-bands-bind.service")
+  /// Units that stop (and, when the stopped unit is restarted, restart) with `unit`:
+  /// the ones that list it in Requires= or BindsTo=.
+  private func dependents(of unit: String, in files: [String: String]) -> Set<String> {
+    var result = Set<String>()
+    for (name, text) in files where name != unit {
+      for line in text.split(separator: "\n") {
+        let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
+        guard parts.count == 2, ["Requires", "BindsTo"].contains(parts[0]) else { continue }
+        if parts[1].split(separator: " ").contains(Substring(unit + ".service")) {
+          result.insert(name)
+        }
+      }
+    }
+    return result
+  }
+
+  /// 27.11.2026 19:29: the kernel OOM-killed rclone and the dependent units were
+  /// stopped with it. The ONE mechanism that brings them back is systemd's own
+  /// restart propagation along Requires=/BindsTo= (no ExecStartPost that starts
+  /// units: `start` on an active unit does nothing, so a bind left over a dead
+  /// FUSE mount would survive). Killing rclone must reach smbd through the chain,
+  /// and the bind, a one-shot with no retry of its own, must retry.
+  func testRcloneRestartReachesSambaThroughTheDependencyChain() throws {
+    let files = [
+      "rclone-tm": try unit("vm/systemd/rclone-tm.service"),
+      "punchfs": try unit("vm/systemd/punchfs.service"),
+      "tm-bands-bind": try unit("vm/systemd/tm-bands-bind.service"),
+      "smbd": try unit("vm/systemd/smbd.service.d/cloudmachine.conf"),
+    ]
+    var reached = Set<String>()
+    var frontier = ["rclone-tm"]
+    while let next = frontier.popLast() {
+      for dependent in dependents(of: next, in: files) where reached.insert(dependent).inserted {
+        frontier.append(dependent)
+      }
+    }
+    XCTAssertEqual(reached, ["punchfs", "tm-bands-bind", "smbd"])
+    // The old second mechanism must not come back.
+    for name in ["rclone-tm", "punchfs"] {
+      XCTAssertFalse(files[name]!.contains("ExecStartPost"), "\(name): one mechanism only")
+    }
+    let bind = files["tm-bands-bind"]!
+    XCTAssertTrue(bind.contains("\nBindsTo=punchfs.service\n"))
     XCTAssertTrue(bind.contains("\nRestart=on-failure\n"))
     XCTAssertTrue(bind.contains("\nRestartSec="))
     XCTAssertTrue(bind.contains("\nStartLimitIntervalSec=0\n"), "retries must never run out")
-    XCTAssertTrue(bind.contains("\nPartOf=punchfs.service\n"))
-    XCTAssertTrue(bind.contains("ExecStartPost=-/bin/systemctl --no-block start smbd.service"))
-
-    let punch = try unit("vm/systemd/punchfs.service")
-    XCTAssertTrue(
-      punch.contains("ExecStartPost=-/bin/systemctl --no-block start tm-bands-bind.service"))
-    let rclone = try unit("vm/systemd/rclone-tm.service")
-    XCTAssertTrue(
-      rclone.contains("ExecStartPost=-/bin/systemctl --no-block start punchfs.service"))
   }
 
-  /// 27.11.2026: rclone grew to 1.57 GB in the 2 GiB, swapless VM and was
-  /// OOM-killed. Its memory is capped below the machine's and a kill ends the
-  /// unit cleanly so systemd restarts it.
+  /// A bind that failed leaves Samba "dependency failed", and systemd never
+  /// retries that. The bind starts Samba itself, but ONLY in that case: Samba
+  /// stopped on purpose (image conversion) has Result=success and must stay down.
+  func testBindStartsSambaOnlyAfterADependencyFailure() throws {
+    let bind = try unit("vm/systemd/tm-bands-bind.service")
+    let post = try XCTUnwrap(bind.split(separator: "\n").first { $0.hasPrefix("ExecStartPost=") })
+    XCTAssertTrue(post.contains("show -p Result --value smbd.service"))
+    XCTAssertTrue(post.contains("dependency"))
+    XCTAssertTrue(post.contains("--no-block start smbd.service"))
+  }
+
+  /// 27.11.2026: rclone grew to 1.57 GB in the 2 GiB, swapless VM. Budget:
+  /// 4 transfers x 32M chunks = 128M, read buffers 8M each, GOMEMLIMIT 900M for
+  /// the heap; MemoryMax 1400M leaves 600M for Samba and the system. NO
+  /// MemoryHigh: throttling would stall FUSE (and Samba on it) instead of
+  /// ending in a clean kill and restart.
   func testRcloneMemoryIsCapped() throws {
     let rclone = try unit("vm/systemd/rclone-tm.service")
-    XCTAssertTrue(rclone.contains("\nMemoryHigh="))
-    XCTAssertTrue(rclone.contains("\nMemoryMax="))
+    XCTAssertTrue(rclone.contains("\nMemoryMax=1400M\n"))
+    XCTAssertFalse(rclone.contains("MemoryHigh"), "throttling stalls the FUSE mount")
     XCTAssertTrue(rclone.contains("\nOOMPolicy=stop\n"))
-    XCTAssertTrue(rclone.contains("GOMEMLIMIT="))
+    XCTAssertTrue(rclone.contains("\nRestart=always\n"))
+    XCTAssertTrue(rclone.contains("GOMEMLIMIT=900MiB"))
     XCTAssertTrue(rclone.contains("--use-mmap"))
-    XCTAssertTrue(rclone.contains("--buffer-size"))
+    XCTAssertTrue(rclone.contains("--buffer-size 8M"))
+    XCTAssertTrue(rclone.contains("--transfers 4"))
+    XCTAssertTrue(rclone.contains("--drive-chunk-size 32M"))
     // Samba must outlive rclone when memory is short.
     let smbd = try unit("vm/systemd/smbd.service.d/limits.conf")
     XCTAssertTrue(smbd.contains("OOMScoreAdjust=-"))

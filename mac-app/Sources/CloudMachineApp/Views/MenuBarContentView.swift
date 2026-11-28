@@ -72,7 +72,7 @@ private struct MenuBarPanel: View {
 
       // The one-sentence answer to "is my data safe", in the verdict's color.
       HStack(alignment: .firstTextBaseline, spacing: 8) {
-        StatusDot(tone, live: status.machine.uploadState.isMovingData)
+        StatusDot(tone, live: status.uploadCardState.isMovingData)
         Text(status.headline)
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(tone == .success ? RenaCodeTheme.textMain : tone.color)

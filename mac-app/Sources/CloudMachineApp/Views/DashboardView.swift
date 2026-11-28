@@ -194,7 +194,7 @@ private struct DashboardContent: View {
       let tone = backupCycleTone.worst(status.watchdogRunning ? .success : .danger)
       return tone == .success ? nil : tone
     case .storage:
-      let tone = uploadTone(status.machine.uploadState)
+      let tone = uploadTone(status.uploadCardState)
         .worst(freeSpaceTone)
         .worst(budgetTone == .neutral ? .success : budgetTone)
       return tone == .success ? nil : tone
@@ -1025,7 +1025,7 @@ private struct DashboardContent: View {
       // The tone of the upload verdict, not its own.
       row(
         L10n.tr("To upload"), status.machine.queueSummary,
-        tone: uploadTone(status.machine.uploadState))
+        tone: uploadTone(status.uploadCardState))
 
       Divider().background(RenaCodeTheme.borderGlass)
       row(
@@ -1203,9 +1203,7 @@ private struct DashboardContent: View {
   }
 
   private func uploadTone(_ state: UploadState) -> StatusTone {
-    if state.needsAttention { return .danger }
-    if !state.isNominal { return .warning }
-    return .success
+    state.tone
   }
 
   private func uploadIcon(_ state: UploadState) -> String {

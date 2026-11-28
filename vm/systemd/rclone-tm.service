@@ -18,10 +18,9 @@ Type=notify
 # rclone scans the whole VFS cache (up to 120G) before it mounts; after an
 # interrupted upload that takes minutes, and the default 90 s kills it in a loop.
 TimeoutStartSec=45min
-# 27 Nov 2026: OOM-killed at 1.57 GB (2 GiB VM). Cap it; OOMPolicy=stop restarts cleanly.
+# 27 Nov 2026: OOM-killed at 1.57 GB (2 GiB VM). Clean kill at 1400M, no throttling.
 Environment=GOMEMLIMIT=900MiB
-MemoryHigh=1000M
-MemoryMax=1300M
+MemoryMax=1400M
 OOMPolicy=stop
 EnvironmentFile=/etc/cloudmachine/vm.env
 EnvironmentFile=/etc/cloudmachine/tm-ids.env
@@ -29,10 +28,8 @@ ExecStart=/usr/local/bin/rclone mount2 ${CM_REMOTE} /srv/tm \
   --config /etc/rclone/rclone.conf --allow-other --uid ${TM_UID} --gid ${TM_GID} --umask 002 \
   --vfs-cache-mode full --vfs-cache-max-size 120G --vfs-cache-max-age 9999h --vfs-write-back 600s \
   --cache-dir /var/cache/rclone --dir-cache-time 9999h --poll-interval 0 --attr-timeout 5m \
-  --use-mmap --buffer-size 8M --transfers 8 --drive-chunk-size 32M --drive-use-trash=false --drive-stop-on-upload-limit \
+  --use-mmap --buffer-size 8M --transfers 4 --drive-chunk-size 32M --drive-use-trash=false --drive-stop-on-upload-limit \
   --rc --rc-addr 127.0.0.1:5572 --rc-no-auth --log-file /var/log/rclone-tm.log --log-level INFO
-# Bring the dependents back after an automatic restart.
-ExecStartPost=-/bin/systemctl --no-block start punchfs.service
 ExecStop=/bin/fusermount3 -uz /srv/tm
 Restart=always
 RestartSec=10

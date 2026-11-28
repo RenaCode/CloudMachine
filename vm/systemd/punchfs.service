@@ -19,8 +19,6 @@ LimitNOFILE=524288
 # failure instead of a restart loop; `cloudmachine-agent vm-update` rebuilds it.
 ExecStart=/bin/sh -c '/usr/local/bin/punchfs --help 2>&1 | grep -q "syncfs=<dir>" || { echo "punchfs: /usr/local/bin/punchfs has no -o syncfs (old binary): not starting, rebuild it (cloudmachine-agent vm-update)" >&2; exit 78; }; exec /usr/local/bin/punchfs -f -o source=/srv/tm,syncfs=/var/cache/rclone,allow_other /srv/tm-punch'
 RestartPreventExitStatus=78
-# After Restart=always nothing else brings the bind back.
-ExecStartPost=-/bin/systemctl --no-block start tm-bands-bind.service
 ExecStop=/bin/fusermount3 -uz /srv/tm-punch
 Restart=always
 RestartSec=5

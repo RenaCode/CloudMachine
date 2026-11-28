@@ -146,18 +146,59 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertNotEqual(status.uploadCardState.badge, UploadState.upToDate.badge)
     XCTAssertTrue(status.uploadCardState.needsAttention)
     XCTAssertFalse(status.uploadCardState.isNominal)
+    XCTAssertEqual(status.uploadCardState.tone, .danger)
+  }
+
+  /// A moving upload is overridden too when a service is genuinely down.
+  func testUploadCardOverridesFlowingWhenAServiceIsDown() {
+    let status = healthyStatus()
+    withReading(status) { $0.uploadsQueued = 5 }
+    XCTAssertEqual(status.uploadCardState, .flowing(queued: 5))
+    status.machine.services["smbd"] = "failed"
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "smbd"))
   }
 
   func testUploadCardIsNotAllGoodWhenTheLastBackupIsStale() {
     let status = healthyStatus()
-    status.backupCycle.lastSuccess = Date().addingTimeInterval(-23 * 3600 * 2)
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-23 * 3600)
     XCTAssertFalse(status.backupCycle.isFresh())
     guard case .backupStale(let headline, let detail) = status.uploadCardState else {
       return XCTFail("expected .backupStale, got \(status.uploadCardState)")
     }
     XCTAssertTrue(headline.hasPrefix("No completed backup for"), headline)
     XCTAssertFalse(detail.isEmpty)
-    XCTAssertFalse(status.uploadCardState.isNominal)
+    XCTAssertEqual(status.uploadCardState.tone, .danger)
+  }
+
+  /// Healthy uploading is NOT turned red by an old last backup: after a
+  /// night's sleep the first backup is the very thing that is uploading.
+  func testUploadCardLeavesFlowingAloneWhenTheLastBackupIsOld() {
+    let status = healthyStatus()
+    withReading(status) { $0.uploadsQueued = 5 }
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-10 * 3600)
+    XCTAssertEqual(status.uploadCardState, .flowing(queued: 5))
+  }
+
+  /// The threshold is backup-health's (3 h): 2.5 h old is still fine.
+  func testUploadCardUsesBackupHealthsThreshold() {
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-2.5 * 3600)
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+  }
+
+  /// A backup that is running right now is not "stale".
+  func testUploadCardIgnoresStalenessWhileABackupRuns() {
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-10 * 3600)
+    status.backupProgress = BackupProgressInfo()
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+  }
+
+  /// No completed backup yet (first backup): unknown, not stale.
+  func testUploadCardKeepsUploadStateBeforeTheFirstBackup() {
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = nil
+    XCTAssertEqual(status.uploadCardState, .upToDate)
   }
 
   /// An unknown backup age is not "stale": the card keeps the upload state.
@@ -173,6 +214,18 @@ final class AppStatusHealthTests: XCTestCase {
     status.machine.services["smbd"] = "inactive"
     withReading(status) { $0.erroredFiles = 2 }
     XCTAssertEqual(status.uploadCardState, .failedFiles(2))
+  }
+
+  /// The tone of every card state: red needs a person, amber is passes-by-itself
+  /// or unknown, green only for the nominal ones.
+  func testUploadStateTones() {
+    XCTAssertEqual(UploadState.upToDate.tone, .success)
+    XCTAssertEqual(UploadState.flowing(queued: 1).tone, .success)
+    XCTAssertEqual(UploadState.dailyQuotaExhausted.tone, .warning)
+    XCTAssertEqual(UploadState.queueUnknown.tone, .warning)
+    XCTAssertEqual(UploadState.servicesDown(names: "smbd").tone, .danger)
+    XCTAssertEqual(UploadState.backupStale(headline: "h", detail: "d").tone, .danger)
+    XCTAssertEqual(UploadState.mountDown.tone, .danger)
   }
 
   func testMachineStatesHaveTheirOwnHeadlines() {
