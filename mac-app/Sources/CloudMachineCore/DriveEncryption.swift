@@ -714,9 +714,8 @@ public enum DriveEncryption {
 
     // Samba off BEFORE the last sync: a backup started now (by hand, by the
     // guard) cannot write a band that the sync has already passed.
-    guard (try? await VMLayout.rootShell(VMLayout.holdSmbd, timeout: 120))?.succeeded == true
+    guard let keepHold = await VMLayout.holdSamba()
     else { return fail(L10n.tr("Could not stop smbd in the machine.")) }
-    let keepHold = VMLayout.keepHoldFresh()
     defer { keepHold.cancel() }
     CMLogger.log("vm-encrypt: \(direction) - last sync and cryptcheck")
     let synced = try? await VMLayout.rootShell(

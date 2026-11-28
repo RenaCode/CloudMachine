@@ -271,6 +271,50 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertEqual(status.overallTone, .danger)
   }
 
+  /// The machine runs but its services were not read: unknown, never ALL GOOD.
+  func testUploadCardIsUnknownWhenServicesAreNotRead() {
+    let status = healthyStatus()
+    status.machine.services["punchfs"] = nil
+    XCTAssertNil(status.machine.servicesHealthy)
+    XCTAssertEqual(status.uploadCardState, .queueUnknown)
+    XCTAssertEqual(status.uploadCardState.tone, .warning)
+  }
+
+  /// A marker next to a RUNNING Samba pauses nothing: probes still count.
+  func testStaleMarkerWithRunningSambaIsNotAPause() {
+    let status = healthyStatus()
+    status.machine.smbdHoldAge = 60
+    XCTAssertFalse(status.machine.smbdHeld, "smbd is active")
+    status.machine.smb = .refused(reason: "ECONNREFUSED")
+    XCTAssertEqual(status.machine.smb?.isFailure, true)
+    XCTAssertTrue(status.machine.shareProbeFailed, "Samba runs: a failing probe counts")
+    status.machine.services["smbd"] = "inactive"
+    XCTAssertTrue(status.machine.smbdHeld)
+    XCTAssertFalse(status.machine.shareProbeFailed)
+  }
+
+  /// BackupHealth's inputs follow the same rule.
+  func testBackupHealthSkipsProbesAndCountsServicesOnlyForAPause() {
+    var report = VMStatus.Report()
+    report.services = ["smbd": "inactive"]
+    report.smbdHoldAge = 60
+    XCTAssertFalse(BackupHealth.probesApply(report))
+    report.services["smbd"] = "active"
+    XCTAssertTrue(BackupHealth.probesApply(report), "running Samba: the probes count")
+    report.services["smbd"] = "inactive"
+    report.smbdHoldAge = VMLayout.smbdHoldLimit + 1
+    XCTAssertTrue(BackupHealth.probesApply(report), "an expired pause is a failure")
+    XCTAssertTrue(BackupHealth.probesApply(nil))
+    // services verdict from the report, same rule
+    var held = VMStatus.Report()
+    held.bundlePrepared = true
+    held.services = Dictionary(uniqueKeysWithValues: VMLayout.services.map { ($0, "active") })
+    held.services["smbd"] = "inactive"
+    XCTAssertEqual(VMStatus.servicesHealthy(held), false)
+    held.smbdHoldAge = 30
+    XCTAssertEqual(VMStatus.servicesHealthy(held), true)
+  }
+
   func testMachineStatesHaveTheirOwnHeadlines() {
     let status = healthyStatus()
     status.machine = MachineStatus()

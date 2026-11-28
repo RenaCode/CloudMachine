@@ -1,11 +1,16 @@
 #!/bin/sh
 # Live check of the 27.11.2026 fix, run INSIDE the machine (limactl shell cmsmb)
-# with no backup running: killing rclone must bring rclone-tm, punchfs,
-# tm-bands-bind and smbd back by themselves, and a smbd that was stopped on
-# purpose must stay stopped.
+# with no backup running. The chain is revived by cm-smb-heal.timer (every 60 s)
+# from the STATE, not from systemd events:
+#   - kill -9 of rclone or punchfs brings rclone-tm, punchfs, tm-bands-bind and
+#     smbd back by themselves;
+#   - a smbd stopped on purpose (fresh hold marker) stays stopped, an EXPIRED
+#     marker (older than 120 min) does not hide a dead smbd;
+#   - a failing bind, once repaired, brings smbd back.
 #
 #   sudo sh restart-chain.sh
 set -eu
+HOLD=/run/cloudmachine-smbd-hold
 
 wait_active() { # unit, seconds
   i=0
@@ -21,29 +26,41 @@ all_up() {
   ls /srv/tm-punch/bands >/dev/null || { echo "FAIL: bands unreadable"; return 1; }
 }
 
+echo "0. the healer timer runs"
+[ "$(systemctl is-active cm-smb-heal.timer)" = active ] || { echo "FAIL: cm-smb-heal.timer"; exit 1; }
+rm -f "$HOLD"
+
 echo "1. baseline"; all_up 30
 echo "2. kill -9 rclone (what the OOM killer does)"
 kill -9 "$(systemctl show -p MainPID --value rclone-tm.service)"
-all_up 600   # rclone scans the VFS cache before it mounts: minutes
-echo "3. smbd stopped on purpose must STAY stopped across a punchfs restart"
-# the app's deliberate stop: marker first (VMLayout.holdSmbd)
-touch /run/cloudmachine-smbd-hold && systemctl stop smbd.service
-systemctl restart punchfs.service
-wait_active tm-bands-bind 180
-sleep 20
-[ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd was started again"; exit 1; }
-systemctl start smbd.service   # its ExecStartPost removes the marker
-[ ! -e /run/cloudmachine-smbd-hold ] || { echo "FAIL: marker left behind"; exit 1; }
+all_up 900   # rclone scans the VFS cache before it mounts: minutes
+echo "3. kill -9 punchfs"
+kill -9 "$(systemctl show -p MainPID --value punchfs.service)"
+all_up 300
+echo "4. smbd stopped on purpose (FRESH marker, as holdSmbd does) must STAY stopped"
+touch "$HOLD" && systemctl stop smbd.service
+sleep 150                                   # at least two healer runs
+[ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd started under a fresh marker"; exit 1; }
+echo "5. the same marker EXPIRED (3 h old) must not hide a dead smbd"
+touch -d '3 hours ago' "$HOLD"
+wait_active smbd 150
+[ ! -e "$HOLD" ] || { echo "FAIL: expired marker left behind"; exit 1; }
+echo "6. an 'attention' marker (failed conversion) is never auto-started"
+echo attention > "$HOLD"; systemctl stop smbd.service
+sleep 150
+[ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd started under an attention marker"; exit 1; }
+systemctl start smbd.service                # its ExecStartPost removes the marker
+[ ! -e "$HOLD" ] || { echo "FAIL: marker left behind after start"; exit 1; }
 all_up 60
-echo "4. a FAILING bind, then its repair: Samba must come back by itself (the 27 Nov incident)"
+echo "7. a FAILING bind, then its repair: Samba comes back by itself (27 Nov incident)"
 d=/run/systemd/system/tm-bands-bind.service.d
 mkdir -p "$d"
-printf '[Service]\nExecStartPre=/bin/false\n' > "$d/cm-test-fail.conf"
 trap 'rm -rf "$d"; systemctl daemon-reload' EXIT
+printf '[Service]\nExecStartPre=/bin/false\n' > "$d/cm-test-fail.conf"
 systemctl daemon-reload
 systemctl restart punchfs.service || true
 sleep 40
 [ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd up with a failing bind"; exit 1; }
-rm -rf "$d"; systemctl daemon-reload   # repair; the bind's retry (15 s) succeeds
-all_up 180
+rm -rf "$d"; systemctl daemon-reload        # repair
+all_up 240
 echo "OK"

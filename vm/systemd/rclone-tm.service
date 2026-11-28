@@ -10,10 +10,8 @@ ConditionPathExists=/etc/rclone/rclone.conf
 ConditionPathExists=/etc/cloudmachine/vm.env
 
 [Service]
-# mount2 (go-fuse), not mount: `rclone mount` answers fsync with OK and does
-# nothing, so APFS barriers inside the Time Machine image were never durable.
-# mount2 passes fsync to the VFS cache item (data + metadata with an up-to-date
-# range list); punchfs adds syncfs() for the metadata file (see punchfs.service).
+# mount2, not mount: `rclone mount` answers fsync with OK and does nothing, so
+# APFS barriers were never durable; mount2 passes fsync to the VFS cache item.
 Type=notify
 # rclone scans the whole VFS cache (up to 120G) before it mounts; after an
 # interrupted upload that takes minutes, and the default 90 s kills it in a loop.

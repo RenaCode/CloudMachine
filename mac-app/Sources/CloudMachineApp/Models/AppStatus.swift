@@ -77,7 +77,7 @@ struct MachineStatus: Equatable {
   /// Age of the hold marker; `nil` = Samba was not stopped on purpose.
   var smbdHoldAge: TimeInterval?
   /// Samba paused on purpose (within the limit): information, not a failure.
-  var smbdHeld: Bool { VMStatus.isHeld(smbdHoldAge) }
+  var smbdHeld: Bool { VMStatus.isHeld(smbdHoldAge, smbdState: services["smbd"]) }
   /// A probe failure counts only while Samba is not paused on purpose.
   var shareProbeFailed: Bool {
     !smbdHeld && (shareRead?.isFailure == true || smb?.isFailure == true)
@@ -211,6 +211,8 @@ extension AppStatus {
   var uploadCardState: UploadState {
     let state = machine.uploadState
     guard state == .upToDate || state.isMovingData else { return state }
+    // The machine runs but its services were not read: not "all good", unknown.
+    if machine.isRunning && machine.servicesHealthy == nil { return .queueUnknown }
     let down = machine.servicesDown.filter { !(machine.smbdHeld && $0 == "smbd") }
     if machine.servicesHealthy == false, !down.isEmpty {
       return .servicesDown(names: down.joined(separator: ", "))

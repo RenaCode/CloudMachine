@@ -317,29 +317,6 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(VMLayout.Guest.smbdHold.hasPrefix("/run/"), "tmpfs: a reboot clears it")
   }
 
-  /// The last sync may outlast the 2 h limit: the marker is touched while the
-  /// operation runs and the touching stops with it.
-  func testKeepHoldFreshTouchesUntilCancelled() async throws {
-    let counter = HoldCounter()
-    let task = VMLayout.keepHoldFresh(every: 0.02) { await counter.bump() }
-    try await Task.sleep(nanoseconds: 200_000_000)
-    task.cancel()
-    await task.value
-    let seen = await counter.value
-    XCTAssertGreaterThanOrEqual(seen, 3)
-    try await Task.sleep(nanoseconds: 100_000_000)
-    let after = await counter.value
-    XCTAssertEqual(after, seen, "no touching after the operation ended")
-  }
-
-  func testLongOperationsKeepTheHoldFresh() throws {
-    let core = Self.repoRoot.appendingPathComponent("mac-app/Sources/CloudMachineCore")
-    for file in ["VMBundlePrep.swift", "DriveEncryption.swift"] {
-      let text = try String(contentsOf: core.appendingPathComponent(file), encoding: .utf8)
-      XCTAssertTrue(text.contains("VMLayout.keepHoldFresh()"), file)
-    }
-  }
-
   /// Every deliberate stop in the app goes through `holdSmbd`; a bare
   /// `systemctl stop smbd` would leave no marker and the bind would restart Samba.
   /// The shutdown quiesce is the one exception: the machine goes down with
@@ -357,9 +334,9 @@ final class VMLayoutTests: XCTestCase {
             || l.trimmingCharacters(in: .whitespaces).hasPrefix("//"),
           "\(file): bare stop: \(l)")
       }
-      holds += text.components(separatedBy: "VMLayout.holdSmbd").count - 1
+      holds += text.components(separatedBy: "VMLayout.holdSamba()").count - 1
     }
-    XCTAssertEqual(holds, 3, "VMBundlePrep (1) and DriveEncryption (2) stop Samba on purpose")
+    XCTAssertEqual(holds, 2, "VMBundlePrep and DriveEncryption stop Samba through holdSamba")
     XCTAssertEqual(VMLayout.quiesceScript, "systemctl stop smbd; sync")
   }
 
@@ -404,12 +381,12 @@ final class VMLayoutTests: XCTestCase {
     return result
   }
 
-  /// 27.11.2026 19:29: the kernel OOM-killed rclone and the dependent units were
-  /// stopped with it. The ONE mechanism that brings them back is systemd's own
-  /// restart propagation along Requires=/BindsTo= (no ExecStartPost that starts
-  /// units: `start` on an active unit does nothing, so a bind left over a dead
-  /// FUSE mount would survive). Killing rclone must reach smbd through the chain,
-  /// and the bind, a one-shot with no retry of its own, must retry.
+  /// 27.11.2026 19:29: the kernel OOM-killed rclone. Stop propagates down the
+  /// chain through Requires=/BindsTo= (a BindsTo= bind is unmounted when punchfs
+  /// dies; a Requires= one would stay bound over a dead FUSE mount), but systemd
+  /// does NOT start the dependents again after a Restart=always (measured
+  /// 28.11.2026 with throw-away units). The healer (`cm-smb-heal`) does that,
+  /// from the state; the bind itself still retries a failed start.
   func testRcloneRestartReachesSambaThroughTheDependencyChain() throws {
     let files = [
       "rclone-tm": try unit("vm/systemd/rclone-tm.service"),
@@ -425,9 +402,9 @@ final class VMLayoutTests: XCTestCase {
       }
     }
     XCTAssertEqual(reached, ["punchfs", "tm-bands-bind", "smbd"])
-    // The old second mechanism must not come back.
-    for name in ["rclone-tm", "punchfs"] {
-      XCTAssertFalse(files[name]!.contains("ExecStartPost"), "\(name): one mechanism only")
+    // Event chains must not come back: the healer is the one reviver.
+    for name in ["rclone-tm", "punchfs", "tm-bands-bind"] {
+      XCTAssertFalse(files[name]!.contains("ExecStartPost"), "\(name): the healer revives")
     }
     let bind = files["tm-bands-bind"]!
     XCTAssertTrue(bind.contains("\nBindsTo=punchfs.service\n"))
@@ -436,57 +413,158 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(bind.contains("\nStartLimitIntervalSec=0\n"), "retries must never run out")
   }
 
-  /// A bind that failed leaves Samba "dependency failed" - but systemd reports
-  /// that unit as Result=success, exactly like a Samba stopped on purpose
-  /// (measured with throw-away units 28.11.2026). So the bind starts Samba after
-  /// a successful bind unless the hold marker exists; the marker is made by every
-  /// path that stops Samba on purpose and removed whenever Samba starts.
-  func testBindStartsSambaUnlessHeldOnPurpose() throws {
-    let bind = try unit("vm/systemd/tm-bands-bind.service")
-    let post = try XCTUnwrap(bind.split(separator: "\n").first { $0.hasPrefix("ExecStartPost=") })
-    XCTAssertTrue(post.contains(VMLayout.Guest.smbdHold))
-    XCTAssertTrue(post.contains("--no-block start smbd.service"))
-    XCTAssertFalse(post.contains("Result"), "Result= never says dependency for a service")
-    let smbd = try unit("vm/systemd/smbd.service.d/cloudmachine.conf")
-    XCTAssertTrue(smbd.contains("ExecStartPost=-/bin/rm -f \(VMLayout.Guest.smbdHold)"))
-  }
-
-  /// Runs the bind's ExecStartPost shell with a fake `systemctl` to prove the
-  /// behaviour: hold marker absent -> Samba is started; present -> it is not.
-  func testBindsSambaStartLogicBehaviour() throws {
-    let bind = try unit("vm/systemd/tm-bands-bind.service")
-    var post = try XCTUnwrap(
-      bind.split(separator: "\n").first { $0.hasPrefix("ExecStartPost=") }.map(String.init))
-    post.removeFirst("ExecStartPost=-".count)  // "-" = ignore exit status
+  /// Runs `vm/cm-smb-heal.sh` against fake `systemctl`, `mountpoint` and `find`.
+  /// `active` lists the units `is-active` reports as active; `marker` is nil (no
+  /// marker), "fresh" (touched now), "old" (older than the limit) or "attention".
+  private func runHealer(
+    active: Set<String>, mounted: Bool = true, marker: String? = nil
+  ) throws -> [String] {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
-    let marker = dir.appendingPathComponent("hold").path
+    func write(_ name: String, _ body: String) throws {
+      let url = dir.appendingPathComponent(name)
+      try ("#!/bin/sh\n" + body + "\n").write(to: url, atomically: true, encoding: .utf8)
+      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
     let log = dir.appendingPathComponent("calls").path
-    try "#!/bin/sh\necho \"$@\" >> \(log)\n".write(
-      to: dir.appendingPathComponent("systemctl"), atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes(
-      [.posixPermissions: 0o755], ofItemAtPath: dir.appendingPathComponent("systemctl").path)
-    // Systemd would run /bin/systemctl; the test points both at the fake.
-    let script = post.replacingOccurrences(of: VMLayout.Guest.smbdHold, with: marker)
-      .replacingOccurrences(of: "/bin/systemctl", with: dir.path + "/systemctl")
-    func run() throws -> String {
-      try? FileManager.default.removeItem(atPath: log)
+    let hold = dir.appendingPathComponent("hold").path
+    let env = dir.appendingPathComponent("bundle.env").path
+    try "CM_BUNDLE=x\n".write(toFile: env, atomically: true, encoding: .utf8)
+    // systemctl is-active --quiet <unit>; systemctl start <unit>
+    let activeList = active.sorted().joined(separator: " ")
+    try write(
+      "systemctl",
+      "if [ \"$1\" = is-active ]; then for u in \(activeList); do [ \"$u\" = \"$3\" ] && exit 0; done; exit 3; fi\necho \"$@\" >> \(log)"
+    )
+    try write("mountpoint", "exit \(mounted ? 0 : 1)")
+    // The healer asks `find <marker> -mmin -120`: print the path when "fresh".
+    try write("find", marker == "fresh" ? "echo \"$1\"" : "exit 0")
+    if let marker {
+      try (marker == "attention" ? "attention\n" : "").write(
+        toFile: hold, atomically: true, encoding: .utf8)
+    }
+    let script = Self.repoRoot.appendingPathComponent("vm/cm-smb-heal.sh").path
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = [script]
+    p.environment = [
+      "PATH": dir.path + ":/usr/bin:/bin", "CM_SMBD_HOLD": hold, "CM_BUNDLE_ENV": env,
+    ]
+    p.standardError = FileHandle.nullDevice
+    try p.run()
+    p.waitUntilExit()
+    let calls = (try? String(contentsOfFile: log, encoding: .utf8)) ?? ""
+    return calls.split(separator: "\n").map(String.init)
+  }
+
+  /// The level-triggered healer replaces event chains (28.11.2026: after
+  /// `kill -9` of a Restart=always unit, BindsTo= dependents stay inactive).
+  func testHealerBringsTheChainBackFromTheState() throws {
+    let up: Set<String> = ["punchfs"]
+    // Bind dead, punchfs up and mounted: bind again; Samba waits for the bind.
+    XCTAssertEqual(try runHealer(active: up), ["start tm-bands-bind"])
+    // punchfs dead: nothing to do (systemd restarts it; no point in binding).
+    XCTAssertEqual(try runHealer(active: []), [])
+    // punchfs up but not mounted yet: nothing.
+    XCTAssertEqual(try runHealer(active: up, mounted: false), [])
+    // Bind up, Samba down, no marker: start Samba.
+    let bound: Set<String> = ["punchfs", "tm-bands-bind"]
+    XCTAssertEqual(try runHealer(active: bound), ["start smbd"])
+    // Everything up: nothing.
+    XCTAssertEqual(try runHealer(active: bound.union(["smbd"])), [])
+  }
+
+  func testHealerRespectsTheHoldMarker() throws {
+    let bound: Set<String> = ["punchfs", "tm-bands-bind"]
+    XCTAssertEqual(try runHealer(active: bound, marker: "fresh"), [], "paused on purpose")
+    XCTAssertEqual(try runHealer(active: bound, marker: "old"), ["start smbd"], "expired")
+    XCTAssertEqual(try runHealer(active: bound, marker: "attention"), [], "never auto-started")
+  }
+
+  /// The script's 120 minutes are the app's limit.
+  func testHealerLimitMatchesTheAppsLimit() throws {
+    let text = try unit("vm/cm-smb-heal.sh")
+    XCTAssertTrue(text.contains("-mmin -\(Int(VMLayout.smbdHoldLimit / 60))"))
+  }
+
+  /// The timer runs the healer every minute and is enabled by provisioning.
+  func testHealerIsScheduledAndInstalled() throws {
+    let yaml = try unit("vm/cmsmb.yaml")
+    XCTAssertTrue(
+      yaml.contains("path: /usr/local/sbin/cm-smb-heal\n  file: cm-smb-heal.sh\n  permissions: 755")
+    )
+    XCTAssertTrue(yaml.contains("enable --now smb-throttle.service cm-smb-heal.timer"))
+    let timer = try unit("vm/systemd/cm-smb-heal.timer")
+    XCTAssertTrue(timer.contains("OnUnitActiveSec=60s"))
+    XCTAssertTrue(timer.contains("WantedBy=timers.target"))
+    XCTAssertTrue(
+      try unit("vm/systemd/cm-smb-heal.service").contains("ExecStart=/usr/local/sbin/cm-smb-heal"))
+    XCTAssertFalse(
+      try unit("vm/systemd/tm-bands-bind.service").contains("ExecStartPost"),
+      "one mechanism: the healer starts Samba")
+  }
+
+  /// The status script's marker line, executed. `stat` is faked (GNU `-c %Y` is
+  /// not on macOS): it answers with the mtime the test sets.
+  func testStatusScriptReadsTheMarker() throws {
+    func run(marker: String?, ageSeconds: Int = 0) throws -> String {
+      let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let hold = dir.appendingPathComponent("hold").path
+      let now = Int(Date().timeIntervalSince1970)
+      let fakeStat = dir.appendingPathComponent("stat")
+      try "#!/bin/sh\n[ -e \(hold) ] && echo \(now - ageSeconds) || exit 1\n".write(
+        to: fakeStat, atomically: true, encoding: .utf8)
+      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeStat.path)
+      if let marker { try marker.write(toFile: hold, atomically: true, encoding: .utf8) }
       let p = Process()
       p.executableURL = URL(fileURLWithPath: "/bin/sh")
-      // `post` is `/bin/sh -c '...'` or a plain command line; hand it to sh.
-      p.arguments = ["-c", script]
-      p.standardError = FileHandle.nullDevice
+      p.arguments = [
+        "-c", VMStatus.holdScript.replacingOccurrences(of: VMLayout.Guest.smbdHold, with: hold),
+      ]
+      p.environment = ["PATH": dir.path + ":/usr/bin:/bin"]
+      let out = Pipe()
+      p.standardOutput = out
       try p.run()
       p.waitUntilExit()
-      return (try? String(contentsOfFile: log, encoding: .utf8)) ?? ""
+      return String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     }
-    // Failed bind earlier, now repaired; nobody stopped Samba on purpose.
+    XCTAssertEqual(VMStatus.report(scriptOutput: try run(marker: nil)).smbdHoldAge, nil)
+    let fresh = VMStatus.report(scriptOutput: try run(marker: "", ageSeconds: 300)).smbdHoldAge
+    XCTAssertEqual(try XCTUnwrap(fresh), 300, accuracy: 5)
+    // "attention" is a failure, not a pause, however fresh.
+    XCTAssertNil(VMStatus.report(scriptOutput: try run(marker: "attention\n")).smbdHoldAge)
+  }
+
+  /// `holdSamba` stops Samba through `holdSmbd`, starts the keep-alive only when
+  /// the stop worked, and the keep-alive refreshes without creating the marker.
+  func testHoldSambaStartsTheKeepAliveOnlyAfterASuccessfulStop() async throws {
+    let counter = HoldCounter()
+    let ran = HoldRecorder()
+    let kept = await VMLayout.holdSamba(
+      run: {
+        await ran.add($0)
+        return true
+      }, every: 0.02, touch: { await counter.bump() })
+    let task = try XCTUnwrap(kept)
+    let scripts = await ran.scripts
+    XCTAssertEqual(scripts, [VMLayout.holdSmbd])
+    try await Task.sleep(nanoseconds: 150_000_000)
+    task.cancel()
+    let seen = await counter.value
+    XCTAssertGreaterThanOrEqual(seen, 2)
+    let failed = await VMLayout.holdSamba(
+      run: { _ in false }, every: 0.02, touch: { await counter.bump() })
+    XCTAssertNil(failed, "a failed stop starts no keep-alive and leaves no hold to keep")
+    XCTAssertTrue(VMLayout.refreshHold.hasPrefix("touch -c "), "never re-creates the marker")
+  }
+
+  /// A failed conversion flags "attention" in the marker.
+  func testFlagNeedsAttentionWritesTheWord() {
     XCTAssertEqual(
-      try run().trimmingCharacters(in: .whitespacesAndNewlines), "--no-block start smbd.service")
-    // Stopped on purpose (image conversion): stays down.
-    FileManager.default.createFile(atPath: marker, contents: nil)
-    XCTAssertEqual(try run(), "")
+      VMLayout.flagSmbdNeedsAttention, "echo attention > \(VMLayout.Guest.smbdHold)")
   }
 
   /// 27.11.2026: rclone grew to 1.57 GB in the 2 GiB, swapless VM. Budget:
@@ -722,4 +800,9 @@ final class VMLayoutTests: XCTestCase {
 private actor HoldCounter {
   private(set) var value = 0
   func bump() { value += 1 }
+}
+
+private actor HoldRecorder {
+  private(set) var scripts: [String] = []
+  func add(_ s: String) { scripts.append(s) }
 }

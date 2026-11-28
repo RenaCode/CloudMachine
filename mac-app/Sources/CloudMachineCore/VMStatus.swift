@@ -18,7 +18,7 @@ public enum VMStatus {
     /// `nil` = no marker, or not read.
     public var smbdHoldAge: TimeInterval?
     /// Samba is paused on purpose, within `VMLayout.smbdHoldLimit`.
-    public var smbdHeld: Bool { VMStatus.isHeld(smbdHoldAge) }
+    public var smbdHeld: Bool { VMStatus.isHeld(smbdHoldAge, smbdState: services["smbd"]) }
     /// How many images Time Machine has created in the machine; `nil` = not read.
     public var imageCount: Int?
     /// The last successful `tm-meta-sync`; `nil` = not read.
@@ -82,19 +82,33 @@ public enum VMStatus {
 
   private static let markerScript: String =
     "echo BUNDLEENV $([ -s \(VMLayout.Guest.bundleEnv) ] && echo 1 || echo 0); "
-    + "echo SMBDHOLD $(m=$(stat -c %Y \(VMLayout.Guest.smbdHold) 2>/dev/null) && echo $(($(date +%s) - m)) || echo -1); "
+    + holdScript
     + "echo IMAGES $(ls -d \(VMLayout.Guest.localRoot)/*.sparsebundle 2>/dev/null | wc -l); "
     + "echo METASYNC $(stat -c %Y \(VMLayout.Guest.metaSyncStamp) 2>/dev/null || echo 0) "
     + "$(date +%s); "
+
+  /// `SMBDHOLD <age in s>`; -1 = no marker, or one that says "attention" (an
+  /// operation failed and left Samba stopped: not a pause, a failure).
+  static let holdScript: String =
+    "if grep -qs attention \(VMLayout.Guest.smbdHold); then echo SMBDHOLD -1; "
+    + "elif m=$(stat -c %Y \(VMLayout.Guest.smbdHold) 2>/dev/null); "
+    + "then echo SMBDHOLD $(($(date +%s) - m)); else echo SMBDHOLD -1; fi; "
 
   private static let lastUploadScript: String =
     "l=$(tac \(VMLayout.Guest.rcloneLog) 2>/dev/null | grep -m1 'vfs cache: upload succeeded'); "
     + "if [ -n \"$l\" ]; then echo LASTUPLOAD $(date -d \"$(echo \"$l\" | cut -c1-19 | tr / -)\" +%s) "
     + "$(date +%s); else echo LASTUPLOAD 0 $(date +%s); fi; "
 
-  public static func isHeld(_ age: TimeInterval?) -> Bool {
-    guard let age else { return false }
+  /// Paused on purpose: a marker within the limit AND Samba not running. A
+  /// stale marker next to a running Samba pauses nothing.
+  public static func isHeld(_ age: TimeInterval?, smbdState: String?) -> Bool {
+    guard let age, smbdState != "active" else { return false }
     return age <= VMLayout.smbdHoldLimit
+  }
+
+  public static func servicesHealthy(_ report: Report) -> Bool? {
+    servicesHealthy(
+      report.services, bundlePrepared: report.bundlePrepared, smbdHeld: report.smbdHeld)
   }
 
   static let script: String =
@@ -290,9 +304,7 @@ public enum VMStatus {
         L10n.tr("Service %@: %@", service.padding(toLength: 18, withPad: " ", startingAt: 0), state)
       )
     }
-    if servicesHealthy(
-      report.services, bundlePrepared: report.bundlePrepared, smbdHeld: report.smbdHeld) != true
-    {
+    if servicesHealthy(report) != true {
       healthy = false
     }
     let share = shareLines(

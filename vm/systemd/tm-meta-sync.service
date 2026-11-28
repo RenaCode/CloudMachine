@@ -1,8 +1,5 @@
-# CloudMachine: the image's files outside bands/ (Info.plist, token, mapped/,
-# Time Machine's plists) live only on the machine's ext4 disk, and that disk is
-# kept out of Time Machine. Without a copy on Drive the bands alone cannot be
-# opened again after the Mac or the machine is lost - see vm/README.md
-# ("Restoring"). Copied next to the bands: gdrive:CloudMachine/<folder>-tm-meta.
+# CloudMachine: the image's files outside bands/ (Info.plist, token, ...) live only
+# on the machine's disk; copied to gdrive:CloudMachine/<folder>-tm-meta (vm/README.md).
 [Unit]
 Description=Copy of the Time Machine image's files outside bands/ to Google Drive
 After=rclone-tm.service tm-bands-bind.service

@@ -395,15 +395,21 @@ public enum VMLayout {
   /// cannot hide a Samba that is simply dead. Image conversion takes minutes.
   public static let smbdHoldLimit: TimeInterval = 2 * 3600
 
+  /// Refreshes the marker's mtime; `-c` never creates it, so a marker removed by
+  /// Samba's start is not brought back.
+  public static let refreshHold = "touch -c \(Guest.smbdHold)"
+
+  /// The operation failed and left Samba stopped: the marker says "attention",
+  /// so the app shows it red at once and the healer never restarts Samba.
+  public static let flagSmbdNeedsAttention = "echo attention > \(Guest.smbdHold)"
+
   /// Keeps a deliberate hold fresh while the operation that made it runs (the
   /// last encryption sync alone may take 6 h, more than `smbdHoldLimit`), by
-  /// touching the marker every 10 min. Cancel the task when the operation ends:
-  /// a Samba left stopped then becomes a failure after the limit, as it should.
+  /// refreshing the marker every 10 min. Cancel the task when the operation ends.
   public static func keepHoldFresh(
     every interval: TimeInterval = 600,
     touch: @escaping @Sendable () async -> Void = {
-      _ = try? await rootShell(
-        "[ -e \(Guest.smbdHold) ] && touch \(Guest.smbdHold)", timeout: 60)
+      _ = try? await rootShell(refreshHold, timeout: 60)
     }
   ) -> Task<Void, Never> {
     Task {
@@ -413,6 +419,19 @@ public enum VMLayout {
         await touch()
       }
     }
+  }
+
+  /// Stops Samba on purpose and keeps the hold fresh; `nil` = the stop failed
+  /// (no marker is left). The caller cancels the returned task when done.
+  public static func holdSamba(
+    run: (String) async -> Bool = { (try? await rootShell($0, timeout: 120))?.succeeded == true },
+    every interval: TimeInterval = 600,
+    touch: @escaping @Sendable () async -> Void = {
+      _ = try? await rootShell(refreshHold, timeout: 60)
+    }
+  ) async -> Task<Void, Never>? {
+    guard await run(holdSmbd) else { return nil }
+    return keepHoldFresh(every: interval, touch: touch)
   }
 
   static let quiesceScript = "systemctl stop smbd; sync"

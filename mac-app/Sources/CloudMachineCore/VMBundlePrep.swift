@@ -131,9 +131,8 @@ public enum VMBundlePrep {
 
     // 6. Samba off, so Time Machine cannot open the image while we copy it.
     step("stopping smbd")
-    guard (try? await VMLayout.rootShell(VMLayout.holdSmbd, timeout: 120))?.succeeded == true
+    guard let keepHold = await VMLayout.holdSamba()
     else { return fail(L10n.tr("Could not stop smbd in the machine.")) }
-    let keepHold = VMLayout.keepHoldFresh()
     defer { keepHold.cancel() }
     func failRestoringSamba(_ message: String) async -> Outcome {
       _ = try? await VMLayout.rootShell("rm -rf \(staging); systemctl start smbd", timeout: 120)
@@ -239,6 +238,8 @@ public enum VMBundlePrep {
       envLine: VMLayout.envLine("CM_BUNDLE", name))
     let installed = try? await VMLayout.rootShell(install, timeout: 3600)
     guard installed?.succeeded == true else {
+      // Samba stays stopped: say so loudly (red at once, never auto-restarted).
+      _ = try? await VMLayout.rootShell(VMLayout.flagSmbdNeedsAttention, timeout: 60)
       return fail(
         L10n.tr(
           "Installing the converted image FAILED: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original is in %@ in the machine.",
