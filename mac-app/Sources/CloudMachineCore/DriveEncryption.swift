@@ -323,6 +323,13 @@ public enum DriveEncryption {
   /// bands and metadata from `direction`'s source to its target, then
   /// `cryptcheck` every file (contents, not just sizes). `set -e`: any
   /// difference fails the script, and nothing is moved.
+  /// Shown when an earlier install failed halfway and left Samba stopped.
+  static var attentionRefusal: String {
+    L10n.tr(
+      "Samba was left stopped by an image installation that failed halfway, so the image is half-installed. Restore or verify the bands first (see vm/README.md)."
+    )
+  }
+
   static func finalSyncScript(_ remotes: Remotes, direction: Direction) -> String {
     let p = VMLayout.shellQuoted
     let flags = "--transfers 8 --drive-chunk-size 32M"
@@ -717,12 +724,7 @@ public enum DriveEncryption {
     // guard) cannot write a band that the sync has already passed.
     // A failed image installation left Samba stopped on purpose: only repeating
     // vm-prepare-bundle clears that; this operation must not touch it.
-    if await VMLayout.attentionRecorded() {
-      return fail(
-        L10n.tr(
-          "Samba was left stopped by a failed image installation. Repeat the installation (vm-prepare-bundle) first."
-        ))
-    }
+    if await VMLayout.attentionRecorded() { return fail(Self.attentionRefusal) }
     guard let keepHold = await VMLayout.holdSamba(refusingUnderAttention: true)
     else { return fail(L10n.tr("Could not stop smbd in the machine.")) }
     defer { keepHold.cancel() }
@@ -739,6 +741,10 @@ public enum DriveEncryption {
     }
     let moved = try? await VMLayout.rootShell(
       repointScript(oldRemote: old, newRemote: new, stamp: VMBundlePrep.stamp()), timeout: 1800)
+    if moved?.exitCode == 4 {
+      // Refused: an install left the image half-done. Nothing ran; Samba stays stopped.
+      return fail(Self.attentionRefusal)
+    }
     guard moved?.succeeded == true, moved?.stdout.contains("CM-REPOINTED") == true else {
       // The script starts Samba on its own failures; not if it never ran
       // to the end (no answer from limactl). Idempotent either way.

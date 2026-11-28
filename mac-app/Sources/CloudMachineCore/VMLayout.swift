@@ -408,9 +408,15 @@ public enum VMLayout {
   public static let startSmbd = "systemctl start smbd && systemctl is-active --quiet smbd"
 
   /// Inside the install script, in the SAME shell: any failure records attention.
+  /// Only once the script has changed something (`MUTATED=1`): a failure before
+  /// that leaves the image as it was and Samba is simply started again. The
+  /// trap says so on stderr (`CM-MUTATED`) so the app can tell the cases apart.
   public static let recordAttentionOnFailure =
-    "trap 'rc=$?; [ $rc -eq 0 ] || { \(flagSmbdNeedsAttention); }' EXIT"
-  public static let clearAttention = "rm -f \(Guest.smbdAttention); trap - EXIT"
+    "trap 'rc=$?; [ $rc -eq 0 ] || [ \"${MUTATED:-0}\" != 1 ] || "
+    + "{ echo CM-MUTATED >&2; \(flagSmbdNeedsAttention); }' EXIT"
+  /// After success: attention off, trap off, and a sentinel on stdout so "installed,
+  /// but Samba did not start" is not mistaken for a failed install.
+  public static let clearAttention = "rm -f \(Guest.smbdAttention); trap - EXIT; echo CM-INSTALLED"
 
   /// Whether the attention file is really there (after a failed install).
   public static func attentionRecorded(

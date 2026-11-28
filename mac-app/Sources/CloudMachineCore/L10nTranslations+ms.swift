@@ -979,8 +979,10 @@ extension L10nTranslations {
       "Percubaan seterusnya: %@",
     "Lima is not installed - run in Terminal: %@":
       "Lima belum dipasang - jalankan dalam Terminal: %@",
-    "Samba was left stopped by a failed image installation. Repeat the installation (vm-prepare-bundle) first.":
-      "Samba ditinggalkan berhenti oleh pemasangan imej yang gagal. Ulangi pemasangan (vm-prepare-bundle) dahulu.",
+    "Samba was left stopped by an image installation that failed halfway, so the image is half-installed. Restore or verify the bands first (see vm/README.md).":
+      "Samba ditinggalkan berhenti kerana pemasangan imej gagal di pertengahan, jadi imej dipasang separuh sahaja. Pulihkan atau sahkan jalur (band) dahulu (lihat vm/README.md).",
+    "The image was installed, but Samba did not start. The healer starts it within a minute; check: cloudmachine-agent vm-status":
+      "Imej telah dipasang, tetapi Samba tidak bermula. Pemulih akan memulakannya dalam masa seminit; semak: cloudmachine-agent vm-status",
     "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
       "Pemasangan imej gagal dan tidak dapat direkodkan bahawa Samba mesti kekal berhenti. Jangan mulakan Samba sebelum imej disemak.",
   ]

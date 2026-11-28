@@ -618,11 +618,11 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(VMLayout.refreshHold.hasPrefix("touch -c "), "never re-creates the marker")
   }
 
-  /// Runs a shell fragment with the given paths swapped in; returns the exit
-  /// status. `bin` holds fake commands (name -> script body).
-  private func shell(
+  /// Runs a shell fragment with the given paths swapped in. `bin` holds fake
+  /// commands (name -> script body).
+  private func shellOutput(
     _ script: String, attention: String, hold: String? = nil, bin: [String: String] = [:]
-  ) throws -> Int32 {
+  ) throws -> (status: Int32, stdout: String, stderr: String) {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -639,10 +639,23 @@ final class VMLayoutTests: XCTestCase {
     p.executableURL = URL(fileURLWithPath: "/bin/sh")
     p.arguments = ["-c", text]
     p.environment = ["PATH": dir.path + ":/usr/bin:/bin"]
-    p.standardError = FileHandle.nullDevice
+    let out = Pipe()
+    let err = Pipe()
+    p.standardOutput = out
+    p.standardError = err
     try p.run()
     p.waitUntilExit()
-    return p.terminationStatus
+    return (
+      p.terminationStatus,
+      String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
+      String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    )
+  }
+
+  private func shell(
+    _ script: String, attention: String, hold: String? = nil, bin: [String: String] = [:]
+  ) throws -> Int32 {
+    try shellOutput(script, attention: attention, hold: hold, bin: bin).status
   }
 
   private func tempDir() throws -> URL {
@@ -653,7 +666,7 @@ final class VMLayoutTests: XCTestCase {
 
   /// With the attention file set, the repoint script and the pre-hold check
   /// refuse (exit 4) BEFORE touching Samba, the marker or any unit.
-  func testOperationsRefuseUnderAttention() throws {
+  func testOperationsRefuseUnderAttention() async throws {
     let dir = try tempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let attention = dir.appendingPathComponent("attention").path
@@ -665,8 +678,13 @@ final class VMLayoutTests: XCTestCase {
     let repoint = DriveEncryption.repointScript(
       oldRemote: "gdrive:CloudMachine/m-tm", newRemote: "gdrive-crypt:tm", stamp: "s")
     XCTAssertEqual(try shell(repoint, attention: attention, hold: hold, bin: bin), 4)
-    let guarded = "[ ! -e \(VMLayout.Guest.smbdAttention) ] && \(VMLayout.holdSmbd)"
-    XCTAssertNotEqual(try shell(guarded, attention: attention, hold: hold, bin: bin), 0)
+    // The real `holdSamba`, its script run in a real shell: it must come back nil.
+    let held = await VMLayout.holdSamba(
+      refusingUnderAttention: true,
+      run: { script in
+        ((try? self.shell(script, attention: attention, hold: hold, bin: bin)) ?? 1) == 0
+      }, every: 0.02, touch: {})
+    XCTAssertNil(held, "holdSamba refuses under attention")
     XCTAssertFalse(FileManager.default.fileExists(atPath: hold), "no marker made")
     XCTAssertFalse(FileManager.default.fileExists(atPath: calls), "nothing was run")
     XCTAssertTrue(FileManager.default.fileExists(atPath: attention), "attention untouched")
@@ -681,26 +699,107 @@ final class VMLayoutTests: XCTestCase {
     let dir = try tempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let attention = dir.appendingPathComponent("attention").path
-    let failing = "set -eu; \(VMLayout.recordAttentionOnFailure); false"
+    let failing = "set -eu; MUTATED=1; \(VMLayout.recordAttentionOnFailure); false"
     XCTAssertNotEqual(try shell(failing, attention: attention), 0)
     XCTAssertTrue(FileManager.default.fileExists(atPath: attention), "recorded")
     // Success path: clears an old record and does not re-create it.
-    let ok = "set -eu; \(VMLayout.recordAttentionOnFailure); \(VMLayout.clearAttention); true"
+    let ok =
+      "set -eu; MUTATED=1; \(VMLayout.recordAttentionOnFailure); \(VMLayout.clearAttention); true"
     XCTAssertEqual(try shell(ok, attention: attention), 0)
     XCTAssertFalse(FileManager.default.fileExists(atPath: attention), "cleared by success")
     // A failed WRITE (unwritable location): the script still fails, nothing is
     // recorded - and the app notices via attentionRecorded.
     let nowhere = dir.appendingPathComponent("no/such/dir/attention").path
-    let broken = "set -eu; \(VMLayout.recordAttentionOnFailure); false"
+    let broken = "set -eu; MUTATED=1; \(VMLayout.recordAttentionOnFailure); false"
     XCTAssertNotEqual(try shell(broken, attention: nowhere), 0)
     XCTAssertFalse(FileManager.default.fileExists(atPath: nowhere))
     // The real install script wires them in: trap first, clear just before the start.
     let script = VMBundlePrep.installScript(
       name: "n.sparsebundle", staging: "/tmp/s", aside: "/tmp/a", envLine: "CM_BUNDLE=n")
     let lines = script.split(separator: "\n").map(String.init)
-    XCTAssertEqual(lines[1], VMLayout.recordAttentionOnFailure)
+    XCTAssertEqual(lines[1], "MUTATED=0")
+    XCTAssertEqual(lines[2], VMLayout.recordAttentionOnFailure)
+    let check = try XCTUnwrap(lines.firstIndex { $0.contains("appeared meanwhile") })
+    let mutated = try XCTUnwrap(lines.firstIndex(of: "MUTATED=1"))
+    let move = try XCTUnwrap(lines.firstIndex { $0.hasPrefix("mv ") })
+    let copy = try XCTUnwrap(lines.firstIndex { $0.hasPrefix("cp -r") })
+    XCTAssertLessThan(check, mutated, "the early exit 3 comes before any change")
+    XCTAssertLessThan(mutated, move)
+    XCTAssertLessThan(move, copy)
     XCTAssertEqual(lines[lines.count - 2], VMLayout.clearAttention)
     XCTAssertEqual(lines.last, VMLayout.startSmbd)
+  }
+
+  /// A failure BEFORE the first change (exit 3: bands on Drive appeared) leaves no
+  /// attention file and no sentinel: the image is as it was. After `MUTATED=1`
+  /// both are written. Run on the real install script and on the trap alone.
+  func testEarlyInstallFailureWritesNoAttention() throws {
+    let dir = try tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let attention = dir.appendingPathComponent("attention").path
+    let drive = dir.appendingPathComponent("drive")
+    try FileManager.default.createDirectory(at: drive, withIntermediateDirectories: true)
+    FileManager.default.createFile(
+      atPath: drive.appendingPathComponent("a-band").path, contents: nil)
+    let calls = dir.appendingPathComponent("calls").path
+    let rec = "echo \"$0 $@\" >> \(calls)"
+    let script = VMBundlePrep.installScript(
+      name: "n.sparsebundle", staging: "/tmp/s", aside: "/tmp/a", envLine: "CM_BUNDLE=n"
+    )
+    .replacingOccurrences(of: "/srv/tm/bands", with: drive.path)
+    let early = try shellOutput(
+      script, attention: attention,
+      bin: ["mv": rec, "cp": rec, "tar": rec, "systemctl": rec, "install": rec])
+    XCTAssertEqual(early.status, 3)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: attention), "nothing changed")
+    XCTAssertFalse(early.stderr.contains("CM-MUTATED"))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: calls), "no state-changing command ran")
+    XCTAssertEqual(
+      VMBundlePrep.installFailure(
+        stdout: early.stdout, stderr: early.stderr, attentionRecorded: false),
+      .notChanged)
+    // After the first change: recorded, with the sentinel.
+    let late = try shellOutput(
+      "set -eu; MUTATED=0; \(VMLayout.recordAttentionOnFailure); MUTATED=1; false",
+      attention: attention)
+    XCTAssertNotEqual(late.status, 0)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: attention))
+    XCTAssertEqual(
+      VMBundlePrep.installFailure(
+        stdout: late.stdout, stderr: late.stderr, attentionRecorded: true),
+      .halfInstalled)
+  }
+
+  /// "Installed, but Samba did not start" is its own case (the healer starts it),
+  /// never the "could not record attention" one; the messages follow the facts.
+  func testInstallFailureCasesAndMessages() throws {
+    XCTAssertEqual(
+      VMBundlePrep.installFailure(stdout: "x CM-INSTALLED\n", stderr: "", attentionRecorded: false),
+      .installedSambaDown)
+    XCTAssertEqual(
+      VMBundlePrep.installFailure(stdout: "", stderr: "CM-MUTATED", attentionRecorded: false),
+      .halfInstalledUnrecorded)
+    XCTAssertEqual(
+      VMBundlePrep.installFailure(stdout: "", stderr: "CM-MUTATED", attentionRecorded: true),
+      .halfInstalled)
+    // The install script prints the sentinel only after attention is cleared.
+    XCTAssertTrue(VMLayout.clearAttention.hasSuffix("echo CM-INSTALLED"))
+    let started = VMBundlePrep.notChangedMessage("boom", sambaStarted: true)
+    XCTAssertTrue(started.contains("smbd started again"))
+    let notStarted = VMBundlePrep.notChangedMessage("boom", sambaStarted: false)
+    XCTAssertEqual(notStarted, "boom", "no claim that Samba started")
+    XCTAssertFalse(notStarted.contains("started again"))
+  }
+
+  /// The pre-check text and the exit-4 refusal of the other operations say what
+  /// to do: the image is half-installed, restore or verify the bands.
+  func testRefusalTextPointsAtTheReadme() {
+    let text = DriveEncryption.attentionRefusal
+    XCTAssertTrue(text.contains("half-installed"))
+    XCTAssertTrue(text.contains("vm/README.md"))
+    let readme = (try? unit("vm/README.md")) ?? ""
+    XCTAssertTrue(readme.contains("sudo rm /var/lib/cloudmachine/smbd-attention"))
+    XCTAssertTrue(readme.contains("half-installed"))
   }
 
   func testAttentionRecordedAsksTheMachine() async {

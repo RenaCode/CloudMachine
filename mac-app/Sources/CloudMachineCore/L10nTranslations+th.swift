@@ -979,8 +979,10 @@ extension L10nTranslations {
       "ความพยายามครั้งถัดไป: %@",
     "Lima is not installed - run in Terminal: %@":
       "ยังไม่ได้ติดตั้ง Lima - รันใน Terminal: %@",
-    "Samba was left stopped by a failed image installation. Repeat the installation (vm-prepare-bundle) first.":
-      "Samba ถูกหยุดค้างไว้เพราะการติดตั้งอิมเมจล้มเหลว ให้ติดตั้งซ้ำ (vm-prepare-bundle) ก่อน",
+    "Samba was left stopped by an image installation that failed halfway, so the image is half-installed. Restore or verify the bands first (see vm/README.md).":
+      "Samba ถูกหยุดค้างไว้เพราะการติดตั้งอิมเมจล้มเหลวกลางคัน อิมเมจจึงติดตั้งไม่ครบ ให้กู้คืนหรือตรวจสอบแบนด์ก่อน (ดู vm/README.md)",
+    "The image was installed, but Samba did not start. The healer starts it within a minute; check: cloudmachine-agent vm-status":
+      "ติดตั้งอิมเมจแล้ว แต่ Samba ไม่เริ่มทำงาน ตัวซ่อมจะเริ่มให้ภายในหนึ่งนาที ตรวจสอบ: cloudmachine-agent vm-status",
     "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
       "การติดตั้งอิมเมจล้มเหลว และบันทึกไม่ได้ว่า Samba ต้องหยุดอยู่ อย่าเริ่ม Samba จนกว่าจะตรวจสอบอิมเมจแล้ว",
   ]
