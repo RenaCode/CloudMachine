@@ -12,7 +12,7 @@ age() {
 
 # 0. start-limit-hit is final: reset and start, at most 6 times an hour (README).
 R="${CM_HEAL_RESETS:-/run/cloudmachine-heal-resets}"
-recent() { awk -v n="$(date +%s)" 'n - $1 < 3600' "$R" 2>/dev/null; }
+recent() { awk -v n="$(date +%s)" 'n >= $1 && n - $1 < 3600' "$R" 2>/dev/null; }
 for u in rclone-tm punchfs tm-bands-bind; do
   if ! active "$u" \
     && [ "$(systemctl show -p Result --value "$u" 2>/dev/null)" = start-limit-hit ] \

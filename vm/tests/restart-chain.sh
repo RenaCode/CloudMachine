@@ -79,11 +79,10 @@ else
   echo "   /srv/tm is already unmounted: a stop hook cleaned it (not the case under test)"
 fi
 all_up 180
-if [ "$dead" = yes ]; then
-  journalctl -u rclone-tm --since "$since" --no-pager | grep -q 'cm-unmount-stale: /srv/tm: unmounting' \
-    || { echo "FAIL: the dead mount went, but not through cm-unmount-stale"; exit 1; }
-  echo "   cm-unmount-stale cleared it"
-fi
+# Either way the script must have done it (ExecStop logs to the same journal).
+journalctl -u rclone-tm --since "$since" --no-pager | grep -q 'cm-unmount-stale: /srv/tm: unmounting' \
+  || { echo "FAIL: no 'cm-unmount-stale: /srv/tm: unmounting' in the journal since $since"; exit 1; }
+echo "   cm-unmount-stale cleared it"
 echo "3. kill -9 punchfs"
 kill_and_wait punchfs 60
 all_up 300

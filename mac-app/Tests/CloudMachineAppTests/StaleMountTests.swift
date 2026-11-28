@@ -315,6 +315,14 @@ final class StaleMountTests: XCTestCase {
     XCTAssertEqual(again.resetsFile.count, 1, "old entries are dropped")
   }
 
+  /// A clock set back leaves entries in the future: they must not count for ever.
+  func testHealerIgnoresResetsFromTheFuture() throws {
+    let future = Array(repeating: now + 7200, count: 6)
+    let r = try runHealer(active: [], startLimit: ["punchfs"], resets: future)
+    XCTAssertEqual(r.calls, ["reset-failed punchfs", "--no-block start punchfs"])
+    XCTAssertEqual(r.resetsFile.count, 1)
+  }
+
   /// Any other failure (Result=exit-code: the old-binary exit 78, a real crash) stays visible.
   func testHealerLeavesOtherFailuresAlone() throws {
     for result in ["exit-code", "signal", "oom-kill", "timeout"] {
