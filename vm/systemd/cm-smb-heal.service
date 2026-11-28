@@ -1,5 +1,6 @@
 [Unit]
 Description=Heal: bind and Samba back up after a restart of the chain
 [Service]
+TimeoutStartSec=30
 Type=oneshot
 ExecStart=/usr/local/sbin/cm-smb-heal

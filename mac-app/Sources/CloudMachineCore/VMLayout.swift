@@ -45,6 +45,10 @@ public enum VMLayout {
     /// Samba starts. Under /run: a reboot clears it. The bind starts Samba only
     /// without it.
     public static let smbdHold = "/run/cloudmachine-smbd-hold"
+    /// A failed operation left Samba stopped. On the disk, NOT in /run: a reboot
+    /// must not start Samba on a half-installed image. Samba's drop-in refuses to
+    /// start while it exists; a new attempt (`holdSmbd`) removes it.
+    public static let smbdAttention = "/var/lib/cloudmachine/smbd-attention"
     public static let rcloneLog = "/var/log/rclone-tm.log"
   }
 
@@ -389,7 +393,8 @@ public enum VMLayout {
   /// A deliberate stop of Samba: leaves the marker so nothing restarts it.
   /// A stop that fails removes the marker again: Samba is still running.
   public static let holdSmbd =
-    "touch \(Guest.smbdHold) && { systemctl stop smbd || { rm -f \(Guest.smbdHold); false; }; }"
+    "rm -f \(Guest.smbdAttention); : > \(Guest.smbdHold) && "
+    + "{ systemctl stop smbd || { rm -f \(Guest.smbdHold); false; }; }"
 
   /// A hold older than this is a failure again, so that a forgotten marker
   /// cannot hide a Samba that is simply dead. Image conversion takes minutes.
@@ -399,9 +404,11 @@ public enum VMLayout {
   /// Samba's start is not brought back.
   public static let refreshHold = "touch -c \(Guest.smbdHold)"
 
-  /// The operation failed and left Samba stopped: the marker says "attention",
-  /// so the app shows it red at once and the healer never restarts Samba.
-  public static let flagSmbdNeedsAttention = "echo attention > \(Guest.smbdHold)"
+  /// The operation failed and left Samba stopped: the persistent attention file
+  /// makes the app show it red at once; nothing restarts Samba until a new
+  /// attempt (`holdSmbd`) removes the file.
+  public static let flagSmbdNeedsAttention =
+    "mkdir -p /var/lib/cloudmachine && echo attention > \(Guest.smbdAttention)"
 
   /// Keeps a deliberate hold fresh while the operation that made it runs (the
   /// last encryption sync alone may take 6 h, more than `smbdHoldLimit`), by

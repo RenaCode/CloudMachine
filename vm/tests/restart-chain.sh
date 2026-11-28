@@ -5,12 +5,15 @@
 #   - kill -9 of rclone or punchfs brings rclone-tm, punchfs, tm-bands-bind and
 #     smbd back by themselves;
 #   - a smbd stopped on purpose (fresh hold marker) stays stopped, an EXPIRED
-#     marker (older than 120 min) does not hide a dead smbd;
+#     marker (older than 120 min) does not hide a dead smbd, the persistent
+#     attention file blocks it until removed (the healer starts with --no-block,
+#     so it never hangs past its 60 s period);
 #   - a failing bind, once repaired, brings smbd back.
 #
 #   sudo sh restart-chain.sh
 set -eu
 HOLD=/run/cloudmachine-smbd-hold
+ATTENTION=/var/lib/cloudmachine/smbd-attention
 
 wait_active() { # unit, seconds
   i=0
@@ -45,12 +48,14 @@ echo "5. the same marker EXPIRED (3 h old) must not hide a dead smbd"
 touch -d '3 hours ago' "$HOLD"
 wait_active smbd 150
 [ ! -e "$HOLD" ] || { echo "FAIL: expired marker left behind"; exit 1; }
-echo "6. an 'attention' marker (failed conversion) is never auto-started"
-echo attention > "$HOLD"; systemctl stop smbd.service
+echo "6. the persistent attention file (failed conversion): never auto-started, even after a reboot-like restart"
+mkdir -p /var/lib/cloudmachine; echo attention > "$ATTENTION"; systemctl stop smbd.service
 sleep 150
-[ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd started under an attention marker"; exit 1; }
-systemctl start smbd.service                # its ExecStartPost removes the marker
-[ ! -e "$HOLD" ] || { echo "FAIL: marker left behind after start"; exit 1; }
+[ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd started under attention"; exit 1; }
+systemctl start smbd.service                # skipped by ConditionPathExists=!
+[ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd ignored the attention file"; exit 1; }
+rm -f "$ATTENTION"                          # what a new attempt (holdSmbd) does
+wait_active smbd 150                        # the healer starts it again
 all_up 60
 echo "7. a FAILING bind, then its repair: Samba comes back by itself (27 Nov incident)"
 d=/run/systemd/system/tm-bands-bind.service.d
@@ -59,8 +64,8 @@ trap 'rm -rf "$d"; systemctl daemon-reload' EXIT
 printf '[Service]\nExecStartPre=/bin/false\n' > "$d/cm-test-fail.conf"
 systemctl daemon-reload
 systemctl restart punchfs.service || true
-sleep 40
+sleep 130                                   # more than two healer periods
 [ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd up with a failing bind"; exit 1; }
 rm -rf "$d"; systemctl daemon-reload        # repair
-all_up 240
+all_up 300                                  # bind retry (15 s) + healer (<= 60 s) + margin
 echo "OK"

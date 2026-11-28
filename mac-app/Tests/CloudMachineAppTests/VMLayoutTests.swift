@@ -413,11 +413,12 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(bind.contains("\nStartLimitIntervalSec=0\n"), "retries must never run out")
   }
 
-  /// Runs `vm/cm-smb-heal.sh` against fake `systemctl`, `mountpoint` and `find`.
-  /// `active` lists the units `is-active` reports as active; `marker` is nil (no
-  /// marker), "fresh" (touched now), "old" (older than the limit) or "attention".
+  /// Runs `vm/cm-smb-heal.sh` for real: only `systemctl` and `mountpoint` are
+  /// fakes; `stat`, `date` and the file mtimes are the real ones. `holdAgeMinutes`
+  /// = nil means no marker; `attention` = the persistent attention file exists.
   private func runHealer(
-    active: Set<String>, mounted: Bool = true, marker: String? = nil
+    active: Set<String>, mounted: Bool = true, holdAgeMinutes: Double? = nil,
+    attention: Bool = false
   ) throws -> [String] {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -429,27 +430,27 @@ final class VMLayoutTests: XCTestCase {
     }
     let log = dir.appendingPathComponent("calls").path
     let hold = dir.appendingPathComponent("hold").path
+    let attentionFile = dir.appendingPathComponent("attention").path
     let env = dir.appendingPathComponent("bundle.env").path
     try "CM_BUNDLE=x\n".write(toFile: env, atomically: true, encoding: .utf8)
-    // systemctl is-active --quiet <unit>; systemctl start <unit>
     let activeList = active.sorted().joined(separator: " ")
     try write(
       "systemctl",
       "if [ \"$1\" = is-active ]; then for u in \(activeList); do [ \"$u\" = \"$3\" ] && exit 0; done; exit 3; fi\necho \"$@\" >> \(log)"
     )
     try write("mountpoint", "exit \(mounted ? 0 : 1)")
-    // The healer asks `find <marker> -mmin -120`: print the path when "fresh".
-    try write("find", marker == "fresh" ? "echo \"$1\"" : "exit 0")
-    if let marker {
-      try (marker == "attention" ? "attention\n" : "").write(
-        toFile: hold, atomically: true, encoding: .utf8)
+    if let minutes = holdAgeMinutes {
+      FileManager.default.createFile(
+        atPath: hold, contents: nil,
+        attributes: [.modificationDate: Date().addingTimeInterval(-minutes * 60)])
     }
-    let script = Self.repoRoot.appendingPathComponent("vm/cm-smb-heal.sh").path
+    if attention { FileManager.default.createFile(atPath: attentionFile, contents: nil) }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/bin/sh")
-    p.arguments = [script]
+    p.arguments = [Self.repoRoot.appendingPathComponent("vm/cm-smb-heal.sh").path]
     p.environment = [
-      "PATH": dir.path + ":/usr/bin:/bin", "CM_SMBD_HOLD": hold, "CM_BUNDLE_ENV": env,
+      "PATH": dir.path + ":/usr/bin:/bin", "CM_SMBD_HOLD": hold,
+      "CM_SMBD_ATTENTION": attentionFile, "CM_BUNDLE_ENV": env,
     ]
     p.standardError = FileHandle.nullDevice
     try p.run()
@@ -459,33 +460,76 @@ final class VMLayoutTests: XCTestCase {
   }
 
   /// The level-triggered healer replaces event chains (28.11.2026: after
-  /// `kill -9` of a Restart=always unit, BindsTo= dependents stay inactive).
+  /// `kill -9` of a Restart=always unit, BindsTo= dependents stay inactive). It
+  /// never blocks: starts are `--no-block`.
   func testHealerBringsTheChainBackFromTheState() throws {
     let up: Set<String> = ["punchfs"]
-    // Bind dead, punchfs up and mounted: bind again; Samba waits for the bind.
-    XCTAssertEqual(try runHealer(active: up), ["start tm-bands-bind"])
-    // punchfs dead: nothing to do (systemd restarts it; no point in binding).
-    XCTAssertEqual(try runHealer(active: []), [])
-    // punchfs up but not mounted yet: nothing.
+    XCTAssertEqual(try runHealer(active: up), ["--no-block start tm-bands-bind"])
+    XCTAssertEqual(try runHealer(active: []), [], "punchfs dead: systemd restarts it")
     XCTAssertEqual(try runHealer(active: up, mounted: false), [])
-    // Bind up, Samba down, no marker: start Samba.
     let bound: Set<String> = ["punchfs", "tm-bands-bind"]
-    XCTAssertEqual(try runHealer(active: bound), ["start smbd"])
-    // Everything up: nothing.
+    XCTAssertEqual(try runHealer(active: bound), ["--no-block start smbd"])
     XCTAssertEqual(try runHealer(active: bound.union(["smbd"])), [])
   }
 
-  func testHealerRespectsTheHoldMarker() throws {
+  /// The age is counted in seconds against 7200, at the boundaries, on real
+  /// files: 119 min = paused on purpose, 121 and 125 min = expired.
+  func testHealerHoldBoundaries() throws {
     let bound: Set<String> = ["punchfs", "tm-bands-bind"]
-    XCTAssertEqual(try runHealer(active: bound, marker: "fresh"), [], "paused on purpose")
-    XCTAssertEqual(try runHealer(active: bound, marker: "old"), ["start smbd"], "expired")
-    XCTAssertEqual(try runHealer(active: bound, marker: "attention"), [], "never auto-started")
+    XCTAssertEqual(try runHealer(active: bound, holdAgeMinutes: 0), [])
+    XCTAssertEqual(try runHealer(active: bound, holdAgeMinutes: 119), [])
+    XCTAssertEqual(try runHealer(active: bound, holdAgeMinutes: 121), ["--no-block start smbd"])
+    XCTAssertEqual(try runHealer(active: bound, holdAgeMinutes: 125), ["--no-block start smbd"])
+  }
+
+  /// A failed operation's attention file beats everything, expired marker or not.
+  func testHealerNeverStartsSambaUnderAttention() throws {
+    let bound: Set<String> = ["punchfs", "tm-bands-bind"]
+    XCTAssertEqual(try runHealer(active: bound, attention: true), [])
+    XCTAssertEqual(try runHealer(active: bound, holdAgeMinutes: 500, attention: true), [])
+  }
+
+  /// A deliberate stop writes the marker FRESH (`: >`, not `touch`): the old
+  /// content or mtime of a previous run must not survive. Run for real.
+  func testHoldSmbdRewritesTheMarkerAndClearsAttention() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let hold = dir.appendingPathComponent("hold").path
+    let attention = dir.appendingPathComponent("attention").path
+    let fake = dir.appendingPathComponent("systemctl")
+    try "#!/bin/sh\nexit 0\n".write(to: fake, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+    try "attention\n".write(toFile: hold, atomically: true, encoding: .utf8)
+    try "attention\n".write(toFile: attention, atomically: true, encoding: .utf8)
+    let script = VMLayout.holdSmbd
+      .replacingOccurrences(of: VMLayout.Guest.smbdHold, with: hold)
+      .replacingOccurrences(of: VMLayout.Guest.smbdAttention, with: attention)
+      .replacingOccurrences(of: "systemctl ", with: fake.path + " ")
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = ["-c", script]
+    try p.run()
+    p.waitUntilExit()
+    XCTAssertEqual(p.terminationStatus, 0)
+    XCTAssertEqual(try String(contentsOfFile: hold, encoding: .utf8), "", "old content is gone")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: attention), "a new attempt clears it")
+  }
+
+  /// The attention file is on the disk (a reboot must not start Samba on a
+  /// half-installed image) and Samba's drop-in refuses to start while it exists.
+  func testAttentionIsPersistentAndBlocksSamba() throws {
+    XCTAssertTrue(VMLayout.Guest.smbdAttention.hasPrefix("/var/lib/"))
+    let smbd = try unit("vm/systemd/smbd.service.d/cloudmachine.conf")
+    XCTAssertTrue(smbd.contains("ConditionPathExists=!\(VMLayout.Guest.smbdAttention)"))
+    XCTAssertTrue(VMLayout.flagSmbdNeedsAttention.contains(VMLayout.Guest.smbdAttention))
+    XCTAssertTrue(VMStatus.script.contains(VMLayout.Guest.smbdAttention))
   }
 
   /// The script's 120 minutes are the app's limit.
   func testHealerLimitMatchesTheAppsLimit() throws {
     let text = try unit("vm/cm-smb-heal.sh")
-    XCTAssertTrue(text.contains("-mmin -\(Int(VMLayout.smbdHoldLimit / 60))"))
+    XCTAssertTrue(text.contains("-le \(Int(VMLayout.smbdHoldLimit))"))
   }
 
   /// The timer runs the healer every minute and is enabled by provisioning.
@@ -508,7 +552,7 @@ final class VMLayoutTests: XCTestCase {
   /// The status script's marker line, executed. `stat` is faked (GNU `-c %Y` is
   /// not on macOS): it answers with the mtime the test sets.
   func testStatusScriptReadsTheMarker() throws {
-    func run(marker: String?, ageSeconds: Int = 0) throws -> String {
+    func run(marker: String?, ageSeconds: Int = 0, attention: Bool = false) throws -> String {
       let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
       try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
       defer { try? FileManager.default.removeItem(at: dir) }
@@ -519,10 +563,14 @@ final class VMLayoutTests: XCTestCase {
         to: fakeStat, atomically: true, encoding: .utf8)
       try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeStat.path)
       if let marker { try marker.write(toFile: hold, atomically: true, encoding: .utf8) }
+      let flag = dir.appendingPathComponent("attention").path
+      if attention { try "x".write(toFile: flag, atomically: true, encoding: .utf8) }
       let p = Process()
       p.executableURL = URL(fileURLWithPath: "/bin/sh")
       p.arguments = [
-        "-c", VMStatus.holdScript.replacingOccurrences(of: VMLayout.Guest.smbdHold, with: hold),
+        "-c",
+        VMStatus.holdScript.replacingOccurrences(of: VMLayout.Guest.smbdHold, with: hold)
+          .replacingOccurrences(of: VMLayout.Guest.smbdAttention, with: flag),
       ]
       p.environment = ["PATH": dir.path + ":/usr/bin:/bin"]
       let out = Pipe()
@@ -534,8 +582,14 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertEqual(VMStatus.report(scriptOutput: try run(marker: nil)).smbdHoldAge, nil)
     let fresh = VMStatus.report(scriptOutput: try run(marker: "", ageSeconds: 300)).smbdHoldAge
     XCTAssertEqual(try XCTUnwrap(fresh), 300, accuracy: 5)
-    // "attention" is a failure, not a pause, however fresh.
-    XCTAssertNil(VMStatus.report(scriptOutput: try run(marker: "attention\n")).smbdHoldAge)
+    XCTAssertFalse(VMStatus.report(scriptOutput: try run(marker: nil)).smbdAttention)
+    // The attention file is read, and it is a failure, not a pause, however fresh.
+    let flagged = VMStatus.report(
+      scriptOutput: try run(marker: "", ageSeconds: 10, attention: true))
+    XCTAssertTrue(flagged.smbdAttention)
+    var withSamba = flagged
+    withSamba.services["smbd"] = "inactive"
+    XCTAssertFalse(withSamba.smbdHeld)
   }
 
   /// `holdSamba` stops Samba through `holdSmbd`, starts the keep-alive only when
@@ -561,10 +615,9 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(VMLayout.refreshHold.hasPrefix("touch -c "), "never re-creates the marker")
   }
 
-  /// A failed conversion flags "attention" in the marker.
-  func testFlagNeedsAttentionWritesTheWord() {
-    XCTAssertEqual(
-      VMLayout.flagSmbdNeedsAttention, "echo attention > \(VMLayout.Guest.smbdHold)")
+  /// A failed conversion flags attention in the persistent file.
+  func testFlagNeedsAttentionWritesThePersistentFile() {
+    XCTAssertTrue(VMLayout.flagSmbdNeedsAttention.hasSuffix("> \(VMLayout.Guest.smbdAttention)"))
   }
 
   /// 27.11.2026: rclone grew to 1.57 GB in the 2 GiB, swapless VM. Budget:

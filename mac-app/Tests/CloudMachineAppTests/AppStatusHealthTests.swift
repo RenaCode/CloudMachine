@@ -315,6 +315,17 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertEqual(VMStatus.servicesHealthy(held), true)
   }
 
+  /// A failed operation left Samba stopped: red at once, however fresh the pause.
+  func testAttentionIsRedAndNeverAPause() {
+    let status = healthyStatus()
+    status.machine.services["smbd"] = "inactive"
+    status.machine.smbdHoldAge = 10
+    status.machine.smbdAttention = true
+    XCTAssertFalse(status.machine.smbdHeld)
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "smbd (needs action)"))
+    XCTAssertEqual(status.overallTone, .danger)
+  }
+
   func testMachineStatesHaveTheirOwnHeadlines() {
     let status = healthyStatus()
     status.machine = MachineStatus()

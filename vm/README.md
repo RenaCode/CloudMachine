@@ -203,3 +203,13 @@ cloudmachine-agent vm-setup && cloudmachine-agent vm-status
 
 `vm-prepare-bundle` refuses while Time Machine is backing up to *this*
 machine; a backup going to another destination does not stop it.
+
+## Samba stopped on purpose
+
+`cm-smb-heal.timer` (every 60 s) starts the bind and Samba again from the machine's state. A
+deliberate stop (image conversion, encryption) leaves `/run/cloudmachine-smbd-hold`; the healer
+keeps off Samba while it is at most 2 h old. A failed conversion leaves
+`/var/lib/cloudmachine/smbd-attention` instead: Samba then does not start, even after a reboot,
+and the app shows it red. After checking the image, remove the file (`sudo rm
+/var/lib/cloudmachine/smbd-attention`) or run the operation again; the healer starts Samba.
+`tests/restart-chain.sh` checks all of it on the live machine.

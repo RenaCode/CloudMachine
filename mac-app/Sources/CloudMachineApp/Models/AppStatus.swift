@@ -77,7 +77,11 @@ struct MachineStatus: Equatable {
   /// Age of the hold marker; `nil` = Samba was not stopped on purpose.
   var smbdHoldAge: TimeInterval?
   /// Samba paused on purpose (within the limit): information, not a failure.
-  var smbdHeld: Bool { VMStatus.isHeld(smbdHoldAge, smbdState: services["smbd"]) }
+  var smbdHeld: Bool {
+    !smbdAttention && VMStatus.isHeld(smbdHoldAge, smbdState: services["smbd"])
+  }
+  /// A failed operation left Samba stopped: red until a new attempt succeeds.
+  var smbdAttention = false
   /// A probe failure counts only while Samba is not paused on purpose.
   var shareProbeFailed: Bool {
     !smbdHeld && (shareRead?.isFailure == true || smb?.isFailure == true)
@@ -215,7 +219,8 @@ extension AppStatus {
     if machine.isRunning && machine.servicesHealthy == nil { return .queueUnknown }
     let down = machine.servicesDown.filter { !(machine.smbdHeld && $0 == "smbd") }
     if machine.servicesHealthy == false, !down.isEmpty {
-      return .servicesDown(names: down.joined(separator: ", "))
+      let names = down.map { $0 == "smbd" && machine.smbdAttention ? "smbd (needs action)" : $0 }
+      return .servicesDown(names: names.joined(separator: ", "))
     }
     // Only an idle upload is doubted by an old backup: a moving one may well be
     // the backup itself (first backup, after sleep), and so may a running one.

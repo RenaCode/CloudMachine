@@ -18,7 +18,11 @@ public enum VMStatus {
     /// `nil` = no marker, or not read.
     public var smbdHoldAge: TimeInterval?
     /// Samba is paused on purpose, within `VMLayout.smbdHoldLimit`.
-    public var smbdHeld: Bool { VMStatus.isHeld(smbdHoldAge, smbdState: services["smbd"]) }
+    public var smbdHeld: Bool {
+      !smbdAttention && VMStatus.isHeld(smbdHoldAge, smbdState: services["smbd"])
+    }
+    /// A failed operation left Samba stopped on purpose-not: it needs a person.
+    public var smbdAttention = false
     /// How many images Time Machine has created in the machine; `nil` = not read.
     public var imageCount: Int?
     /// The last successful `tm-meta-sync`; `nil` = not read.
@@ -87,12 +91,12 @@ public enum VMStatus {
     + "echo METASYNC $(stat -c %Y \(VMLayout.Guest.metaSyncStamp) 2>/dev/null || echo 0) "
     + "$(date +%s); "
 
-  /// `SMBDHOLD <age in s>`; -1 = no marker, or one that says "attention" (an
-  /// operation failed and left Samba stopped: not a pause, a failure).
+  /// `SMBDHOLD <age in s>` (-1 = no marker) and `SMBDATTENTION 0|1`. Ages in
+  /// seconds, like the healer's.
   static let holdScript: String =
-    "if grep -qs attention \(VMLayout.Guest.smbdHold); then echo SMBDHOLD -1; "
-    + "elif m=$(stat -c %Y \(VMLayout.Guest.smbdHold) 2>/dev/null); "
+    "if m=$(stat -c %Y \(VMLayout.Guest.smbdHold) 2>/dev/null); "
     + "then echo SMBDHOLD $(($(date +%s) - m)); else echo SMBDHOLD -1; fi; "
+    + "echo SMBDATTENTION $([ -e \(VMLayout.Guest.smbdAttention) ] && echo 1 || echo 0); "
 
   private static let lastUploadScript: String =
     "l=$(tac \(VMLayout.Guest.rcloneLog) 2>/dev/null | grep -m1 'vfs cache: upload succeeded'); "
@@ -142,6 +146,8 @@ public enum VMStatus {
         report.bundlePrepared = fields[1] == "1"
       } else if fields.first == "SMBDHOLD", fields.count >= 2 {
         report.smbdHoldAge = Int(fields[1]).flatMap { $0 >= 0 ? TimeInterval($0) : nil }
+      } else if fields.first == "SMBDATTENTION", fields.count >= 2 {
+        report.smbdAttention = fields[1] == "1"
       } else if fields.first == "IMAGES", fields.count >= 2 {
         report.imageCount = Int(fields[1])
       } else if fields.first == "METASYNC", fields.count >= 3, let last = Int(fields[1]),
