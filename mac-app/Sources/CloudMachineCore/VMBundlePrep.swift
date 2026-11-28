@@ -241,9 +241,16 @@ public enum VMBundlePrep {
       envLine: VMLayout.envLine("CM_BUNDLE", name))
     let installed = try? await VMLayout.rootShell(install, timeout: 3600)
     guard installed?.succeeded == true else {
-      let stage = Self.installFailure(
-        stdout: installed?.stdout ?? "", stderr: installed?.stderr ?? "",
-        attentionRecorded: await VMLayout.attentionRecorded())
+      var recorded = await VMLayout.attentionRecorded()
+      var stage = Self.installFailure(
+        stdout: installed?.stdout, exitCode: installed?.exitCode, attentionRecorded: recorded)
+      if stage == .halfInstalledUnrecorded {
+        // The script's own trap may not have run (kill, lost connection): record it now.
+        _ = try? await VMLayout.rootShell(VMLayout.flagSmbdNeedsAttention, timeout: 60)
+        recorded = await VMLayout.attentionRecorded()
+        stage = Self.installFailure(
+          stdout: installed?.stdout, exitCode: installed?.exitCode, attentionRecorded: recorded)
+      }
       let tail = VMLayout.errorTail(installed)
       switch stage {
       case .notChanged:
@@ -286,12 +293,16 @@ public enum VMBundlePrep {
     case halfInstalledUnrecorded
   }
 
-  /// Which of the cases a failed install script was in, from what it printed.
-  static func installFailure(stdout: String, stderr: String, attentionRecorded: Bool)
+  /// Which case a failed install was in. Only an explicit `CM-UNCHANGED` (printed by
+  /// the script's early exit 3, before any change) proves nothing was touched. No
+  /// answer at all (timeout, limactl died), ssh's 255, a kill that skipped the
+  /// trap, an unknown code: all of them may have happened halfway, so they count
+  /// as a half-done install.
+  static func installFailure(stdout: String?, exitCode: Int32?, attentionRecorded: Bool)
     -> InstallFailure
   {
-    if stdout.contains("CM-INSTALLED") { return .installedSambaDown }
-    guard stderr.contains("CM-MUTATED") else { return .notChanged }
+    if let stdout, stdout.contains("CM-INSTALLED") { return .installedSambaDown }
+    if let stdout, exitCode == 3, stdout.contains("CM-UNCHANGED") { return .notChanged }
     return attentionRecorded ? .halfInstalled : .halfInstalledUnrecorded
   }
 
@@ -315,7 +326,7 @@ public enum VMBundlePrep {
       VMLayout.recordAttentionOnFailure,
       "B=\(bundle)",
       // Checked again here: between the first check and now someone may have written there.
-      "if [ -n \"$(ls -A \(drive) 2>/dev/null)\" ]; then echo 'bands on Drive appeared meanwhile' >&2; exit 3; fi",
+      "if [ -n \"$(ls -A \(drive) 2>/dev/null)\" ]; then echo CM-UNCHANGED; echo 'bands on Drive appeared meanwhile' >&2; exit 3; fi",
       "install -d -m 700 \(VMLayout.Guest.backupDir)",
       // From here on the image is changed: a failure leaves it half-installed.
       "MUTATED=1",

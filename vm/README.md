@@ -217,8 +217,9 @@ aside and copied bands to Drive), it leaves `/var/lib/cloudmachine/smbd-attentio
 then **half-installed**: Samba does not start (not even after a reboot), the app shows
 `smbd (ACTION NEEDED)`, and `vm-encrypt`/move refuse to run (exit 4). Repeating
 `vm-prepare-bundle` does NOT repair it: it stops with "bands on Drive appeared meanwhile" because
-the Drive folder is no longer empty. A failure before any change (that same check, a copy that
-never started) leaves no file: Samba is simply started again.
+the Drive folder is no longer empty. Only that same check failing (it prints `CM-UNCHANGED`, exit 3, before anything was
+changed) leaves no file, and Samba is simply started again. Any other failure - a timeout, a lost
+connection, a killed script - cannot be proven harmless, so the app sets the file itself.
 
 Restore or verify by hand, then remove the file. In a terminal on the Mac:
 

@@ -730,65 +730,99 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertEqual(lines.last, VMLayout.startSmbd)
   }
 
-  /// A failure BEFORE the first change (exit 3: bands on Drive appeared) leaves no
-  /// attention file and no sentinel: the image is as it was. After `MUTATED=1`
-  /// both are written. Run on the real install script and on the trap alone.
-  func testEarlyInstallFailureWritesNoAttention() throws {
+  private func emptyDriveAndFakes() throws -> (dir: URL, drive: URL) {
     let dir = try tempDir()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let attention = dir.appendingPathComponent("attention").path
     let drive = dir.appendingPathComponent("drive")
     try FileManager.default.createDirectory(at: drive, withIntermediateDirectories: true)
+    return (dir, drive)
+  }
+
+  private func realInstallScript(drive: URL) -> String {
+    VMBundlePrep.installScript(
+      name: "n.sparsebundle", staging: "/tmp/s", aside: "/tmp/a", envLine: "CM_BUNDLE=n"
+    ).replacingOccurrences(of: "/srv/tm/bands", with: drive.path)
+  }
+
+  /// The ONE proof that nothing changed: the early exit 3 prints `CM-UNCHANGED`.
+  /// No attention file, no state-changing command. Real install script.
+  func testEarlyInstallFailureIsProvenUnchanged() throws {
+    let (dir, drive) = try emptyDriveAndFakes()
+    defer { try? FileManager.default.removeItem(at: dir) }
     FileManager.default.createFile(
       atPath: drive.appendingPathComponent("a-band").path, contents: nil)
+    let attention = dir.appendingPathComponent("attention").path
     let calls = dir.appendingPathComponent("calls").path
     let rec = "echo \"$0 $@\" >> \(calls)"
-    let script = VMBundlePrep.installScript(
-      name: "n.sparsebundle", staging: "/tmp/s", aside: "/tmp/a", envLine: "CM_BUNDLE=n"
-    )
-    .replacingOccurrences(of: "/srv/tm/bands", with: drive.path)
     let early = try shellOutput(
-      script, attention: attention,
+      realInstallScript(drive: drive), attention: attention,
       bin: ["mv": rec, "cp": rec, "tar": rec, "systemctl": rec, "install": rec])
     XCTAssertEqual(early.status, 3)
     XCTAssertFalse(FileManager.default.fileExists(atPath: attention), "nothing changed")
-    XCTAssertFalse(early.stderr.contains("CM-MUTATED"))
     XCTAssertFalse(FileManager.default.fileExists(atPath: calls), "no state-changing command ran")
+    XCTAssertTrue(early.stdout.contains("CM-UNCHANGED"))
     XCTAssertEqual(
       VMBundlePrep.installFailure(
-        stdout: early.stdout, stderr: early.stderr, attentionRecorded: false),
+        stdout: early.stdout, exitCode: early.status, attentionRecorded: false),
       .notChanged)
-    // After the first change: recorded, with the sentinel.
+  }
+
+  /// The late case, on the real script: the original is moved aside (`mv`), then
+  /// the next step fails. The trap records attention in the same shell; nothing
+  /// says "unchanged"; classified as half-installed.
+  func testInterruptionAfterTheMoveIsHalfInstalled() throws {
+    let (dir, drive) = try emptyDriveAndFakes()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let attention = dir.appendingPathComponent("attention").path
+    let ok = "exit 0"
     let late = try shellOutput(
-      "set -eu; MUTATED=0; \(VMLayout.recordAttentionOnFailure); MUTATED=1; false",
-      attention: attention)
+      realInstallScript(drive: drive), attention: attention,
+      bin: ["install": ok, "mv": ok, "tar": "exit 1"])
     XCTAssertNotEqual(late.status, 0)
-    XCTAssertTrue(FileManager.default.fileExists(atPath: attention))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: attention), "recorded in the same shell")
+    XCTAssertTrue(late.stderr.contains("CM-MUTATED"))
+    XCTAssertFalse(late.stdout.contains("CM-UNCHANGED"))
     XCTAssertEqual(
       VMBundlePrep.installFailure(
-        stdout: late.stdout, stderr: late.stderr, attentionRecorded: true),
+        stdout: late.stdout, exitCode: late.status, attentionRecorded: true),
       .halfInstalled)
   }
 
-  /// "Installed, but Samba did not start" is its own case (the healer starts it),
-  /// never the "could not record attention" one; the messages follow the facts.
-  func testInstallFailureCasesAndMessages() throws {
-    XCTAssertEqual(
-      VMBundlePrep.installFailure(stdout: "x CM-INSTALLED\n", stderr: "", attentionRecorded: false),
-      .installedSambaDown)
-    XCTAssertEqual(
-      VMBundlePrep.installFailure(stdout: "", stderr: "CM-MUTATED", attentionRecorded: false),
-      .halfInstalledUnrecorded)
-    XCTAssertEqual(
-      VMBundlePrep.installFailure(stdout: "", stderr: "CM-MUTATED", attentionRecorded: true),
-      .halfInstalled)
-    // The install script prints the sentinel only after attention is cleared.
+  /// Anything that is not the explicit CM-UNCHANGED proof counts as half-done:
+  /// no answer (timeout, limactl died), ssh's 255, a kill that skipped the trap,
+  /// an unknown code, an exit 3 without the sentinel.
+  func testOnlyTheSentinelProvesNothingChanged() {
+    func classify(_ out: String?, _ code: Int32?, recorded: Bool = false)
+      -> VMBundlePrep.InstallFailure
+    {
+      VMBundlePrep.installFailure(stdout: out, exitCode: code, attentionRecorded: recorded)
+    }
+    XCTAssertEqual(classify("CM-UNCHANGED\n", 3), .notChanged)
+    XCTAssertEqual(classify(nil, nil), .halfInstalledUnrecorded, "timeout / limactl died")
+    XCTAssertEqual(classify("", 255), .halfInstalledUnrecorded, "ssh dropped")
+    XCTAssertEqual(classify("", 137), .halfInstalledUnrecorded, "SIGKILL / OOM, no trap")
+    XCTAssertEqual(classify("", 3), .halfInstalledUnrecorded, "exit 3 without the proof")
+    XCTAssertEqual(classify("CM-UNCHANGED\n", 1), .halfInstalledUnrecorded, "sentinel, wrong code")
+    XCTAssertEqual(classify("", 1, recorded: true), .halfInstalled)
+    XCTAssertEqual(classify(nil, nil, recorded: true), .halfInstalled)
+    XCTAssertEqual(classify("x CM-INSTALLED\n", 1), .installedSambaDown)
+  }
+
+  /// "Installed, but Samba did not start" is its own case (the healer starts it);
+  /// the messages follow the facts.
+  func testInstallFailureMessages() {
     XCTAssertTrue(VMLayout.clearAttention.hasSuffix("echo CM-INSTALLED"))
     let started = VMBundlePrep.notChangedMessage("boom", sambaStarted: true)
     XCTAssertTrue(started.contains("smbd started again"))
     let notStarted = VMBundlePrep.notChangedMessage("boom", sambaStarted: false)
     XCTAssertEqual(notStarted, "boom", "no claim that Samba started")
-    XCTAssertFalse(notStarted.contains("started again"))
+  }
+
+  /// The repoint script's exit 4 is the refusal; nothing else is.
+  func testRepointExitFourIsTheAttentionRefusal() {
+    XCTAssertTrue(DriveEncryption.isAttentionRefusal(exitCode: 4))
+    XCTAssertFalse(DriveEncryption.isAttentionRefusal(exitCode: nil))
+    XCTAssertFalse(DriveEncryption.isAttentionRefusal(exitCode: 1))
+    XCTAssertFalse(DriveEncryption.isAttentionRefusal(exitCode: 0))
   }
 
   /// The pre-check text and the exit-4 refusal of the other operations say what
