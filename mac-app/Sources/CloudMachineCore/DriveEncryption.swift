@@ -395,7 +395,7 @@ public enum DriveEncryption {
       "B=\"\(VMLayout.Guest.localRoot)/$B/bands\"",
       "before=$(find \"$B/\" -type f | wc -l)",
       "test \"$before\" -gt 0",
-      "systemctl stop smbd",
+      VMLayout.holdSmbd,
       "unsent=$(\(queue))",
       "if [ \"$unsent\" != 0 ]; then systemctl start smbd; echo \"unsent $unsent bytes\" >&2; exit 3; fi",
       "cp -p \(env) \(VMLayout.shellQuoted(saved))",
@@ -714,7 +714,7 @@ public enum DriveEncryption {
 
     // Samba off BEFORE the last sync: a backup started now (by hand, by the
     // guard) cannot write a band that the sync has already passed.
-    guard (try? await VMLayout.rootShell("systemctl stop smbd", timeout: 120))?.succeeded == true
+    guard (try? await VMLayout.rootShell(VMLayout.holdSmbd, timeout: 120))?.succeeded == true
     else { return fail(L10n.tr("Could not stop smbd in the machine.")) }
     CMLogger.log("vm-encrypt: \(direction) - last sync and cryptcheck")
     let synced = try? await VMLayout.rootShell(

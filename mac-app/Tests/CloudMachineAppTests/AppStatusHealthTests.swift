@@ -228,6 +228,30 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertEqual(UploadState.mountDown.tone, .danger)
   }
 
+  /// Samba stopped on purpose (image conversion) is not "action needed".
+  func testUploadCardIgnoresASambaHeldOnPurpose() {
+    let status = healthyStatus()
+    status.machine.services["smbd"] = "inactive"
+    status.machine.smbdHeld = true
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+    // Held does not excuse another service that is down.
+    status.machine.services["punchfs"] = "failed"
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "punchfs"))
+  }
+
+  /// The drive summary card, the menu bar and the headline speak with the same
+  /// state: a down service never reads "Everything uploaded".
+  func testEverySurfaceAgreesWhileAServiceIsDown() {
+    let status = healthyStatus()
+    status.machine.services["smbd"] = "inactive"
+    let card = status.uploadCardState
+    XCTAssertEqual(card.headline, "A service in the CloudMachine machine is not running")
+    XCTAssertNotEqual(card.headline, UploadState.upToDate.headline)
+    XCTAssertEqual(card.tone, .danger)
+    XCTAssertEqual(status.headline, card.headline)
+    XCTAssertEqual(status.overallTone, .danger)
+  }
+
   func testMachineStatesHaveTheirOwnHeadlines() {
     let status = healthyStatus()
     status.machine = MachineStatus()

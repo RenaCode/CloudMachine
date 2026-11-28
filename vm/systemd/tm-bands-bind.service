@@ -22,9 +22,9 @@ ExecStartPre=/usr/bin/timeout 120 /bin/sh -c 'until mountpoint -q /srv/tm-punch 
 # Time Machine renames the image when the Mac's name changes (25 Nov 2026); the
 # script follows the rename instead of trusting the name stored in bundle.env.
 ExecStart=/usr/local/sbin/tm-bundle bind
-# After a failed bind Samba is "dependency failed" and never retried: start it
-# once bound, but only then (stopped on purpose = Result=success stays down).
-ExecStartPost=-/bin/sh -c '[ "$(systemctl show -p Result --value smbd.service)" = dependency ] && systemctl --no-block start smbd.service'
+# "Dependency failed" Samba is never retried: start it once bound, unless it
+# was stopped on purpose (hold marker; its Result= is success either way).
+ExecStartPost=-/bin/sh -c '[ ! -e /run/cloudmachine-smbd-hold ] && /bin/systemctl --no-block start smbd.service'
 ExecStop=/usr/local/sbin/tm-bundle unbind
 
 [Install]

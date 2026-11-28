@@ -197,6 +197,7 @@ final class CloudMachineController: ObservableObject {
       machine.punchfsOpenFiles = report.punchfsOpenFiles
       machine.punchfsFileLimit = report.punchfsFileLimit
       machine.bundlePrepared = report.bundlePrepared
+      machine.smbdHeld = report.smbdHeld ?? false
       machine.imageCount = report.imageCount
       machine.shareRead = report.shareRead
       machine.address = await VMLayout.currentAddress()

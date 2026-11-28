@@ -74,6 +74,8 @@ struct MachineStatus: Equatable {
   var punchfsOpenFiles: Int?
   var punchfsFileLimit: Int?
   var bundlePrepared: Bool?
+  /// Samba stopped on purpose (hold marker): not a failure.
+  var smbdHeld = false
   var imageCount: Int?
   /// One byte read through the share's path in the machine; `nil` = not read.
   var shareRead: ShareReadProbe.Verdict?
@@ -201,8 +203,9 @@ extension AppStatus {
   var uploadCardState: UploadState {
     let state = machine.uploadState
     guard state == .upToDate || state.isMovingData else { return state }
-    if machine.servicesHealthy == false {
-      return .servicesDown(names: machine.servicesDown.joined(separator: ", "))
+    let down = machine.servicesDown.filter { !(machine.smbdHeld && $0 == "smbd") }
+    if machine.servicesHealthy == false, !down.isEmpty {
+      return .servicesDown(names: down.joined(separator: ", "))
     }
     // Only an idle upload is doubted by an old backup: a moving one may well be
     // the backup itself (first backup, after sleep), and so may a running one.
@@ -368,7 +371,7 @@ final class AppStatus: ObservableObject {
     }
     // ONE source speaks about uploading - otherwise the menu bar and the status
     // card could claim different things.
-    let upload = machine.uploadState
+    let upload = uploadCardState
     if !upload.isNominal { return upload.headline }
     // Backups work in this state, but any web page can delete them - so it
     // comes before every sentence that sounds like "all is well".
@@ -430,7 +433,7 @@ extension AppStatus {
     if machine.servicesHealthy == false { return .danger }
     if machine.shareRead?.isFailure == true || machine.smb?.isFailure == true { return .danger }
     if case .notRegistered = timeMachineState { return .danger }
-    if machine.uploadState.needsAttention { return .danger }
+    if uploadCardState.needsAttention { return .danger }
     if remoteControlOpen { return .danger }
     if backupCycle.known && !backupCycle.isFresh() { return .danger }
     return .warning

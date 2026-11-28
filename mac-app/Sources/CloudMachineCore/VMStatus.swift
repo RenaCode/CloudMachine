@@ -14,6 +14,8 @@ public enum VMStatus {
     public var reading: VMLayout.Reading?
     /// `vm-prepare-bundle` has run (`bundle.env` exists); `nil` = not read.
     public var bundlePrepared: Bool?
+    /// Samba was stopped on purpose (the hold marker exists); `nil` = not read.
+    public var smbdHeld: Bool?
     /// How many images Time Machine has created in the machine; `nil` = not read.
     public var imageCount: Int?
     /// The last successful `tm-meta-sync`; `nil` = not read.
@@ -75,6 +77,7 @@ public enum VMStatus {
     + "if [ \"${pid:-0}\" -gt 0 ]; then echo FD $(ls /proc/$pid/fd | wc -l) "
     + "$(awk '/Max open files/{print $4}' /proc/$pid/limits); fi; "
     + "echo BUNDLEENV $([ -s \(VMLayout.Guest.bundleEnv) ] && echo 1 || echo 0); "
+    + "echo SMBDHOLD $([ -e \(VMLayout.Guest.smbdHold) ] && echo 1 || echo 0); "
     + "echo IMAGES $(ls -d \(VMLayout.Guest.localRoot)/*.sparsebundle 2>/dev/null | wc -l); "
     + "echo METASYNC $(stat -c %Y \(VMLayout.Guest.metaSyncStamp) 2>/dev/null || echo 0) $(date +%s); "
     + uploadLimitScript
@@ -109,6 +112,8 @@ public enum VMStatus {
         if fields.count >= 3 { report.punchfsFileLimit = Int(fields[2]) }
       } else if fields.first == "BUNDLEENV", fields.count >= 2 {
         report.bundlePrepared = fields[1] == "1"
+      } else if fields.first == "SMBDHOLD", fields.count >= 2 {
+        report.smbdHeld = fields[1] == "1"
       } else if fields.first == "IMAGES", fields.count >= 2 {
         report.imageCount = Int(fields[1])
       } else if fields.first == "METASYNC", fields.count >= 3, let last = Int(fields[1]),

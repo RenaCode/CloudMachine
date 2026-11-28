@@ -131,7 +131,7 @@ public enum VMBundlePrep {
 
     // 6. Samba off, so Time Machine cannot open the image while we copy it.
     step("stopping smbd")
-    guard (try? await VMLayout.rootShell("systemctl stop smbd", timeout: 120))?.succeeded == true
+    guard (try? await VMLayout.rootShell(VMLayout.holdSmbd, timeout: 120))?.succeeded == true
     else { return fail(L10n.tr("Could not stop smbd in the machine.")) }
     func failRestoringSamba(_ message: String) async -> Outcome {
       _ = try? await VMLayout.rootShell("rm -rf \(staging); systemctl start smbd", timeout: 120)

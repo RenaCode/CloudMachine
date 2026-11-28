@@ -347,7 +347,7 @@ private struct DashboardContent: View {
   }
 
   private var driveSummaryCard: some View {
-    let upload = status.machine.uploadState
+    let upload = status.uploadCardState
     return VStack(alignment: .leading, spacing: 14) {
       HStack(spacing: 10) {
         IconTile(systemImage: "icloud.fill", gradient: RenaCodeTheme.aiGradient)

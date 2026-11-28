@@ -41,6 +41,10 @@ public enum VMLayout {
     public static let rcAddress = "127.0.0.1:5572"
     /// Touched by `tm-meta-sync.service` after every successful sync.
     public static let metaSyncStamp = "/var/lib/cloudmachine/tm-meta-sync.ok"
+    /// Made by every deliberate stop of Samba (image conversion), removed when
+    /// Samba starts. Under /run: a reboot clears it. The bind starts Samba only
+    /// without it.
+    public static let smbdHold = "/run/cloudmachine-smbd-hold"
     public static let rcloneLog = "/var/log/rclone-tm.log"
   }
 
@@ -382,6 +386,9 @@ public enum VMLayout {
   /// this takes the Samba shutdown and the flush of the dirty cache disk out
   /// of that budget. `;` and not `&&`: the sync matters most when smbd is
   /// already gone, masked, or slow to stop.
+  /// A deliberate stop of Samba: leaves the marker so nothing restarts it.
+  public static let holdSmbd = "touch \(Guest.smbdHold) && systemctl stop smbd"
+
   static let quiesceScript = "systemctl stop smbd; sync"
 
   public static func quiesceGuest(timeout: TimeInterval) async -> Bool {

@@ -33,4 +33,15 @@ sleep 20
 [ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd was started again"; exit 1; }
 systemctl start smbd.service
 all_up 60
+echo "4. a FAILING bind, then its repair: Samba must come back by itself (the 27 Nov incident)"
+d=/run/systemd/system/tm-bands-bind.service.d
+mkdir -p "$d"
+printf '[Service]\nExecStartPre=/bin/false\n' > "$d/cm-test-fail.conf"
+trap 'rm -rf "$d"; systemctl daemon-reload' EXIT
+systemctl daemon-reload
+systemctl restart punchfs.service || true
+sleep 40
+[ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd up with a failing bind"; exit 1; }
+rm -rf "$d"; systemctl daemon-reload   # repair; the bind's retry (15 s) succeeds
+all_up 180
 echo "OK"

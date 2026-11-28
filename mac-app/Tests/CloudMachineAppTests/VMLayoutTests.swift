@@ -242,6 +242,21 @@ final class VMLayoutTests: XCTestCase {
       contentsOf: Self.repoRoot.appendingPathComponent(path), encoding: .utf8)
   }
 
+  func testHoldMarkerIsReadFromTheStatusReport() {
+    XCTAssertEqual(VMStatus.report(scriptOutput: "SMBDHOLD 1").smbdHeld, true)
+    XCTAssertEqual(VMStatus.report(scriptOutput: "SMBDHOLD 0").smbdHeld, false)
+    XCTAssertNil(VMStatus.report(scriptOutput: "BUNDLEENV 1").smbdHeld)
+    XCTAssertTrue(VMStatus.script.contains("SMBDHOLD"))
+    XCTAssertTrue(VMStatus.script.contains(VMLayout.Guest.smbdHold))
+  }
+
+  /// Every path that stops Samba on purpose makes the marker first.
+  func testStoppingSambaOnPurposeLeavesTheMarker() {
+    XCTAssertEqual(
+      VMLayout.holdSmbd, "touch \(VMLayout.Guest.smbdHold) && systemctl stop smbd")
+    XCTAssertTrue(VMLayout.Guest.smbdHold.hasPrefix("/run/"), "tmpfs: a reboot clears it")
+  }
+
   /// Units that stop (and, when the stopped unit is restarted, restart) with `unit`:
   /// the ones that list it in Requires= or BindsTo=.
   private func dependents(of unit: String, in files: [String: String]) -> Set<String> {
@@ -290,15 +305,57 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(bind.contains("\nStartLimitIntervalSec=0\n"), "retries must never run out")
   }
 
-  /// A bind that failed leaves Samba "dependency failed", and systemd never
-  /// retries that. The bind starts Samba itself, but ONLY in that case: Samba
-  /// stopped on purpose (image conversion) has Result=success and must stay down.
-  func testBindStartsSambaOnlyAfterADependencyFailure() throws {
+  /// A bind that failed leaves Samba "dependency failed" - but systemd reports
+  /// that unit as Result=success, exactly like a Samba stopped on purpose
+  /// (measured with throw-away units 28.11.2026). So the bind starts Samba after
+  /// a successful bind unless the hold marker exists; the marker is made by every
+  /// path that stops Samba on purpose and removed whenever Samba starts.
+  func testBindStartsSambaUnlessHeldOnPurpose() throws {
     let bind = try unit("vm/systemd/tm-bands-bind.service")
     let post = try XCTUnwrap(bind.split(separator: "\n").first { $0.hasPrefix("ExecStartPost=") })
-    XCTAssertTrue(post.contains("show -p Result --value smbd.service"))
-    XCTAssertTrue(post.contains("dependency"))
+    XCTAssertTrue(post.contains(VMLayout.Guest.smbdHold))
     XCTAssertTrue(post.contains("--no-block start smbd.service"))
+    XCTAssertFalse(post.contains("Result"), "Result= never says dependency for a service")
+    let smbd = try unit("vm/systemd/smbd.service.d/cloudmachine.conf")
+    XCTAssertTrue(smbd.contains("ExecStartPost=-/bin/rm -f \(VMLayout.Guest.smbdHold)"))
+  }
+
+  /// Runs the bind's ExecStartPost shell with a fake `systemctl` to prove the
+  /// behaviour: hold marker absent -> Samba is started; present -> it is not.
+  func testBindsSambaStartLogicBehaviour() throws {
+    let bind = try unit("vm/systemd/tm-bands-bind.service")
+    var post = try XCTUnwrap(
+      bind.split(separator: "\n").first { $0.hasPrefix("ExecStartPost=") }.map(String.init))
+    post.removeFirst("ExecStartPost=-".count)  // "-" = ignore exit status
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let marker = dir.appendingPathComponent("hold").path
+    let log = dir.appendingPathComponent("calls").path
+    try "#!/bin/sh\necho \"$@\" >> \(log)\n".write(
+      to: dir.appendingPathComponent("systemctl"), atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755], ofItemAtPath: dir.appendingPathComponent("systemctl").path)
+    // Systemd would run /bin/systemctl; the test points both at the fake.
+    let script = post.replacingOccurrences(of: VMLayout.Guest.smbdHold, with: marker)
+      .replacingOccurrences(of: "/bin/systemctl", with: dir.path + "/systemctl")
+    func run() throws -> String {
+      try? FileManager.default.removeItem(atPath: log)
+      let p = Process()
+      p.executableURL = URL(fileURLWithPath: "/bin/sh")
+      // `post` is `/bin/sh -c '...'` or a plain command line; hand it to sh.
+      p.arguments = ["-c", script]
+      p.standardError = FileHandle.nullDevice
+      try p.run()
+      p.waitUntilExit()
+      return (try? String(contentsOfFile: log, encoding: .utf8)) ?? ""
+    }
+    // Failed bind earlier, now repaired; nobody stopped Samba on purpose.
+    XCTAssertEqual(
+      try run().trimmingCharacters(in: .whitespacesAndNewlines), "--no-block start smbd.service")
+    // Stopped on purpose (image conversion): stays down.
+    FileManager.default.createFile(atPath: marker, contents: nil)
+    XCTAssertEqual(try run(), "")
   }
 
   /// 27.11.2026: rclone grew to 1.57 GB in the 2 GiB, swapless VM. Budget:
