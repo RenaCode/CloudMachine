@@ -210,6 +210,30 @@ machine; a backup going to another destination does not stop it.
 deliberate stop (image conversion, encryption) leaves `/run/cloudmachine-smbd-hold`; the healer
 keeps off Samba while it is at most 2 h old.
 
+### Dead FUSE mount after `kill -9`
+
+A killed rclone or punchfs leaves its mount behind ("Transport endpoint is not connected"); every
+start then fails with "directory already mounted". `rclone-tm`, `punchfs` and `tm-bands-bind` run
+`cm-unmount-stale` as `ExecStartPre=-`, `rclone-tm` and `punchfs` also as `ExecStop=`:
+
+- `--own <path>`: the unit's own mount point. In its `ExecStartPre=` the unit's process is dead
+  by definition, so the mount is unmounted lazily (`umount -l`, else `fusermount3 -uz`) without
+  asking it: rclone runs with `--attr-timeout 5m`, so a cached `stat` can call a dead mount
+  healthy for 5 minutes.
+- A mount of another unit (`/srv/tm-punch` seen from rclone-tm, `/srv/tm-local/*/bands`, whose
+  names carry spaces as `\040` in `/proc/mounts`) is probed first: `timeout 5 stat
+  --cached=never -t <path>` (coreutils 9.4 in Ubuntu 24.04) goes to the daemon. Only exit 1
+  means dead. 124/137 (slow) and 125/126/127 (the tool itself failed) leave the mount alone and
+  log a warning. Order: bands, `/srv/tm-punch`, `/srv/tm`.
+- Failures are logged (`cm-unmount-stale: ...` in the unit's journal); the script exits 0.
+
+The healer's step 0 `reset-failed`s and starts a chain unit whose `Result` is `start-limit-hit`
+(other results, such as the old-binary exit 78, stay visible). It records every reset in
+`/run/cloudmachine-heal-resets` (one epoch time per line) and stops after 6 resets in an hour,
+leaving `start-limit-hit` in `systemctl --failed`. Unlike step 2 it ignores the hold marker and
+the attention file: those concern Samba only. `tests/restart-chain.sh` step 2b checks recovery
+within 3 minutes and the journal line.
+
 ### Attention: an install that failed halfway
 
 If `vm-prepare-bundle` fails AFTER it has started changing the image (it has moved the original

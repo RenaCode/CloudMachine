@@ -1,8 +1,6 @@
 #!/bin/sh
-# Shapes (does not police!) incoming SMB: traffic to port 445 goes through ifb0 + HTB.
-# Policing dropped 12% of packets and TCP fell to ~2.7 MB/s (27.10.2026); a queue holds the rate without loss.
-# Why at all: Time Machine writes faster than rclone uploads to Drive; without this the
-# guard has to pause the backup over and over, and Time Machine reports every pause as an interruption.
+# Shapes (not polices) incoming SMB on port 445 via ifb0 + HTB: policing dropped 12%
+# and TCP fell to ~2.7 MB/s (27.10.2026). Time Machine writes faster than rclone uploads.
 RATE="${RATE:-320mbit}"
 case "$1" in
   start)

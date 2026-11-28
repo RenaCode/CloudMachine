@@ -230,7 +230,9 @@ final class VMLayoutTests: XCTestCase {
     let unit = try String(
       contentsOf: Self.repoRoot.appendingPathComponent("vm/systemd/tm-bands-bind.service"),
       encoding: .utf8)
-    let pre = unit.split(separator: "\n").first { $0.hasPrefix("ExecStartPre=") }
+    let pre = unit.split(separator: "\n").first {
+      $0.hasPrefix("ExecStartPre=") && $0.contains("mountpoint -q")
+    }
     XCTAssertNotNil(pre, "tm-bands-bind needs an ExecStartPre that waits for punchfs")
     XCTAssertTrue(pre?.contains("mountpoint -q /srv/tm-punch") ?? false)
     XCTAssertTrue(pre?.contains("/srv/tm-punch/bands") ?? false)
@@ -436,7 +438,7 @@ final class VMLayoutTests: XCTestCase {
     let activeList = active.sorted().joined(separator: " ")
     try write(
       "systemctl",
-      "if [ \"$1\" = is-active ]; then for u in \(activeList); do [ \"$u\" = \"$3\" ] && exit 0; done; exit 3; fi\necho \"$@\" >> \(log)"
+      "if [ \"$1\" = is-active ]; then for u in \(activeList); do [ \"$u\" = \"$3\" ] && exit 0; done; exit 3; fi\n[ \"$1\" = show ] && { echo exit-code; exit 0; }\necho \"$@\" >> \(log)"
     )
     try write("mountpoint", "exit \(mounted ? 0 : 1)")
     if let minutes = holdAgeMinutes {

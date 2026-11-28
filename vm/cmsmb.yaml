@@ -72,6 +72,10 @@ provision:
   file: cm-smb-heal.sh
   permissions: 755
 - mode: data
+  path: /usr/local/sbin/cm-unmount-stale
+  file: cm-unmount-stale.sh
+  permissions: 755
+- mode: data
   path: /etc/systemd/system/cm-smb-heal.service
   file: systemd/cm-smb-heal.service
 - mode: data

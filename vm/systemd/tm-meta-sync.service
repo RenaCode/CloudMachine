@@ -1,5 +1,4 @@
-# CloudMachine: the image's files outside bands/ (Info.plist, token, ...) live only
-# on the machine's disk; copied to gdrive:CloudMachine/<folder>-tm-meta (vm/README.md).
+# CloudMachine: the image's files outside bands/ live only on local disk; copied to Drive (vm/README.md).
 [Unit]
 Description=Copy of the Time Machine image's files outside bands/ to Google Drive
 After=rclone-tm.service tm-bands-bind.service
@@ -10,9 +9,7 @@ ConditionPathExists=/etc/cloudmachine/bundle.env
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/cloudmachine/vm.env
-# `sync` deletes on Drive what is gone locally: an image without its Info.plist
-# (a new machine, a disk recreated before a restore) must not wipe the copy.
-# tm-bundle follows a rename of the image by Time Machine.
+# `sync` deletes on Drive what is gone locally: no Info.plist must not wipe the copy.
 ExecCondition=/usr/local/sbin/tm-bundle has-info
 ExecStart=/usr/local/bin/rclone sync /srv/tm-local/ ${CM_REMOTE}-meta/ \
   --config /etc/rclone/rclone.conf --exclude "*/bands/**" --exclude "*/lock" \

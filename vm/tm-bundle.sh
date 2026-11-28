@@ -1,16 +1,7 @@
 #!/bin/sh
 # CloudMachine: which image in /srv/tm-local holds the bands that live on Drive.
-#
-# bundle.env (CM_BUNDLE=<name>.sparsebundle) is written by vm-prepare-bundle.
-# Time Machine renames the image when the Mac's name changes (25 Nov 2026), so
-# the stored name is checked before every use and follows the rename - but only
-# to the unmistakably prepared image: 32 MB bands, none of its own on local disk.
-# A new image Time Machine started (875 MB bands) is never bound over.
-#
-#   tm-bundle resolve    print the image's name, fixing bundle.env if renamed
-#   tm-bundle bind       bind the Drive bands into the image (tm-bands-bind)
-#   tm-bundle unbind     undo the bind, whatever the image is called now
-#   tm-bundle has-info   0 when the image has an Info.plist (tm-meta-sync)
+# bundle.env (CM_BUNDLE) is checked before every use and follows a rename by Time
+# Machine (25 Nov 2026), only to the prepared image (32 MB bands, none on local disk).
 set -u
 
 LOCAL="${CM_LOCAL:-/srv/tm-local}"
