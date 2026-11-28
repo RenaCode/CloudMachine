@@ -117,6 +117,11 @@ struct MachineStatus: Equatable {
     }
   }
 
+  /// `servicesDown` for people: Samba left stopped by a failed install says so.
+  var servicesDownLabels: [String] {
+    servicesDown.map { $0 == "smbd" && smbdAttention ? "smbd (\(L10n.tr("ACTION NEEDED")))" : $0 }
+  }
+
   /// The "Services" row of the machine card. All services up is green only
   /// with the share confirmed by both probes - otherwise the row says what
   /// the probes found.
@@ -127,7 +132,7 @@ struct MachineStatus: Equatable {
       if let summary = shareProblemSummary { return summary }
       return L10n.tr("All running")
     case .some(false):
-      return L10n.tr("Not running: %@", servicesDown.joined(separator: ", "))
+      return L10n.tr("Not running: %@", servicesDownLabels.joined(separator: ", "))
     case .none: return L10n.tr("not read")
     }
   }
@@ -217,10 +222,9 @@ extension AppStatus {
     guard state == .upToDate || state.isMovingData else { return state }
     // The machine runs but its services were not read: not "all good", unknown.
     if machine.isRunning && machine.servicesHealthy == nil { return .queueUnknown }
-    let down = machine.servicesDown.filter { !(machine.smbdHeld && $0 == "smbd") }
+    let down = machine.servicesDownLabels  // a Samba paused on purpose is not in it
     if machine.servicesHealthy == false, !down.isEmpty {
-      let names = down.map { $0 == "smbd" && machine.smbdAttention ? "smbd (needs action)" : $0 }
-      return .servicesDown(names: names.joined(separator: ", "))
+      return .servicesDown(names: down.joined(separator: ", "))
     }
     // Only an idle upload is doubted by an old backup: a moving one may well be
     // the backup itself (first backup, after sleep), and so may a running one.

@@ -256,5 +256,9 @@ extension L10nPolish {
       "Samba z Maca:     %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Ten Mac nie znalazł trasy do %@ (%@). Albo trasa do maszyny zniknęła, albo prywatność „Sieć lokalna” w macOS nie pozwoliła CloudMachine - wtedy zezwól w Ustawieniach systemowych > Prywatność i ochrona > Sieć lokalna. Sprawdź: cloudmachine-agent vm-status",
+    "Samba was left stopped by a failed image installation. Repeat the installation (vm-prepare-bundle) first.":
+      "Samba została zatrzymana po nieudanej instalacji obrazu. Najpierw powtórz instalację (vm-prepare-bundle).",
+    "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
+      "Instalacja obrazu nie udała się i nie udało się zapisać, że Samba ma pozostać zatrzymana. Nie uruchamiaj Samby przed sprawdzeniem obrazu.",
   ]
 }

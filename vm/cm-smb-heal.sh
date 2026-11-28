@@ -18,10 +18,10 @@ if active punchfs && mountpoint -q /srv/tm-punch && [ -s "$BUNDLE_ENV" ] \
 fi
 
 # 2. bind is up, Samba is not: start it, unless it was stopped on purpose (marker
-# <= 7200 s old) or a failed operation left it stopped (attention file).
+# 0..7200 s old; a future mtime is expired) or a failed operation left it stopped (attention file).
 if active tm-bands-bind && ! active smbd; then
   [ -e "$ATTENTION" ] && exit 0
-  if a=$(age "$HOLD") && [ "$a" -le 7200 ]; then exit 0; fi
+  if a=$(age "$HOLD") && [ "$a" -ge 0 ] && [ "$a" -le 7200 ]; then exit 0; fi
   rm -f "$HOLD"
   systemctl --no-block start smbd
 fi

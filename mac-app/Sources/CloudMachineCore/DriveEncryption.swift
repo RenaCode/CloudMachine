@@ -386,7 +386,8 @@ public enum DriveEncryption {
       // `move` stopped Samba before the last sync; until the way back is
       // armed below, any failure must at least start it again.
       "set -euo pipefail",
-      "trap 'systemctl start smbd' ERR",
+      VMLayout.refuseUnderAttention,
+      "trap '\(VMLayout.startSmbd)' ERR",
       preflightScript(oldRemote: oldRemote),
       // tm-bundle follows a rename of the image by Time Machine; older
       // machines without it keep the stored name.
@@ -397,9 +398,9 @@ public enum DriveEncryption {
       "test \"$before\" -gt 0",
       VMLayout.holdSmbd,
       "unsent=$(\(queue))",
-      "if [ \"$unsent\" != 0 ]; then systemctl start smbd; echo \"unsent $unsent bytes\" >&2; exit 3; fi",
+      "if [ \"$unsent\" != 0 ]; then \(VMLayout.startSmbd); echo \"unsent $unsent bytes\" >&2; exit 3; fi",
       "cp -p \(env) \(VMLayout.shellQuoted(saved))",
-      "restore() { cp -p \(VMLayout.shellQuoted(saved)) \(env); systemctl restart \(units); systemctl start smbd; }",
+      "restore() { cp -p \(VMLayout.shellQuoted(saved)) \(env); systemctl restart \(units); \(VMLayout.startSmbd); }",
       "trap 'echo \"FAILED - the previous folder is back\" >&2; restore' ERR",
       "systemctl stop tm-bands-bind punchfs rclone-tm",
       "printf '%s\\n' \(VMLayout.shellQuoted(VMLayout.envLine("CM_REMOTE", newRemote))) > \(env)",
@@ -408,7 +409,7 @@ public enum DriveEncryption {
       "mountpoint -q \"$B\"",
       "after=$(find \"$B/\" -type f | wc -l)",
       "test \"$after\" -eq \"$before\"",
-      "systemctl start smbd",
+      VMLayout.startSmbd,
       "trap - ERR",
       "echo CM-REPOINTED $before",
     ].joined(separator: "\n")
@@ -714,14 +715,22 @@ public enum DriveEncryption {
 
     // Samba off BEFORE the last sync: a backup started now (by hand, by the
     // guard) cannot write a band that the sync has already passed.
-    guard let keepHold = await VMLayout.holdSamba()
+    // A failed image installation left Samba stopped on purpose: only repeating
+    // vm-prepare-bundle clears that; this operation must not touch it.
+    if await VMLayout.attentionRecorded() {
+      return fail(
+        L10n.tr(
+          "Samba was left stopped by a failed image installation. Repeat the installation (vm-prepare-bundle) first."
+        ))
+    }
+    guard let keepHold = await VMLayout.holdSamba(refusingUnderAttention: true)
     else { return fail(L10n.tr("Could not stop smbd in the machine.")) }
     defer { keepHold.cancel() }
     CMLogger.log("vm-encrypt: \(direction) - last sync and cryptcheck")
     let synced = try? await VMLayout.rootShell(
       finalSyncScript(remotes, direction: direction), timeout: 6 * 3600)
     guard synced?.succeeded == true, synced?.stdout.contains("CM-CHECKED") == true else {
-      _ = try? await VMLayout.rootShell("systemctl start smbd", timeout: 120)
+      _ = try? await VMLayout.rootShell(VMLayout.startSmbd, timeout: 120)
       let tail = VMLayout.errorTail(synced)
       let hint = synced.flatMap { syncFailureHint($0.stderr + $0.stdout, cryptRoot: cryptRoot) }
       return fail(
@@ -733,7 +742,7 @@ public enum DriveEncryption {
     guard moved?.succeeded == true, moved?.stdout.contains("CM-REPOINTED") == true else {
       // The script starts Samba on its own failures; not if it never ran
       // to the end (no answer from limactl). Idempotent either way.
-      _ = try? await VMLayout.rootShell("systemctl start smbd", timeout: 120)
+      _ = try? await VMLayout.rootShell(VMLayout.startSmbd, timeout: 120)
       return fail(
         L10n.tr(
           "Moving the machine failed; it went back to %@: %@", old, VMLayout.errorTail(moved)))

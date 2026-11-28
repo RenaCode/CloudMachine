@@ -334,7 +334,7 @@ final class VMLayoutTests: XCTestCase {
             || l.trimmingCharacters(in: .whitespaces).hasPrefix("//"),
           "\(file): bare stop: \(l)")
       }
-      holds += text.components(separatedBy: "VMLayout.holdSamba()").count - 1
+      holds += text.components(separatedBy: "VMLayout.holdSamba(").count - 1
     }
     XCTAssertEqual(holds, 2, "VMBundlePrep and DriveEncryption stop Samba through holdSamba")
     XCTAssertEqual(VMLayout.quiesceScript, "systemctl stop smbd; sync")
@@ -491,7 +491,7 @@ final class VMLayoutTests: XCTestCase {
 
   /// A deliberate stop writes the marker FRESH (`: >`, not `touch`): the old
   /// content or mtime of a previous run must not survive. Run for real.
-  func testHoldSmbdRewritesTheMarkerAndClearsAttention() throws {
+  func testHoldSmbdRewritesTheMarkerAndLeavesAttentionAlone() throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -513,12 +513,15 @@ final class VMLayoutTests: XCTestCase {
     p.waitUntilExit()
     XCTAssertEqual(p.terminationStatus, 0)
     XCTAssertEqual(try String(contentsOfFile: hold, encoding: .utf8), "", "old content is gone")
-    XCTAssertFalse(FileManager.default.fileExists(atPath: attention), "a new attempt clears it")
+    XCTAssertTrue(
+      FileManager.default.fileExists(atPath: attention),
+      "only a successful vm-prepare-bundle clears attention")
   }
 
   /// The attention file is on the disk (a reboot must not start Samba on a
   /// half-installed image) and Samba's drop-in refuses to start while it exists.
   func testAttentionIsPersistentAndBlocksSamba() throws {
+    XCTAssertFalse(VMLayout.holdSmbd.contains("smbdAttention"))
     XCTAssertTrue(VMLayout.Guest.smbdAttention.hasPrefix("/var/lib/"))
     let smbd = try unit("vm/systemd/smbd.service.d/cloudmachine.conf")
     XCTAssertTrue(smbd.contains("ConditionPathExists=!\(VMLayout.Guest.smbdAttention)"))
@@ -613,6 +616,122 @@ final class VMLayoutTests: XCTestCase {
       run: { _ in false }, every: 0.02, touch: { await counter.bump() })
     XCTAssertNil(failed, "a failed stop starts no keep-alive and leaves no hold to keep")
     XCTAssertTrue(VMLayout.refreshHold.hasPrefix("touch -c "), "never re-creates the marker")
+  }
+
+  /// Runs a shell fragment with the given paths swapped in; returns the exit
+  /// status. `bin` holds fake commands (name -> script body).
+  private func shell(
+    _ script: String, attention: String, hold: String? = nil, bin: [String: String] = [:]
+  ) throws -> Int32 {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    for (name, body) in bin {
+      let url = dir.appendingPathComponent(name)
+      try ("#!/bin/sh\n" + body + "\n").write(to: url, atomically: true, encoding: .utf8)
+      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+    // The real /var/lib/cloudmachine does not exist on the Mac running the tests.
+    var text = script.replacingOccurrences(of: "mkdir -p /var/lib/cloudmachine && ", with: "")
+      .replacingOccurrences(of: VMLayout.Guest.smbdAttention, with: attention)
+    if let hold { text = text.replacingOccurrences(of: VMLayout.Guest.smbdHold, with: hold) }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = ["-c", text]
+    p.environment = ["PATH": dir.path + ":/usr/bin:/bin"]
+    p.standardError = FileHandle.nullDevice
+    try p.run()
+    p.waitUntilExit()
+    return p.terminationStatus
+  }
+
+  private func tempDir() throws -> URL {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+  }
+
+  /// With the attention file set, the repoint script and the pre-hold check
+  /// refuse (exit 4) BEFORE touching Samba, the marker or any unit.
+  func testOperationsRefuseUnderAttention() throws {
+    let dir = try tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let attention = dir.appendingPathComponent("attention").path
+    let hold = dir.appendingPathComponent("hold").path
+    let calls = dir.appendingPathComponent("calls").path
+    let recorder = "echo \"$0 $@\" >> \(calls)"
+    let bin = ["systemctl": recorder, "rclone": recorder, "curl": recorder, "cp": recorder]
+    FileManager.default.createFile(atPath: attention, contents: nil)
+    let repoint = DriveEncryption.repointScript(
+      oldRemote: "gdrive:CloudMachine/m-tm", newRemote: "gdrive-crypt:tm", stamp: "s")
+    XCTAssertEqual(try shell(repoint, attention: attention, hold: hold, bin: bin), 4)
+    let guarded = "[ ! -e \(VMLayout.Guest.smbdAttention) ] && \(VMLayout.holdSmbd)"
+    XCTAssertNotEqual(try shell(guarded, attention: attention, hold: hold, bin: bin), 0)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: hold), "no marker made")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: calls), "nothing was run")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: attention), "attention untouched")
+    XCTAssertEqual(try shell(VMLayout.refuseUnderAttention, attention: attention), 4)
+    try FileManager.default.removeItem(atPath: attention)
+    XCTAssertEqual(try shell(VMLayout.refuseUnderAttention, attention: attention), 0)
+  }
+
+  /// The install script records attention in its OWN shell on any failure, and
+  /// clears it (and the trap) only at the end. Including a failed write.
+  func testInstallRecordsAttentionOnFailureInTheSameShell() throws {
+    let dir = try tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let attention = dir.appendingPathComponent("attention").path
+    let failing = "set -eu; \(VMLayout.recordAttentionOnFailure); false"
+    XCTAssertNotEqual(try shell(failing, attention: attention), 0)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: attention), "recorded")
+    // Success path: clears an old record and does not re-create it.
+    let ok = "set -eu; \(VMLayout.recordAttentionOnFailure); \(VMLayout.clearAttention); true"
+    XCTAssertEqual(try shell(ok, attention: attention), 0)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: attention), "cleared by success")
+    // A failed WRITE (unwritable location): the script still fails, nothing is
+    // recorded - and the app notices via attentionRecorded.
+    let nowhere = dir.appendingPathComponent("no/such/dir/attention").path
+    let broken = "set -eu; \(VMLayout.recordAttentionOnFailure); false"
+    XCTAssertNotEqual(try shell(broken, attention: nowhere), 0)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: nowhere))
+    // The real install script wires them in: trap first, clear just before the start.
+    let script = VMBundlePrep.installScript(
+      name: "n.sparsebundle", staging: "/tmp/s", aside: "/tmp/a", envLine: "CM_BUNDLE=n")
+    let lines = script.split(separator: "\n").map(String.init)
+    XCTAssertEqual(lines[1], VMLayout.recordAttentionOnFailure)
+    XCTAssertEqual(lines[lines.count - 2], VMLayout.clearAttention)
+    XCTAssertEqual(lines.last, VMLayout.startSmbd)
+  }
+
+  func testAttentionRecordedAsksTheMachine() async {
+    let ran = HoldRecorder()
+    let yes = await VMLayout.attentionRecorded(run: {
+      await ran.add($0)
+      return true
+    })
+    let no = await VMLayout.attentionRecorded(run: { _ in false })
+    XCTAssertTrue(yes)
+    XCTAssertFalse(no, "a failed write is reported, not assumed")
+    let scripts = await ran.scripts
+    XCTAssertEqual(scripts, ["[ -e \(VMLayout.Guest.smbdAttention) ]"])
+  }
+
+  /// `systemctl start smbd` exits 0 when Samba's condition skips it; only
+  /// is-active tells the truth.
+  func testStartSmbdChecksThatSambaRuns() throws {
+    let dir = try tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let skipped = ["systemctl": "[ \"$1\" = is-active ] && exit 3\nexit 0"]
+    XCTAssertNotEqual(try shell(VMLayout.startSmbd, attention: "/x", bin: skipped), 0)
+    let running = ["systemctl": "exit 0"]
+    XCTAssertEqual(try shell(VMLayout.startSmbd, attention: "/x", bin: running), 0)
+  }
+
+  /// A future mtime (clock jump) is an expired pause, not an eternal one.
+  func testFutureMarkerIsExpired() throws {
+    let bound: Set<String> = ["punchfs", "tm-bands-bind"]
+    XCTAssertEqual(try runHealer(active: bound, holdAgeMinutes: -30), ["--no-block start smbd"])
+    XCTAssertNil(VMStatus.report(scriptOutput: "SMBDHOLD -50").smbdHoldAge)
   }
 
   /// A failed conversion flags attention in the persistent file.

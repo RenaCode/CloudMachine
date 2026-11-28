@@ -135,8 +135,13 @@ public enum VMBundlePrep {
     else { return fail(L10n.tr("Could not stop smbd in the machine.")) }
     defer { keepHold.cancel() }
     func failRestoringSamba(_ message: String) async -> Outcome {
-      _ = try? await VMLayout.rootShell("rm -rf \(staging); systemctl start smbd", timeout: 120)
-      return fail(message + "\n" + L10n.tr("The image was not changed; smbd started again."))
+      let started =
+        (try? await VMLayout.rootShell(
+          "rm -rf \(staging); \(VMLayout.startSmbd)", timeout: 120))?.succeeded == true
+      // Only say it when it is true: a skipped start exits 0 without running Samba.
+      return fail(
+        started
+          ? message + "\n" + L10n.tr("The image was not changed; smbd started again.") : message)
     }
 
     // 7. Copy to the Mac.
@@ -238,12 +243,19 @@ public enum VMBundlePrep {
       envLine: VMLayout.envLine("CM_BUNDLE", name))
     let installed = try? await VMLayout.rootShell(install, timeout: 3600)
     guard installed?.succeeded == true else {
-      // Samba stays stopped: say so loudly (red at once, never auto-restarted).
-      _ = try? await VMLayout.rootShell(VMLayout.flagSmbdNeedsAttention, timeout: 60)
+      // The install script recorded "attention" itself, in its own shell. If that
+      // write failed too, say so: nothing would stop a restart of Samba.
+      let recorded = await VMLayout.attentionRecorded()
+      let failed = L10n.tr(
+        "Installing the converted image FAILED: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original is in %@ in the machine.",
+        VMLayout.errorTail(installed), aside)
       return fail(
-        L10n.tr(
-          "Installing the converted image FAILED: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original is in %@ in the machine.",
-          VMLayout.errorTail(installed), aside))
+        recorded
+          ? failed
+          : failed + "\n"
+            + L10n.tr(
+              "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image."
+            ))
     }
     return Outcome(
       succeeded: true,
@@ -261,6 +273,8 @@ public enum VMBundlePrep {
     let drive = "\(VMLayout.Guest.driveRoot)/bands"
     return [
       "set -euo pipefail",
+      // Same shell, so a failure cannot lose the record that Samba must stay down.
+      VMLayout.recordAttentionOnFailure,
       "B=\(bundle)",
       // Checked again here: between the first check and now someone may have written there.
       "if [ -n \"$(ls -A \(drive) 2>/dev/null)\" ]; then echo 'bands on Drive appeared meanwhile' >&2; exit 3; fi",
@@ -282,7 +296,8 @@ public enum VMBundlePrep {
       "mountpoint -q \"$B/bands\"",
       "test \"$(find \"$B/bands/\" -type f | wc -l)\" -eq \"$count\"",
       "rm -rf \(staging)",
-      "systemctl start smbd",
+      VMLayout.clearAttention,
+      VMLayout.startSmbd,
     ].joined(separator: "\n")
   }
 

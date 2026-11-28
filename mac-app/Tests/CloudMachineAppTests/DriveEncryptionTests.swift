@@ -312,9 +312,9 @@ final class DriveEncryptionTests: XCTestCase {
     // `move` stopped Samba before the last sync. A failure before the way
     // back is armed (no bands, a preflight miss) must not leave it stopped:
     // container test, 03.11, `before=0` left smbd inactive.
-    XCTAssertLessThan(index("trap 'systemctl start smbd' ERR"), index("systemctl cat rclone-tm"))
-    XCTAssertLessThan(index("trap 'systemctl start smbd' ERR"), index("test \"$before\" -gt 0"))
-    XCTAssertLessThan(index("trap 'systemctl start smbd' ERR"), index("trap 'echo \"FAILED"))
+    XCTAssertLessThan(index("trap '\(VMLayout.startSmbd)' ERR"), index("systemctl cat rclone-tm"))
+    XCTAssertLessThan(index("trap '\(VMLayout.startSmbd)' ERR"), index("test \"$before\" -gt 0"))
+    XCTAssertLessThan(index("trap '\(VMLayout.startSmbd)' ERR"), index("trap 'echo \"FAILED"))
   }
 
   private func goodSwitch(_ direction: DriveEncryption.Direction = .encrypt)

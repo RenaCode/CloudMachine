@@ -979,5 +979,9 @@ extension L10nTranslations {
       "Percubaan seterusnya: %@",
     "Lima is not installed - run in Terminal: %@":
       "Lima belum dipasang - jalankan dalam Terminal: %@",
+    "Samba was left stopped by a failed image installation. Repeat the installation (vm-prepare-bundle) first.":
+      "Samba ditinggalkan berhenti oleh pemasangan imej yang gagal. Ulangi pemasangan (vm-prepare-bundle) dahulu.",
+    "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
+      "Pemasangan imej gagal dan tidak dapat direkodkan bahawa Samba mesti kekal berhenti. Jangan mulakan Samba sebelum imej disemak.",
   ]
 }

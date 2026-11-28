@@ -322,7 +322,8 @@ final class AppStatusHealthTests: XCTestCase {
     status.machine.smbdHoldAge = 10
     status.machine.smbdAttention = true
     XCTAssertFalse(status.machine.smbdHeld)
-    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "smbd (needs action)"))
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "smbd (ACTION NEEDED)"))
+    XCTAssertEqual(status.machine.servicesText, "Not running: smbd (ACTION NEEDED)")
     XCTAssertEqual(status.overallTone, .danger)
   }
 

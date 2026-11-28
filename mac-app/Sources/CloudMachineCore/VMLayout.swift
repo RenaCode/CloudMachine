@@ -393,8 +393,31 @@ public enum VMLayout {
   /// A deliberate stop of Samba: leaves the marker so nothing restarts it.
   /// A stop that fails removes the marker again: Samba is still running.
   public static let holdSmbd =
-    "rm -f \(Guest.smbdAttention); : > \(Guest.smbdHold) && "
+    ": > \(Guest.smbdHold) && "
     + "{ systemctl stop smbd || { rm -f \(Guest.smbdHold); false; }; }"
+
+  /// Only a successful install (`vm-prepare-bundle`) clears the attention file.
+  /// Every other operation refuses to run while it exists (exit 4) - they would
+  /// start Samba on a half-installed image.
+  public static let refuseUnderAttention =
+    "[ ! -e \(Guest.smbdAttention) ] || "
+    + "{ echo 'smbd needs attention: repeat vm-prepare-bundle first' >&2; exit 4; }"
+
+  /// A start that checks the result: Samba skipped by its condition (the
+  /// attention file) exits 0 without running.
+  public static let startSmbd = "systemctl start smbd && systemctl is-active --quiet smbd"
+
+  /// Inside the install script, in the SAME shell: any failure records attention.
+  public static let recordAttentionOnFailure =
+    "trap 'rc=$?; [ $rc -eq 0 ] || { \(flagSmbdNeedsAttention); }' EXIT"
+  public static let clearAttention = "rm -f \(Guest.smbdAttention); trap - EXIT"
+
+  /// Whether the attention file is really there (after a failed install).
+  public static func attentionRecorded(
+    run: (String) async -> Bool = { (try? await rootShell($0, timeout: 60))?.succeeded == true }
+  ) async -> Bool {
+    await run("[ -e \(Guest.smbdAttention) ]")
+  }
 
   /// A hold older than this is a failure again, so that a forgotten marker
   /// cannot hide a Samba that is simply dead. Image conversion takes minutes.
@@ -431,13 +454,16 @@ public enum VMLayout {
   /// Stops Samba on purpose and keeps the hold fresh; `nil` = the stop failed
   /// (no marker is left). The caller cancels the returned task when done.
   public static func holdSamba(
+    refusingUnderAttention: Bool = false,
     run: (String) async -> Bool = { (try? await rootShell($0, timeout: 120))?.succeeded == true },
     every interval: TimeInterval = 600,
     touch: @escaping @Sendable () async -> Void = {
       _ = try? await rootShell(refreshHold, timeout: 60)
     }
   ) async -> Task<Void, Never>? {
-    guard await run(holdSmbd) else { return nil }
+    let script =
+      refusingUnderAttention ? "[ ! -e \(Guest.smbdAttention) ] && \(holdSmbd)" : holdSmbd
+    guard await run(script) else { return nil }
     return keepHoldFresh(every: interval, touch: touch)
   }
 

@@ -979,5 +979,9 @@ extension L10nTranslations {
       "下次尝试：%@",
     "Lima is not installed - run in Terminal: %@":
       "未安装 Lima - 请在“终端”中运行：%@",
+    "Samba was left stopped by a failed image installation. Repeat the installation (vm-prepare-bundle) first.":
+      "镜像安装失败，Samba 已保持停止。请先重新执行安装（vm-prepare-bundle）。",
+    "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
+      "镜像安装失败，且无法记录 Samba 必须保持停止。检查镜像之前请不要启动 Samba。",
   ]
 }
