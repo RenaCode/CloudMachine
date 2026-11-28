@@ -239,8 +239,7 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertEqual(status.machine.servicesHealthy, true)
     XCTAssertEqual(status.machine.servicesTone, .warning)
     XCTAssertNotEqual(status.overallTone, .danger)
-    XCTAssertNotEqual(status.headline, "A service in the CloudMachine machine is not running")
-    XCTAssertNotEqual(status.headline, "Ready", "paused is not ready")
+    XCTAssertEqual(status.headline, "Not running: smbd (paused)")
     XCTAssertFalse(status.healthy)
     // Held does not excuse another service that is down.
     status.machine.services["punchfs"] = "failed"

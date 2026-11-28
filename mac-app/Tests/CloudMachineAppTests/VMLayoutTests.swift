@@ -317,6 +317,29 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(VMLayout.Guest.smbdHold.hasPrefix("/run/"), "tmpfs: a reboot clears it")
   }
 
+  /// The last sync may outlast the 2 h limit: the marker is touched while the
+  /// operation runs and the touching stops with it.
+  func testKeepHoldFreshTouchesUntilCancelled() async throws {
+    let counter = HoldCounter()
+    let task = VMLayout.keepHoldFresh(every: 0.02) { await counter.bump() }
+    try await Task.sleep(nanoseconds: 200_000_000)
+    task.cancel()
+    await task.value
+    let seen = await counter.value
+    XCTAssertGreaterThanOrEqual(seen, 3)
+    try await Task.sleep(nanoseconds: 100_000_000)
+    let after = await counter.value
+    XCTAssertEqual(after, seen, "no touching after the operation ended")
+  }
+
+  func testLongOperationsKeepTheHoldFresh() throws {
+    let core = Self.repoRoot.appendingPathComponent("mac-app/Sources/CloudMachineCore")
+    for file in ["VMBundlePrep.swift", "DriveEncryption.swift"] {
+      let text = try String(contentsOf: core.appendingPathComponent(file), encoding: .utf8)
+      XCTAssertTrue(text.contains("VMLayout.keepHoldFresh()"), file)
+    }
+  }
+
   /// Every deliberate stop in the app goes through `holdSmbd`; a bare
   /// `systemctl stop smbd` would leave no marker and the bind would restart Samba.
   /// The shutdown quiesce is the one exception: the machine goes down with
@@ -694,4 +717,9 @@ final class VMLayoutTests: XCTestCase {
       ["disk: 200GiB -> 300GiB"])
     XCTAssertEqual(VMUpdate.topLevel("# disk: 1\ndisk: 200GiB\n  cpus: 9\n"), ["disk": "200GiB"])
   }
+}
+
+private actor HoldCounter {
+  private(set) var value = 0
+  func bump() { value += 1 }
 }

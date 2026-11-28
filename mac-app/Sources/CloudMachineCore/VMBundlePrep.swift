@@ -133,6 +133,8 @@ public enum VMBundlePrep {
     step("stopping smbd")
     guard (try? await VMLayout.rootShell(VMLayout.holdSmbd, timeout: 120))?.succeeded == true
     else { return fail(L10n.tr("Could not stop smbd in the machine.")) }
+    let keepHold = VMLayout.keepHoldFresh()
+    defer { keepHold.cancel() }
     func failRestoringSamba(_ message: String) async -> Outcome {
       _ = try? await VMLayout.rootShell("rm -rf \(staging); systemctl start smbd", timeout: 120)
       return fail(message + "\n" + L10n.tr("The image was not changed; smbd started again."))

@@ -363,7 +363,7 @@ final class AppStatus: ObservableObject {
     }
     // Every service "active" says nothing about whether the path through
     // them works - and a probe that did not answer is not a path that works.
-    if machine.isRunning, machine.servicesHealthy == true,
+    if machine.isRunning, machine.servicesHealthy == true, !machine.smbdHeld,
       let summary = machine.shareProblemSummary
     {
       return summary

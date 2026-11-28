@@ -395,6 +395,26 @@ public enum VMLayout {
   /// cannot hide a Samba that is simply dead. Image conversion takes minutes.
   public static let smbdHoldLimit: TimeInterval = 2 * 3600
 
+  /// Keeps a deliberate hold fresh while the operation that made it runs (the
+  /// last encryption sync alone may take 6 h, more than `smbdHoldLimit`), by
+  /// touching the marker every 10 min. Cancel the task when the operation ends:
+  /// a Samba left stopped then becomes a failure after the limit, as it should.
+  public static func keepHoldFresh(
+    every interval: TimeInterval = 600,
+    touch: @escaping @Sendable () async -> Void = {
+      _ = try? await rootShell(
+        "[ -e \(Guest.smbdHold) ] && touch \(Guest.smbdHold)", timeout: 60)
+    }
+  ) -> Task<Void, Never> {
+    Task {
+      while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        if Task.isCancelled { break }
+        await touch()
+      }
+    }
+  }
+
   static let quiesceScript = "systemctl stop smbd; sync"
 
   public static func quiesceGuest(timeout: TimeInterval) async -> Bool {

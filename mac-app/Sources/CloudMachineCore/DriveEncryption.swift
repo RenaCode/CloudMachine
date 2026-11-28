@@ -716,6 +716,8 @@ public enum DriveEncryption {
     // guard) cannot write a band that the sync has already passed.
     guard (try? await VMLayout.rootShell(VMLayout.holdSmbd, timeout: 120))?.succeeded == true
     else { return fail(L10n.tr("Could not stop smbd in the machine.")) }
+    let keepHold = VMLayout.keepHoldFresh()
+    defer { keepHold.cancel() }
     CMLogger.log("vm-encrypt: \(direction) - last sync and cryptcheck")
     let synced = try? await VMLayout.rootShell(
       finalSyncScript(remotes, direction: direction), timeout: 6 * 3600)
