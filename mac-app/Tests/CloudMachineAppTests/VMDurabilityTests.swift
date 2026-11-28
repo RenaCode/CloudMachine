@@ -149,9 +149,7 @@ final class VMDurabilityTests: XCTestCase {
     }
     // The JSON limit is 65,536 bytes, reached at about 54 KB of embedded files
     // (61,980 bytes of JSON for 51 KB): keep a wide margin below it.
-    // 28.11.2026: 42,000 -> 48,000 for cm-unmount-stale (the template stood at 41.7 KB);
-    // still 6 KB below the measured failure point.
-    XCTAssertLessThan(total, 48_000, "embedded files: \(total) bytes")
+    XCTAssertLessThan(total, 42_000, "embedded files: \(total) bytes")
     for big in ["punchfs/punchfs.c", "punchfs/test-punchfs.sh", "punchfs/passthrough_helpers.h"] {
       XCTAssertFalse(files.contains(big), "\(big) must ship inside the archive")
     }
