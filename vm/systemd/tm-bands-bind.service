@@ -7,20 +7,24 @@ Description=Bind: Time Machine bands on Google Drive
 Requires=punchfs.service
 After=punchfs.service
 Before=smbd.service
+PartOf=punchfs.service
+StartLimitIntervalSec=0
 ConditionPathExists=/etc/cloudmachine/bundle.env
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# punchfs is Type=simple: systemd calls it started before its FUSE mount is up.
-# Binding then fails ("special device /srv/tm-punch/bands does not exist") and
-# Samba, which Requires this unit, stays down - it happened at boot on 12 Nov
-# and after a restart on 13 Nov 2026, a day without backups. Wait for the mount.
+# 27 Nov 2026: one failed bind kept Samba down 13 h. Retry.
+Restart=on-failure
+RestartSec=10
+# punchfs (Type=simple) is "started" before its mount is up: wait for it.
 TimeoutStartSec=150
 ExecStartPre=/usr/bin/timeout 120 /bin/sh -c 'until mountpoint -q /srv/tm-punch && [ -d /srv/tm-punch/bands ]; do sleep 1; done'
 # Time Machine renames the image when the Mac's name changes (25 Nov 2026); the
 # script follows the rename instead of trusting the name stored in bundle.env.
 ExecStart=/usr/local/sbin/tm-bundle bind
+# Samba is not retried after "dependency failed": start it once bound.
+ExecStartPost=-/bin/systemctl --no-block start smbd.service
 ExecStop=/usr/local/sbin/tm-bundle unbind
 
 [Install]

@@ -1161,7 +1161,7 @@ private struct DashboardContent: View {
   /// Red - you need to act. Without the middle state an exhausted limit
   /// would have to pretend to be either a failure or all-clear, and it is neither.
   private var uploadStateCard: some View {
-    let state = status.machine.uploadState
+    let state = status.uploadCardState
     let tone = uploadTone(state)
 
     return VStack(alignment: .leading, spacing: 12) {
@@ -1218,6 +1218,7 @@ private struct DashboardContent: View {
     case .flowing: return "arrow.up.circle.fill"
     case .upToDate: return "checkmark.icloud.fill"
     case .queueUnknown: return "questionmark.circle.fill"
+    case .servicesDown, .backupStale: return "exclamationmark.triangle.fill"
     }
   }
 

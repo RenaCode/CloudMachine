@@ -193,6 +193,30 @@ struct MachineStatus: Equatable {
   }
 }
 
+extension AppStatus {
+  /// What the upload card shows. The upload state alone says "ALL GOOD" when
+  /// the queue is empty, even while Samba is down or no backup has completed
+  /// for a day (27.11.2026). A nominal upload state is therefore overridden
+  /// by those two facts; every specific upload problem keeps its own state.
+  var uploadCardState: UploadState {
+    let state = machine.uploadState
+    guard state == .upToDate || state.isMovingData else { return state }
+    if machine.servicesHealthy == false {
+      return .servicesDown(names: machine.servicesDown.joined(separator: ", "))
+    }
+    if backupCycle.known && !backupCycle.isFresh() {
+      let headline: String
+      if let age = backupCycle.age() {
+        headline = L10n.tr("No completed backup for %@", BackupHealth.formatAge(age))
+      } else {
+        headline = L10n.tr("There is no completed backup at all")
+      }
+      return .backupStale(headline: headline, detail: backupCycle.problems.first ?? headline)
+    }
+    return state
+  }
+}
+
 /// Whether the backup cycle is STILL working - measured by the date of the last SUCCESSFUL backup.
 ///
 /// The state of the machine at this moment can be flawless while Time Machine

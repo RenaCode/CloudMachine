@@ -137,6 +137,44 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertEqual(status.headline, "A service in the CloudMachine machine is not running")
   }
 
+  /// 27.11.2026: Samba was down for 13 h while the upload card said ALL GOOD.
+  func testUploadCardIsNotAllGoodWhileAServiceIsDown() {
+    let status = healthyStatus()
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+    status.machine.services["smbd"] = "inactive"
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "smbd"))
+    XCTAssertNotEqual(status.uploadCardState.badge, UploadState.upToDate.badge)
+    XCTAssertTrue(status.uploadCardState.needsAttention)
+    XCTAssertFalse(status.uploadCardState.isNominal)
+  }
+
+  func testUploadCardIsNotAllGoodWhenTheLastBackupIsStale() {
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-23 * 3600 * 2)
+    XCTAssertFalse(status.backupCycle.isFresh())
+    guard case .backupStale(let headline, let detail) = status.uploadCardState else {
+      return XCTFail("expected .backupStale, got \(status.uploadCardState)")
+    }
+    XCTAssertTrue(headline.hasPrefix("No completed backup for"), headline)
+    XCTAssertFalse(detail.isEmpty)
+    XCTAssertFalse(status.uploadCardState.isNominal)
+  }
+
+  /// An unknown backup age is not "stale": the card keeps the upload state.
+  func testUploadCardKeepsUploadStateWhenBackupAgeIsNotRead() {
+    let status = healthyStatus()
+    status.backupCycle.known = false
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+  }
+
+  /// A hard upload problem keeps its own, more specific, state.
+  func testUploadCardKeepsSpecificProblems() {
+    let status = healthyStatus()
+    status.machine.services["smbd"] = "inactive"
+    withReading(status) { $0.erroredFiles = 2 }
+    XCTAssertEqual(status.uploadCardState, .failedFiles(2))
+  }
+
   func testMachineStatesHaveTheirOwnHeadlines() {
     let status = healthyStatus()
     status.machine = MachineStatus()

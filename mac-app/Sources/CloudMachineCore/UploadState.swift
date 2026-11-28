@@ -35,12 +35,18 @@ public enum UploadState: Equatable, Sendable {
   /// "Everything uploaded to Google Drive". False calm is worse than no answer,
   /// because it silences the monitor exactly when nobody knows what is going on.
   case queueUnknown
+  /// Everything uploaded, but a machine service (Samba, the bind...) is down:
+  /// Time Machine cannot reach the share, so "all good" would be false.
+  case servicesDown(names: String)
+  /// Everything uploaded, but the last completed backup is too old.
+  /// Both sentences arrive ready-made (and translated) from the caller.
+  case backupStale(headline: String, detail: String)
 
   /// Whether the state needs a person to react. `false` means "it will sort
   /// itself out", not "all good" - see `dailyQuotaExhausted`.
   public var needsAttention: Bool {
     switch self {
-    case .mountDown, .driveFull, .failedFiles, .bufferFull: return true
+    case .mountDown, .driveFull, .failedFiles, .bufferFull, .servicesDown, .backupStale: return true
     // An unknown state does NOT call for a person: a single timeout happens
     // when rclone is under load and passes by itself. When it does not pass,
     // `backup-health` raises the alarm - persistence is its job, not the
@@ -59,7 +65,8 @@ public enum UploadState: Equatable, Sendable {
   public var isNominal: Bool {
     switch self {
     case .flowing, .upToDate: return true
-    case .mountDown, .driveFull, .failedFiles, .bufferFull, .dailyQuotaExhausted, .queueUnknown:
+    case .mountDown, .driveFull, .failedFiles, .bufferFull, .dailyQuotaExhausted, .queueUnknown,
+      .servicesDown, .backupStale:
       return false
     }
   }
@@ -79,7 +86,8 @@ public enum UploadState: Equatable, Sendable {
   /// nobody knows whether there is anything to wait out.
   public var badge: String {
     switch self {
-    case .mountDown, .driveFull, .failedFiles, .bufferFull: return L10n.tr("ACTION NEEDED")
+    case .mountDown, .driveFull, .failedFiles, .bufferFull, .servicesDown, .backupStale:
+      return L10n.tr("ACTION NEEDED")
     case .dailyQuotaExhausted: return L10n.tr("WILL PASS BY ITSELF — DO NOTHING")
     case .queueUnknown: return L10n.tr("UNKNOWN — CHECK AGAIN SHORTLY")
     case .flowing, .upToDate: return L10n.tr("ALL GOOD")
@@ -97,6 +105,8 @@ public enum UploadState: Equatable, Sendable {
     case .flowing(let queued): return L10n.tr("Uploading to Google Drive — %@ queued", "\(queued)")
     case .upToDate: return L10n.tr("Everything uploaded to Google Drive")
     case .queueUnknown: return L10n.tr("Unknown what is waiting in the queue")
+    case .servicesDown: return L10n.tr("A service in the CloudMachine machine is not running")
+    case .backupStale(let headline, _): return headline
     }
   }
 
@@ -128,6 +138,8 @@ public enum UploadState: Equatable, Sendable {
       return L10n.tr("%@ backup fragments are queued and on their way to Drive.", "\(queued)")
     case .upToDate:
       return L10n.tr("Nothing is waiting in the queue — the backup on Google Drive is complete.")
+    case .servicesDown(let names): return L10n.tr("Not running: %@", names)
+    case .backupStale(_, let detail): return detail
     case .queueUnknown:
       return L10n.tr(
         "rclone did not answer the question about the queue, so it is unknown how many backups are still waiting to be uploaded. This does not mean something broke — under load the answer can be late. It only means that right now nobody knows. If it persists, the backup cycle check will report it."

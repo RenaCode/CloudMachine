@@ -237,6 +237,47 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(unit.contains("TimeoutStartSec="))
   }
 
+  private func unit(_ path: String) throws -> String {
+    try String(
+      contentsOf: Self.repoRoot.appendingPathComponent(path), encoding: .utf8)
+  }
+
+  /// 27.11.2026 19:33: the kernel OOM-killed rclone, punchfs restarted by
+  /// itself, the one-shot bind ran once, failed, and Samba stayed down 13 h.
+  /// The bind must retry on its own, follow a punchfs restart, and start Samba
+  /// itself when it succeeds.
+  func testBandsBindRetriesAndFollowsPunchfsRestarts() throws {
+    let bind = try unit("vm/systemd/tm-bands-bind.service")
+    XCTAssertTrue(bind.contains("\nRestart=on-failure\n"))
+    XCTAssertTrue(bind.contains("\nRestartSec="))
+    XCTAssertTrue(bind.contains("\nStartLimitIntervalSec=0\n"), "retries must never run out")
+    XCTAssertTrue(bind.contains("\nPartOf=punchfs.service\n"))
+    XCTAssertTrue(bind.contains("ExecStartPost=-/bin/systemctl --no-block start smbd.service"))
+
+    let punch = try unit("vm/systemd/punchfs.service")
+    XCTAssertTrue(
+      punch.contains("ExecStartPost=-/bin/systemctl --no-block start tm-bands-bind.service"))
+    let rclone = try unit("vm/systemd/rclone-tm.service")
+    XCTAssertTrue(
+      rclone.contains("ExecStartPost=-/bin/systemctl --no-block start punchfs.service"))
+  }
+
+  /// 27.11.2026: rclone grew to 1.57 GB in the 2 GiB, swapless VM and was
+  /// OOM-killed. Its memory is capped below the machine's and a kill ends the
+  /// unit cleanly so systemd restarts it.
+  func testRcloneMemoryIsCapped() throws {
+    let rclone = try unit("vm/systemd/rclone-tm.service")
+    XCTAssertTrue(rclone.contains("\nMemoryHigh="))
+    XCTAssertTrue(rclone.contains("\nMemoryMax="))
+    XCTAssertTrue(rclone.contains("\nOOMPolicy=stop\n"))
+    XCTAssertTrue(rclone.contains("GOMEMLIMIT="))
+    XCTAssertTrue(rclone.contains("--use-mmap"))
+    XCTAssertTrue(rclone.contains("--buffer-size"))
+    // Samba must outlive rclone when memory is short.
+    let smbd = try unit("vm/systemd/smbd.service.d/limits.conf")
+    XCTAssertTrue(smbd.contains("OOMScoreAdjust=-"))
+  }
+
   /// 13 Nov 2026 06:10: unattended-upgrades updated libc and needrestart
   /// restarted punchfs and Samba in the middle of a backup. The backup stack
   /// is restarted only by CloudMachine (vm-update) or at the next boot.
