@@ -760,6 +760,7 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: attention), "nothing changed")
     XCTAssertFalse(FileManager.default.fileExists(atPath: calls), "no state-changing command ran")
     XCTAssertTrue(early.stdout.contains("CM-UNCHANGED"))
+    XCTAssertFalse(early.stderr.contains("CM-MUTATED"), "an early exit proves nothing was changed")
     XCTAssertEqual(
       VMBundlePrep.installFailure(
         stdout: early.stdout, exitCode: early.status, attentionRecorded: false),
@@ -815,6 +816,51 @@ final class VMLayoutTests: XCTestCase {
     XCTAssertTrue(started.contains("smbd started again"))
     let notStarted = VMBundlePrep.notChangedMessage("boom", sambaStarted: false)
     XCTAssertEqual(notStarted, "boom", "no claim that Samba started")
+  }
+
+  /// The app-side flow with an injected runner: for no answer (nil), ssh's 255 and
+  /// a kill (137), the app writes the attention file, asks again, keeps Samba
+  /// stopped and says the original MAY have been moved - not that it was.
+  func testUncertainInstallResultsWriteAttentionAndSayMay() async {
+    for (code, stderr) in [(nil, nil), (255, ""), (137, "")] as [(Int32?, String?)] {
+      let recorder = HoldRecorder()
+      let flag = VMLayout.flagSmbdNeedsAttention
+      let check = "[ -e \(VMLayout.Guest.smbdAttention) ]"
+      let written = Flag()
+      let resolution = await VMBundlePrep.resolveInstallFailure(
+        stdout: code == nil ? nil : "", stderr: stderr, exitCode: code, tail: "tail",
+        aside: "/aside",
+        run: { script in
+          await recorder.add(script)
+          if script == flag { await written.set() }
+          return script == check ? await written.isSet : true
+        })
+      let scripts = await recorder.scripts
+      XCTAssertEqual(
+        scripts, [check, flag, check], "check, write, check again (\(String(describing: code)))")
+      guard case .stopped(let message) = resolution else {
+        return XCTFail("Samba must stay stopped (\(String(describing: code))): \(resolution)")
+      }
+      XCTAssertTrue(message.contains("MAY have been moved to /aside"), message)
+      XCTAssertFalse(message.contains("The original is in"), "no claim that it was moved")
+      XCTAssertFalse(message.contains("could not record"), "the write worked")
+    }
+  }
+
+  /// When the write fails too, the message says so; a proven move says "is in".
+  func testUnrecordedAndProvenResolutions() async {
+    let unrecorded = await VMBundlePrep.resolveInstallFailure(
+      stdout: nil, stderr: nil, exitCode: nil, tail: "t", aside: "/a", run: { _ in false })
+    guard case .stopped(let message) = unrecorded else { return XCTFail("\(unrecorded)") }
+    XCTAssertTrue(message.contains("could not record that Samba must stay stopped"))
+    let proven = await VMBundlePrep.resolveInstallFailure(
+      stdout: "", stderr: "CM-MUTATED\n", exitCode: 1, tail: "t", aside: "/a", run: { _ in true })
+    guard case .stopped(let said) = proven else { return XCTFail("\(proven)") }
+    XCTAssertTrue(said.contains("The original is in /a"), said)
+    let early = await VMBundlePrep.resolveInstallFailure(
+      stdout: "CM-UNCHANGED\n", stderr: "", exitCode: 3, tail: "t", aside: "/a",
+      run: { _ in false })
+    XCTAssertEqual(early, .restoreSamba("t"))
   }
 
   /// The repoint script's exit 4 is the refusal; nothing else is.
@@ -1110,4 +1156,9 @@ private actor HoldCounter {
 private actor HoldRecorder {
   private(set) var scripts: [String] = []
   func add(_ s: String) { scripts.append(s) }
+}
+
+private actor Flag {
+  private(set) var isSet = false
+  func set() { isSet = true }
 }

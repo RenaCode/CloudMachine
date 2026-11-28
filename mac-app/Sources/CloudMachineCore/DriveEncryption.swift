@@ -319,10 +319,6 @@ public enum DriveEncryption {
       cryptRoot, cryptRoot)
   }
 
-  /// The last pass before the machine moves, with Time Machine stopped: sync
-  /// bands and metadata from `direction`'s source to its target, then
-  /// `cryptcheck` every file (contents, not just sizes). `set -e`: any
-  /// difference fails the script, and nothing is moved.
   /// The repoint script's refusal (exit 4) while the attention file exists.
   static func isAttentionRefusal(exitCode: Int32?) -> Bool { exitCode == 4 }
 
@@ -333,6 +329,10 @@ public enum DriveEncryption {
     )
   }
 
+  /// The last pass before the machine moves, with Time Machine stopped: sync
+  /// bands and metadata from `direction`'s source to its target, then
+  /// `cryptcheck` every file (contents, not just sizes). `set -e`: any
+  /// difference fails the script, and nothing is moved.
   static func finalSyncScript(_ remotes: Remotes, direction: Direction) -> String {
     let p = VMLayout.shellQuoted
     let flags = "--transfers 8 --drive-chunk-size 32M"

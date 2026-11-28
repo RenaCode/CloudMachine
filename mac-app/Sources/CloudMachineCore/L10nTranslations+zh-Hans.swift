@@ -985,5 +985,7 @@ extension L10nTranslations {
       "镜像已安装，但 Samba 没有启动。自愈定时器会在一分钟内启动它；请检查：cloudmachine-agent vm-status",
     "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
       "镜像安装失败，且无法记录 Samba 必须保持停止。检查镜像之前请不要启动 Samba。",
+    "Installing the converted image may have failed halfway: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original MAY have been moved to %@ in the machine; check there before doing anything else (see vm/README.md).":
+      "转换后的镜像安装可能在中途失败：%@\n为避免 Time Machine 打开只安装了一半的镜像，smbd 保持停止。原始镜像可能已被移动到机器中的 %@；请先在那里检查，再做其他操作（见 vm/README.md）。",
   ]
 }

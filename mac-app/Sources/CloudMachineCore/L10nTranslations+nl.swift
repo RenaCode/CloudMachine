@@ -985,5 +985,7 @@ extension L10nTranslations {
       "De image is geïnstalleerd, maar Samba is niet gestart. De hersteltimer start het binnen een minuut; controleer: cloudmachine-agent vm-status",
     "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
       "De installatie van de image is mislukt en er kon niet worden vastgelegd dat Samba gestopt moet blijven. Start Samba niet voordat de image is gecontroleerd.",
+    "Installing the converted image may have failed halfway: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original MAY have been moved to %@ in the machine; check there before doing anything else (see vm/README.md).":
+      "De installatie van de geconverteerde image is mogelijk halverwege mislukt: %@\nsmbd blijft GESTOPT, zodat Time Machine geen half geïnstalleerde image opent. Het origineel is MOGELIJK verplaatst naar %@ in de machine; controleer dat eerst voordat u iets anders doet (zie vm/README.md).",
   ]
 }

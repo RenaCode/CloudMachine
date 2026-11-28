@@ -241,20 +241,13 @@ public enum VMBundlePrep {
       envLine: VMLayout.envLine("CM_BUNDLE", name))
     let installed = try? await VMLayout.rootShell(install, timeout: 3600)
     guard installed?.succeeded == true else {
-      var recorded = await VMLayout.attentionRecorded()
-      var stage = Self.installFailure(
-        stdout: installed?.stdout, exitCode: installed?.exitCode, attentionRecorded: recorded)
-      if stage == .halfInstalledUnrecorded {
-        // The script's own trap may not have run (kill, lost connection): record it now.
-        _ = try? await VMLayout.rootShell(VMLayout.flagSmbdNeedsAttention, timeout: 60)
-        recorded = await VMLayout.attentionRecorded()
-        stage = Self.installFailure(
-          stdout: installed?.stdout, exitCode: installed?.exitCode, attentionRecorded: recorded)
-      }
-      let tail = VMLayout.errorTail(installed)
-      switch stage {
-      case .notChanged:
-        // Nothing was touched: start Samba again as after any early failure.
+      let resolution = await Self.resolveInstallFailure(
+        stdout: installed?.stdout, stderr: installed?.stderr, exitCode: installed?.exitCode,
+        tail: VMLayout.errorTail(installed), aside: aside,
+        run: { (try? await VMLayout.rootShell($0, timeout: 60))?.succeeded == true })
+      switch resolution {
+      case .restoreSamba(let tail):
+        // Proven untouched (CM-UNCHANGED): start Samba again as after any early failure.
         return await failRestoringSamba(tail)
       case .installedSambaDown:
         // The image is in place; only the Samba start failed. The healer retries.
@@ -262,17 +255,8 @@ public enum VMBundlePrep {
           L10n.tr(
             "The image was installed, but Samba did not start. The healer starts it within a minute; check: cloudmachine-agent vm-status"
           ))
-      case .halfInstalled, .halfInstalledUnrecorded:
-        let failed = L10n.tr(
-          "Installing the converted image FAILED: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original is in %@ in the machine.",
-          tail, aside)
-        return fail(
-          stage == .halfInstalled
-            ? failed
-            : failed + "\n"
-              + L10n.tr(
-                "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image."
-              ))
+      case .stopped(let message):
+        return fail(message)
       }
     }
     return Outcome(
@@ -304,6 +288,53 @@ public enum VMBundlePrep {
     if let stdout, stdout.contains("CM-INSTALLED") { return .installedSambaDown }
     if let stdout, exitCode == 3, stdout.contains("CM-UNCHANGED") { return .notChanged }
     return attentionRecorded ? .halfInstalled : .halfInstalledUnrecorded
+  }
+
+  enum InstallResolution: Equatable {
+    /// Proven untouched: restore Samba and report this tail.
+    case restoreSamba(String)
+    case installedSambaDown
+    /// Samba stays stopped; this is the message.
+    case stopped(String)
+  }
+
+  /// What to do after a failed install script, with an injected runner for the
+  /// two machine questions (is the attention file there / write it). An uncertain
+  /// result writes the file itself, asks again, and says "MAY have been moved";
+  /// only a stderr `CM-MUTATED` proves the original was moved.
+  static func resolveInstallFailure(
+    stdout: String?, stderr: String?, exitCode: Int32?, tail: String, aside: String,
+    run: (String) async -> Bool
+  ) async -> InstallResolution {
+    var recorded = await VMLayout.attentionRecorded(run: run)
+    var stage = installFailure(stdout: stdout, exitCode: exitCode, attentionRecorded: recorded)
+    if stage == .halfInstalledUnrecorded {
+      // The script's own trap may not have run (kill, lost connection): record it now.
+      _ = await run(VMLayout.flagSmbdNeedsAttention)
+      recorded = await VMLayout.attentionRecorded(run: run)
+      stage = installFailure(stdout: stdout, exitCode: exitCode, attentionRecorded: recorded)
+    }
+    switch stage {
+    case .notChanged: return .restoreSamba(tail)
+    case .installedSambaDown: return .installedSambaDown
+    case .halfInstalled, .halfInstalledUnrecorded:
+      let proven = stderr?.contains("CM-MUTATED") == true
+      let base =
+        proven
+        ? L10n.tr(
+          "Installing the converted image FAILED: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original is in %@ in the machine.",
+          tail, aside)
+        : L10n.tr(
+          "Installing the converted image may have failed halfway: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original MAY have been moved to %@ in the machine; check there before doing anything else (see vm/README.md).",
+          tail, aside)
+      return .stopped(
+        stage == .halfInstalled
+          ? base
+          : base + "\n"
+            + L10n.tr(
+              "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image."
+            ))
+    }
   }
 
   /// The message after an early failure: "started again" only when it is true.

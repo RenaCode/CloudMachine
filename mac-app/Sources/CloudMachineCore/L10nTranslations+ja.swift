@@ -985,5 +985,7 @@ extension L10nTranslations {
       "イメージはインストールされましたが、Samba が起動しませんでした。修復タイマーが 1 分以内に起動します。確認: cloudmachine-agent vm-status",
     "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
       "イメージのインストールに失敗し、Samba を停止したままにする記録も残せませんでした。イメージを確認するまで Samba を起動しないでください。",
+    "Installing the converted image may have failed halfway: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original MAY have been moved to %@ in the machine; check there before doing anything else (see vm/README.md).":
+      "変換したイメージのインストールが途中で失敗した可能性があります: %@\nTime Machine が中途半端なイメージを開かないよう、smbd は停止したままです。元のイメージはマシン内の %@ に移動された可能性があります。ほかの操作の前にそこを確認してください（vm/README.md を参照）。",
   ]
 }
