@@ -26,12 +26,14 @@ echo "2. kill -9 rclone (what the OOM killer does)"
 kill -9 "$(systemctl show -p MainPID --value rclone-tm.service)"
 all_up 600   # rclone scans the VFS cache before it mounts: minutes
 echo "3. smbd stopped on purpose must STAY stopped across a punchfs restart"
-systemctl stop smbd.service
+# the app's deliberate stop: marker first (VMLayout.holdSmbd)
+touch /run/cloudmachine-smbd-hold && systemctl stop smbd.service
 systemctl restart punchfs.service
 wait_active tm-bands-bind 180
 sleep 20
 [ "$(systemctl is-active smbd)" != active ] || { echo "FAIL: smbd was started again"; exit 1; }
-systemctl start smbd.service
+systemctl start smbd.service   # its ExecStartPost removes the marker
+[ ! -e /run/cloudmachine-smbd-hold ] || { echo "FAIL: marker left behind"; exit 1; }
 all_up 60
 echo "4. a FAILING bind, then its repair: Samba must come back by itself (the 27 Nov incident)"
 d=/run/systemd/system/tm-bands-bind.service.d

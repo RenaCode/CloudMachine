@@ -600,7 +600,8 @@ public enum BackupHealth {
     let report = machineRunning == true ? await VMStatus.currentReport() : nil
     let reading = report?.reading
     let servicesHealthy = report.flatMap {
-      VMStatus.servicesHealthy($0.services, bundlePrepared: $0.bundlePrepared)
+      VMStatus.servicesHealthy(
+        $0.services, bundlePrepared: $0.bundlePrepared, smbdHeld: $0.smbdHeld)
     }
     let address = machineRunning == true ? await VMLayout.currentAddress() : nil
     let registered = await VMStatus.timeMachineTargetsMachine(address: address)
@@ -644,8 +645,10 @@ public enum BackupHealth {
       withinStartupGrace: (systemUptime() ?? .infinity) < startupGraceMinutes * 60,
       backupRunning: await TimeMachineStatus.runningState(),
       // `report == nil` (no answer) is already "machine does not answer".
-      shareRead: report?.shareRead,
-      smb: machineRunning == true ? await SMBProbe.probe(address: address) : nil,
+      // Samba paused on purpose: its probes would only report the pause.
+      shareRead: report?.smbdHeld == true ? nil : report?.shareRead,
+      smb: machineRunning == true && report?.smbdHeld != true
+        ? await SMBProbe.probe(address: address) : nil,
       smbAddress: address)
 
     health.problems.append(contentsOf: unmeasuredLocalDiskProblems(localFreeGB: localFree))

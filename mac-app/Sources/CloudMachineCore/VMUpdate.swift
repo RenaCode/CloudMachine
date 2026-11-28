@@ -155,7 +155,8 @@ public enum VMUpdate {
 
     // 6. The share must be back on the Drive layers.
     guard let report = await VMStatus.currentReport(),
-      VMStatus.servicesHealthy(report.services, bundlePrepared: report.bundlePrepared) == true
+      VMStatus.servicesHealthy(
+        report.services, bundlePrepared: report.bundlePrepared, smbdHeld: report.smbdHeld) == true
     else {
       return fail(
         L10n.tr(

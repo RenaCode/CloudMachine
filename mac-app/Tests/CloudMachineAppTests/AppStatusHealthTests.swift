@@ -228,15 +228,35 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertEqual(UploadState.mountDown.tone, .danger)
   }
 
-  /// Samba stopped on purpose (image conversion) is not "action needed".
-  func testUploadCardIgnoresASambaHeldOnPurpose() {
+  /// Samba stopped on purpose (image conversion) is not "action needed" - on
+  /// ANY surface: card, headline, overall tone, services row.
+  func testHeldSambaIsInformationalEverywhere() {
     let status = healthyStatus()
     status.machine.services["smbd"] = "inactive"
-    status.machine.smbdHeld = true
+    status.machine.smbdHoldAge = 60
+    status.machine.smb = .noAnswer(seconds: 5)
     XCTAssertEqual(status.uploadCardState, .upToDate)
+    XCTAssertEqual(status.machine.servicesHealthy, true)
+    XCTAssertEqual(status.machine.servicesTone, .warning)
+    XCTAssertNotEqual(status.overallTone, .danger)
+    XCTAssertNotEqual(status.headline, "A service in the CloudMachine machine is not running")
+    XCTAssertNotEqual(status.headline, "Ready", "paused is not ready")
+    XCTAssertFalse(status.healthy)
     // Held does not excuse another service that is down.
     status.machine.services["punchfs"] = "failed"
     XCTAssertEqual(status.uploadCardState, .servicesDown(names: "punchfs"))
+    XCTAssertEqual(status.overallTone, .danger)
+  }
+
+  /// A hold older than the limit is a failure: a forgotten marker must not
+  /// hide a Samba that is just dead.
+  func testAnOverlongHoldIsAFailureAgain() {
+    let status = healthyStatus()
+    status.machine.services["smbd"] = "inactive"
+    status.machine.smbdHoldAge = VMLayout.smbdHoldLimit + 60
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "smbd"))
+    XCTAssertEqual(status.overallTone, .danger)
+    XCTAssertEqual(status.headline, "A service in the CloudMachine machine is not running")
   }
 
   /// The drive summary card, the menu bar and the headline speak with the same

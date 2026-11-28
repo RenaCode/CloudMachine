@@ -242,19 +242,127 @@ final class VMLayoutTests: XCTestCase {
       contentsOf: Self.repoRoot.appendingPathComponent(path), encoding: .utf8)
   }
 
-  func testHoldMarkerIsReadFromTheStatusReport() {
-    XCTAssertEqual(VMStatus.report(scriptOutput: "SMBDHOLD 1").smbdHeld, true)
-    XCTAssertEqual(VMStatus.report(scriptOutput: "SMBDHOLD 0").smbdHeld, false)
-    XCTAssertNil(VMStatus.report(scriptOutput: "BUNDLEENV 1").smbdHeld)
+  /// The marker's AGE comes with the report: -1 = no marker.
+  func testHoldMarkerAgeIsReadFromTheStatusReport() {
+    XCTAssertEqual(VMStatus.report(scriptOutput: "SMBDHOLD 90").smbdHoldAge, 90)
+    XCTAssertNil(VMStatus.report(scriptOutput: "SMBDHOLD -1").smbdHoldAge)
+    XCTAssertNil(VMStatus.report(scriptOutput: "BUNDLEENV 1").smbdHoldAge)
     XCTAssertTrue(VMStatus.script.contains("SMBDHOLD"))
     XCTAssertTrue(VMStatus.script.contains(VMLayout.Guest.smbdHold))
   }
 
-  /// Every path that stops Samba on purpose makes the marker first.
-  func testStoppingSambaOnPurposeLeavesTheMarker() {
-    XCTAssertEqual(
-      VMLayout.holdSmbd, "touch \(VMLayout.Guest.smbdHold) && systemctl stop smbd")
+  /// One rule: a hold is informational, until it outlasts the limit - then a
+  /// forgotten marker no longer hides a Samba that is simply dead.
+  func testHeldSambaIsNotAFailureUntilTheLimit() {
+    let down = [
+      "smb-throttle": "active", "rclone-tm": "active", "punchfs": "active",
+      "tm-bands-bind": "active", "smbd": "inactive", "nmbd": "active",
+      "tm-meta-sync.timer": "active",
+    ]
+    XCTAssertEqual(VMStatus.servicesHealthy(down, bundlePrepared: true), false)
+    XCTAssertEqual(VMStatus.servicesHealthy(down, bundlePrepared: true, smbdHeld: true), true)
+    var report = VMStatus.Report()
+    report.services = down
+    report.bundlePrepared = true
+    report.smbdHoldAge = 60
+    XCTAssertTrue(report.smbdHeld)
+    report.smbdHoldAge = VMLayout.smbdHoldLimit + 1
+    XCTAssertFalse(report.smbdHeld, "a hold older than the limit is a failure again")
+    report.smbdHoldAge = nil
+    XCTAssertFalse(report.smbdHeld)
+    // Held does not excuse any other unit.
+    var other = down
+    other["punchfs"] = "failed"
+    XCTAssertEqual(VMStatus.servicesHealthy(other, bundlePrepared: true, smbdHeld: true), false)
+  }
+
+  /// Runs a shell fragment with a fake `systemctl` and the marker in a temp dir.
+  private func runWithFakeSystemctl(
+    _ fragment: String, stopSucceeds: Bool, markerExists: Bool = false
+  ) throws -> (marker: Bool, calls: String) {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let marker = dir.appendingPathComponent("hold").path
+    let log = dir.appendingPathComponent("calls").path
+    let fake = dir.appendingPathComponent("systemctl")
+    try
+      "#!/bin/sh\necho \"$@\" >> \(log)\n[ \"$1\" = stop ] && exit \(stopSucceeds ? 0 : 1)\nexit 0\n"
+      .write(to: fake, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+    if markerExists { FileManager.default.createFile(atPath: marker, contents: nil) }
+    let script = fragment.replacingOccurrences(of: VMLayout.Guest.smbdHold, with: marker)
+      .replacingOccurrences(of: "/bin/systemctl", with: fake.path)
+      .replacingOccurrences(of: "systemctl ", with: fake.path + " ")
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = ["-c", script]
+    p.standardError = FileHandle.nullDevice
+    try p.run()
+    p.waitUntilExit()
+    return (
+      FileManager.default.fileExists(atPath: marker),
+      (try? String(contentsOfFile: log, encoding: .utf8)) ?? ""
+    )
+  }
+
+  /// A deliberate stop leaves the marker; one that FAILS must not leave a
+  /// marker next to a running Samba.
+  func testHoldSmbdLeavesTheMarkerOnlyWhenTheStopWorked() throws {
+    let ok = try runWithFakeSystemctl(VMLayout.holdSmbd, stopSucceeds: true)
+    XCTAssertTrue(ok.marker)
+    XCTAssertTrue(ok.calls.contains("stop smbd"))
+    let failed = try runWithFakeSystemctl(VMLayout.holdSmbd, stopSucceeds: false)
+    XCTAssertFalse(failed.marker, "the stop failed: Samba is still running")
     XCTAssertTrue(VMLayout.Guest.smbdHold.hasPrefix("/run/"), "tmpfs: a reboot clears it")
+  }
+
+  /// Every deliberate stop in the app goes through `holdSmbd`; a bare
+  /// `systemctl stop smbd` would leave no marker and the bind would restart Samba.
+  /// The shutdown quiesce is the one exception: the machine goes down with
+  /// /run, so a marker there would only outlive nothing.
+  func testNoDeliberateStopBypassesTheMarker() throws {
+    let core = Self.repoRoot.appendingPathComponent("mac-app/Sources/CloudMachineCore")
+    var holds = 0
+    for file in try FileManager.default.contentsOfDirectory(atPath: core.path)
+    where file.hasSuffix(".swift") && !file.hasPrefix("L10n") {
+      let text = try String(contentsOf: core.appendingPathComponent(file), encoding: .utf8)
+      for line in text.split(separator: "\n") where line.contains("systemctl stop smbd") {
+        let l = String(line)
+        XCTAssertTrue(
+          file == "VMLayout.swift" || l.contains("L10n")
+            || l.trimmingCharacters(in: .whitespaces).hasPrefix("//"),
+          "\(file): bare stop: \(l)")
+      }
+      holds += text.components(separatedBy: "VMLayout.holdSmbd").count - 1
+    }
+    XCTAssertEqual(holds, 3, "VMBundlePrep (1) and DriveEncryption (2) stop Samba on purpose")
+    XCTAssertEqual(VMLayout.quiesceScript, "systemctl stop smbd; sync")
+  }
+
+  /// Lima copies the template's data files at every boot, so `vm-update` (new
+  /// lima.yaml + two boots) reaches an existing machine - but only for files the
+  /// template NAMES. Every unit and drop-in under vm/systemd must be named.
+  func testEverySystemdFileIsInstalledByTheTemplate() throws {
+    let yaml = try unit("vm/cmsmb.yaml")
+    let root = Self.repoRoot.appendingPathComponent("vm/systemd")
+    let walker = try XCTUnwrap(FileManager.default.enumerator(atPath: root.path))
+    var count = 0
+    for case let path as String in walker {
+      var isDir: ObjCBool = false
+      FileManager.default.fileExists(
+        atPath: root.appendingPathComponent(path).path, isDirectory: &isDir)
+      guard !isDir.boolValue else { continue }
+      count += 1
+      XCTAssertTrue(
+        yaml.contains("file: systemd/\(path)"), "\(path) is not installed by cmsmb.yaml")
+      let name = (path as NSString).lastPathComponent
+      XCTAssertTrue(
+        yaml.contains("/etc/systemd/system/" + path)
+          || yaml.contains("/\(name)\n  file: systemd/\(path)"),
+        "\(path) lands outside /etc/systemd/system")
+    }
+    XCTAssertGreaterThan(count, 5)
   }
 
   /// Units that stop (and, when the stopped unit is restarted, restart) with `unit`:

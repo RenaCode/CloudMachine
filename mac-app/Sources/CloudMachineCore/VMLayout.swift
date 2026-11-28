@@ -387,7 +387,13 @@ public enum VMLayout {
   /// of that budget. `;` and not `&&`: the sync matters most when smbd is
   /// already gone, masked, or slow to stop.
   /// A deliberate stop of Samba: leaves the marker so nothing restarts it.
-  public static let holdSmbd = "touch \(Guest.smbdHold) && systemctl stop smbd"
+  /// A stop that fails removes the marker again: Samba is still running.
+  public static let holdSmbd =
+    "touch \(Guest.smbdHold) && { systemctl stop smbd || { rm -f \(Guest.smbdHold); false; }; }"
+
+  /// A hold older than this is a failure again, so that a forgotten marker
+  /// cannot hide a Samba that is simply dead. Image conversion takes minutes.
+  public static let smbdHoldLimit: TimeInterval = 2 * 3600
 
   static let quiesceScript = "systemctl stop smbd; sync"
 
