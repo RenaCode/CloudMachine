@@ -2,10 +2,6 @@
 # CloudMachine: which image in /srv/tm-local holds the bands that live on Drive.
 # bundle.env (CM_BUNDLE) is checked before every use and follows a rename by Time
 # Machine (25 Nov 2026), only to the prepared image (32 MB bands, none on local disk).
-#   tm-bundle resolve    print the image's name, fixing bundle.env if renamed
-#   tm-bundle bind       bind the Drive bands into the image (tm-bands-bind)
-#   tm-bundle unbind     undo the bind, whatever the image is called now
-#   tm-bundle has-info   0 when the image has an Info.plist (tm-meta-sync)
 set -u
 
 LOCAL="${CM_LOCAL:-/srv/tm-local}"

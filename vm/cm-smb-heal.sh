@@ -10,10 +10,14 @@ age() {
   echo $(($(date +%s) - m))
 }
 
-# 0. start-limit-hit is final: reset and start (other failures stay visible).
+# 0. start-limit-hit is final: reset and start, at most 6 times an hour (README).
+R="${CM_HEAL_RESETS:-/run/cloudmachine-heal-resets}"
+recent() { awk -v n="$(date +%s)" 'n - $1 < 3600' "$R" 2>/dev/null; }
 for u in rclone-tm punchfs tm-bands-bind; do
   if ! active "$u" \
-    && [ "$(systemctl show -p Result --value "$u" 2>/dev/null)" = start-limit-hit ]; then
+    && [ "$(systemctl show -p Result --value "$u" 2>/dev/null)" = start-limit-hit ] \
+    && [ "$(recent | wc -l)" -lt 6 ]; then
+    { recent; date +%s; } >"$R.t" && mv "$R.t" "$R"
     systemctl reset-failed "$u"
     systemctl --no-block start "$u"
   fi

@@ -23,7 +23,7 @@ final class StaleMountTests: XCTestCase {
   /// calls the fakes saw.
   private func run(
     _ args: [String], mounts: String, healthy: Set<String> = [], hanging: Set<String> = [],
-    umountOK: Bool = true
+    codes: [String: Int32] = [:], umountOK: Bool = true
   ) throws -> (status: Int32, calls: [String]) {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -36,18 +36,26 @@ final class StaleMountTests: XCTestCase {
     let log = dir.appendingPathComponent("calls").path
     let mountsFile = dir.appendingPathComponent("mounts").path
     try mounts.write(toFile: mountsFile, atomically: true, encoding: .utf8)
-    // stat -t <path>: 0 healthy, 124-style hang for `hanging`, else ENOTCONN-like failure.
+    // stat [--cached=never] -t <path>: 0 healthy, a hang for `hanging`, the given exit code
+    // for `codes`, else 1 (what ENOTCONN gives). The path is the last argument.
     var cases = ""
     for p in healthy { cases += "\"\(p)\") exit 0;;\n" }
     for p in hanging { cases += "\"\(p)\") sleep 30;;\n" }
-    try write("stat", "echo \"stat $*\" >> \(log)\ncase \"$2\" in\n\(cases)*) exit 1;;\nesac")
+    for (p, c) in codes { cases += "\"\(p)\") exit \(c);;\n" }
+    try write(
+      "stat",
+      "echo \"stat $*\" >> \(log)\nfor p; do :; done\ncase \"$p\" in\n\(cases)*) exit 1;;\nesac")
+    // Not every host has timeout(1): a stand-in with its contract (124 on expiry).
+    try write(
+      "timeout",
+      "t=$1; shift; \"$@\" & p=$!; (sleep $t; kill -9 $p 2>/dev/null) & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; [ $rc = 137 ] && exit 124; exit $rc")
     try write("umount", "echo \"umount $*\" >> \(log)\nexit \(umountOK ? 0 : 1)")
     try write("fusermount3", "echo \"fusermount3 $*\" >> \(log)\nexit 0")
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/bin/sh")
     p.arguments = [Self.repoRoot.appendingPathComponent("vm/cm-unmount-stale.sh").path] + args
     p.environment = [
-      "PATH": dir.path + ":/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", "CM_MOUNTS": mountsFile,
+      "PATH": dir.path + ":/usr/bin:/bin", "CM_MOUNTS": mountsFile,
       "CM_LOCAL": "/srv/tm-local", "CM_STAT_TIMEOUT": "1",
     ]
     p.standardError = FileHandle.nullDevice
@@ -122,12 +130,78 @@ final class StaleMountTests: XCTestCase {
     XCTAssertEqual(try run([], mounts: rcloneMount).status, 0)
   }
 
+  /// 28 Nov review: rclone runs with --attr-timeout 5m, so a cached `stat -t` can call a
+  /// dead mount healthy for 5 minutes. The probe must go to the daemon.
+  func testProbeBypassesTheKernelAttributeCache() throws {
+    let r = try run(["/srv/tm"], mounts: rcloneMount, healthy: ["/srv/tm"])
+    XCTAssertTrue(r.calls.contains { $0.hasPrefix("stat --cached=never") }, "\(r.calls)")
+  }
+
+  /// Only exit 1 means "dead". 124/137 = slow; 125/126/127 = the tool itself failed.
+  func testOnlyExitOneMeansDead() throws {
+    for code: Int32 in [124, 125, 126, 127, 137, 2] {
+      let r = try run(["/srv/tm"], mounts: rcloneMount, codes: ["/srv/tm": code])
+      XCTAssertEqual(r.status, 0)
+      XCTAssertFalse(
+        r.calls.contains { $0.hasPrefix("umount") || $0.hasPrefix("fusermount") },
+        "exit \(code) must not unmount: \(r.calls)")
+    }
+    let dead = try run(["/srv/tm"], mounts: rcloneMount, codes: ["/srv/tm": 1])
+    XCTAssertTrue(dead.calls.contains("umount -l /srv/tm"))
+  }
+
+  func testToolFailureIsWarnedAbout() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let mounts = dir.appendingPathComponent("mounts").path
+    try rcloneMount.write(toFile: mounts, atomically: true, encoding: .utf8)
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = [Self.repoRoot.appendingPathComponent("vm/cm-unmount-stale.sh").path, "/srv/tm"]
+    let broken = dir.appendingPathComponent("timeout")  // the tool itself fails: exit 127
+    try "#!/bin/sh\nexit 127\n".write(to: broken, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: broken.path)
+    p.environment = ["PATH": dir.path + ":/usr/bin:/bin", "CM_MOUNTS": mounts]
+    let err = Pipe()
+    p.standardError = err
+    try p.run()
+    p.waitUntilExit()
+    let text = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    XCTAssertEqual(p.terminationStatus, 0)
+    XCTAssertTrue(text.contains("inconclusive (exit 127)"), text)
+  }
+
+  /// In its own ExecStartPre= the unit's process is dead by definition: its mount is
+  /// stale whatever the cache says, so it goes without a probe.
+  func testOwnMountGoesWithoutAProbe() throws {
+    let r = try run(["--own", "/srv/tm"], mounts: rcloneMount, healthy: ["/srv/tm"])
+    XCTAssertEqual(r.calls, ["umount -l /srv/tm"], "\(r.calls)")
+    let none = try run(["--own", "/srv/tm"], mounts: punchMount)
+    XCTAssertEqual(none.calls, [], "not mounted: nothing to do")
+  }
+
+  /// Everything dead after kill -9 of rclone: bands first, then punchfs, then rclone's
+  /// own mount - a mount is never removed from under one that still lies on it.
+  func testAllDeadAreUnmountedTopDown() throws {
+    let mounts =
+      rcloneMount + punchMount
+      + "punchfs /srv/tm-local/a.sparsebundle/bands fuse.punchfs rw 0 0\n"
+    let r = try run(["--bands", "/srv/tm-punch", "--own", "/srv/tm"], mounts: mounts)
+    XCTAssertEqual(
+      r.calls.filter { $0.hasPrefix("umount") },
+      [
+        "umount -l /srv/tm-local/a.sparsebundle/bands", "umount -l /srv/tm-punch",
+        "umount -l /srv/tm",
+      ])
+  }
+
   // MARK: - The units and the template
 
   func testEveryChainUnitClearsItsStaleMountBeforeStarting() throws {
     let expectations: [(String, [String])] = [
-      ("rclone-tm", ["--bands", "/srv/tm-punch", "/srv/tm"]),
-      ("punchfs", ["--bands", "/srv/tm-punch"]),
+      ("rclone-tm", ["--bands", "/srv/tm-punch", "--own", "/srv/tm"]),
+      ("punchfs", ["--bands", "--own", "/srv/tm-punch"]),
       ("tm-bands-bind", ["--bands"]),
     ]
     for (name, args) in expectations {
@@ -148,12 +222,14 @@ final class StaleMountTests: XCTestCase {
     XCTAssertLessThan(clean.lowerBound, wait.lowerBound)
   }
 
-  /// punchfs's ExecStop= failed with "Invalid argument" on the dead mount and
-  /// left the unit failed: a failing unmount is not a failing stop.
-  func testUnmountOnStopCannotFailTheUnit() throws {
-    for name in ["rclone-tm", "punchfs"] {
+  /// punchfs's ExecStop= failed with "Invalid argument" on the dead mount and left the
+  /// unit failed. The script cannot fail the stop, and it logs what it could not do.
+  func testStopUsesTheScriptSoFailuresAreLoggedNotHidden() throws {
+    for (name, mount) in [("rclone-tm", "/srv/tm"), ("punchfs", "/srv/tm-punch")] {
       let text = try unit("vm/systemd/\(name).service")
-      XCTAssertTrue(text.contains("\nExecStop=-/bin/fusermount3 -uz "), "\(name)")
+      XCTAssertTrue(
+        text.contains("\nExecStop=/usr/local/sbin/cm-unmount-stale --own \(mount)\n"), "\(name)")
+      XCTAssertFalse(text.contains("fusermount3"), "\(name): one place unmounts")
     }
   }
 
@@ -166,7 +242,9 @@ final class StaleMountTests: XCTestCase {
 
   // MARK: - The healer resets units stuck on the start limit
 
-  private func runHealer(active: Set<String>, startLimit: Set<String>) throws -> [String] {
+  private func runHealer(
+    active: Set<String>, startLimit: Set<String>, resets: [Int] = [], result: String = "exit-code"
+  ) throws -> (calls: [String], resetsFile: [Int]) {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -186,39 +264,67 @@ final class StaleMountTests: XCTestCase {
       if [ "$1" = is-active ]; then for u in \(activeList); do [ "$u" = "$3" ] && exit 0; done; exit 3; fi
       if [ "$1" = show ]; then
         for u in \(limitList); do [ "$u" = "$5" ] && { echo start-limit-hit; exit 0; }; done
-        echo exit-code; exit 0
+        echo \(result); exit 0
       fi
       echo "$@" >> \(log)
       """)
     try write("mountpoint", "exit 1")
+    let resetFile = dir.appendingPathComponent("resets").path
+    if !resets.isEmpty {
+      try resets.map(String.init).joined(separator: "\n").appending("\n")
+        .write(toFile: resetFile, atomically: true, encoding: .utf8)
+    }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/bin/sh")
     p.arguments = [Self.repoRoot.appendingPathComponent("vm/cm-smb-heal.sh").path]
     p.environment = [
       "PATH": dir.path + ":/usr/bin:/bin", "CM_SMBD_HOLD": dir.appendingPathComponent("h").path,
       "CM_SMBD_ATTENTION": dir.appendingPathComponent("a").path, "CM_BUNDLE_ENV": env,
+      "CM_HEAL_RESETS": resetFile,
     ]
     p.standardError = FileHandle.nullDevice
     try p.run()
     p.waitUntilExit()
     let calls = (try? String(contentsOfFile: log, encoding: .utf8)) ?? ""
-    return calls.split(separator: "\n").map(String.init)
+    let stamps = ((try? String(contentsOfFile: resetFile, encoding: .utf8)) ?? "")
+      .split(separator: "\n").compactMap { Int($0) }
+    return (calls.split(separator: "\n").map(String.init), stamps)
   }
 
   /// 28 Nov 2026: punchfs hit its start limit and stayed failed; systemd never
   /// retries such a unit by itself.
   func testHealerResetsAChainUnitThatHitTheStartLimit() throws {
-    XCTAssertEqual(
-      try runHealer(active: [], startLimit: ["punchfs"]),
-      ["reset-failed punchfs", "--no-block start punchfs"])
+    let r = try runHealer(active: [], startLimit: ["punchfs"])
+    XCTAssertEqual(r.calls, ["reset-failed punchfs", "--no-block start punchfs"])
+    XCTAssertEqual(r.resetsFile.count, 1, "every reset is counted")
   }
 
-  /// Any other failure (the old-binary exit 78, a real crash) is left visible.
+  private var now: Int { Int(Date().timeIntervalSince1970) }
+
+  /// A unit that keeps hitting the limit is not revived for ever: after 6 resets in an
+  /// hour the healer stops and leaves start-limit-hit visible. Old resets do not count.
+  func testHealerGivesUpAfterSixResetsAnHour() throws {
+    let recent = Array(repeating: now - 60, count: 6)
+    let r = try runHealer(active: [], startLimit: ["punchfs"], resets: recent)
+    XCTAssertEqual(r.calls, [])
+    XCTAssertEqual(r.resetsFile, recent, "nothing is added when it gives up")
+    let old = Array(repeating: now - 7200, count: 6)
+    let again = try runHealer(active: [], startLimit: ["punchfs"], resets: old)
+    XCTAssertEqual(again.calls, ["reset-failed punchfs", "--no-block start punchfs"])
+    XCTAssertEqual(again.resetsFile.count, 1, "old entries are dropped")
+  }
+
+  /// Any other failure (Result=exit-code: the old-binary exit 78, a real crash) stays visible.
   func testHealerLeavesOtherFailuresAlone() throws {
-    XCTAssertEqual(try runHealer(active: [], startLimit: []), [])
+    for result in ["exit-code", "signal", "oom-kill", "timeout"] {
+      let r = try runHealer(active: [], startLimit: [], result: result)
+      XCTAssertEqual(r.calls, [], result)
+      XCTAssertEqual(r.resetsFile, [])
+    }
   }
 
   func testHealerDoesNotResetARunningUnit() throws {
-    XCTAssertEqual(try runHealer(active: ["rclone-tm"], startLimit: ["rclone-tm"]), [])
+    let r = try runHealer(active: ["rclone-tm"], startLimit: ["rclone-tm"])
+    XCTAssertEqual(r.calls, [])
   }
 }

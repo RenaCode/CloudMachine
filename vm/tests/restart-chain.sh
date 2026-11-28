@@ -64,10 +64,26 @@ echo "1. baseline"; all_up 30
 echo "2. kill -9 rclone (what the OOM killer does)"
 kill_and_wait rclone-tm 120
 all_up 900   # rclone scans the VFS cache before it mounts: minutes
-echo "2b. the same kill leaves a DEAD mount; nobody unmounts it by hand, all is back in 3 min"
-kill_and_wait rclone-tm 60 || exit 1
-if timeout 5 stat -t /srv/tm >/dev/null 2>&1; then echo "   (rclone was already back: no dead mount this time)"; else echo "   /srv/tm is dead right after the kill, as expected"; fi
+echo "2b. kill -9 leaves a DEAD mount; nobody unmounts it by hand, all is back within 3 min"
+since=$(date '+%Y-%m-%d %H:%M:%S')
+kill -9 "$(systemctl show -p MainPID --value rclone-tm.service)"
+sleep 2                                     # inside the RestartSec window: rclone is not back
+dead=no
+if grep -q ' /srv/tm ' /proc/mounts; then
+  # --cached=never: a cached stat can call the dead mount healthy for --attr-timeout (5 min)
+  if timeout 5 stat --cached=never -t /srv/tm >/dev/null 2>&1; then
+    echo "FAIL: /srv/tm is mounted and answers right after kill -9 (rclone already back?)"; exit 1
+  fi
+  dead=yes; echo "   /srv/tm is a dead mount, as in the 28 Nov incident"
+else
+  echo "   /srv/tm is already unmounted: a stop hook cleaned it (not the case under test)"
+fi
 all_up 180
+if [ "$dead" = yes ]; then
+  journalctl -u rclone-tm --since "$since" --no-pager | grep -q 'cm-unmount-stale: /srv/tm: unmounting' \
+    || { echo "FAIL: the dead mount went, but not through cm-unmount-stale"; exit 1; }
+  echo "   cm-unmount-stale cleared it"
+fi
 echo "3. kill -9 punchfs"
 kill_and_wait punchfs 60
 all_up 300
