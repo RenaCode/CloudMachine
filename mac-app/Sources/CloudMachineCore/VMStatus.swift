@@ -71,21 +71,27 @@ public enum VMStatus {
     return sync.ageSeconds > VMLayout.metaSyncMaxAge
   }
 
-  static let script =
+  private static let stateScript: String =
     VMLayout.services.map { "echo SVC \($0) $(systemctl is-active \($0))" }.joined(separator: "; ")
     + "; pid=$(systemctl show -p MainPID --value punchfs); "
     + "if [ \"${pid:-0}\" -gt 0 ]; then echo FD $(ls /proc/$pid/fd | wc -l) "
     + "$(awk '/Max open files/{print $4}' /proc/$pid/limits); fi; "
-    + "echo BUNDLEENV $([ -s \(VMLayout.Guest.bundleEnv) ] && echo 1 || echo 0); "
+
+  private static let markerScript: String =
+    "echo BUNDLEENV $([ -s \(VMLayout.Guest.bundleEnv) ] && echo 1 || echo 0); "
     + "echo SMBDHOLD $([ -e \(VMLayout.Guest.smbdHold) ] && echo 1 || echo 0); "
     + "echo IMAGES $(ls -d \(VMLayout.Guest.localRoot)/*.sparsebundle 2>/dev/null | wc -l); "
-    + "echo METASYNC $(stat -c %Y \(VMLayout.Guest.metaSyncStamp) 2>/dev/null || echo 0) $(date +%s); "
-    + uploadLimitScript
-    + "l=$(tac \(VMLayout.Guest.rcloneLog) 2>/dev/null | grep -m1 'vfs cache: upload succeeded'); "
-    + "if [ -n \"$l\" ]; then echo LASTUPLOAD $(date -d \"$(echo \"$l\" | cut -c1-19 | tr / -)\" +%s) $(date +%s); "
-    + "else echo LASTUPLOAD 0 $(date +%s); fi; "
-    + ShareReadProbe.guestScript + "; "
-    + VMLayout.readingScript
+    + "echo METASYNC $(stat -c %Y \(VMLayout.Guest.metaSyncStamp) 2>/dev/null || echo 0) "
+    + "$(date +%s); "
+
+  private static let lastUploadScript: String =
+    "l=$(tac \(VMLayout.Guest.rcloneLog) 2>/dev/null | grep -m1 'vfs cache: upload succeeded'); "
+    + "if [ -n \"$l\" ]; then echo LASTUPLOAD $(date -d \"$(echo \"$l\" | cut -c1-19 | tr / -)\" +%s) "
+    + "$(date +%s); else echo LASTUPLOAD 0 $(date +%s); fi; "
+
+  static let script: String =
+    stateScript + markerScript + uploadLimitScript + lastUploadScript
+    + ShareReadProbe.guestScript + "; " + VMLayout.readingScript
 
   /// Google's daily upload limit (750 GB) is not an error rclone gives up
   /// on: its write-back retries every upload, at most 5 min apart, and
