@@ -48,7 +48,8 @@ final class StaleMountTests: XCTestCase {
     // Not every host has timeout(1): a stand-in with its contract (124 on expiry).
     try write(
       "timeout",
-      "t=$1; shift; \"$@\" & p=$!; (sleep $t; kill -9 $p 2>/dev/null) & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; [ $rc = 137 ] && exit 124; exit $rc")
+      "t=$1; shift; \"$@\" & p=$!; (sleep $t; kill -9 $p 2>/dev/null) & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; [ $rc = 137 ] && exit 124; exit $rc"
+    )
     try write("umount", "echo \"umount $*\" >> \(log)\nexit \(umountOK ? 0 : 1)")
     try write("fusermount3", "echo \"fusermount3 $*\" >> \(log)\nexit 0")
     let p = Process()
