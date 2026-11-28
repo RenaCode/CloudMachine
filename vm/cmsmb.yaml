@@ -68,6 +68,16 @@ provision:
   path: /opt/cloudmachine/punchfs/src.tar.gz.b64
   file: punchfs/src.tar.gz.b64
 - mode: data
+  path: /usr/local/sbin/cm-smb-heal
+  file: cm-smb-heal.sh
+  permissions: 755
+- mode: data
+  path: /etc/systemd/system/cm-smb-heal.service
+  file: systemd/cm-smb-heal.service
+- mode: data
+  path: /etc/systemd/system/cm-smb-heal.timer
+  file: systemd/cm-smb-heal.timer
+- mode: data
   path: /usr/local/sbin/smb-throttle
   file: smb-throttle.sh
   permissions: 755
@@ -142,7 +152,7 @@ provision:
     systemctl enable rclone-tm.service punchfs.service tm-bands-bind.service smbd.service \
       tm-meta-sync.timer
     # The SMB shaper needs nothing from the Mac; start it every boot.
-    systemctl enable --now smb-throttle.service
+    systemctl enable --now smb-throttle.service cm-smb-heal.timer
     if [ -s /etc/rclone/rclone.conf ] && [ -s /etc/cloudmachine/vm.env ]; then
       systemctl start rclone-tm.service punchfs.service tm-bands-bind.service smbd.service \
         tm-meta-sync.timer

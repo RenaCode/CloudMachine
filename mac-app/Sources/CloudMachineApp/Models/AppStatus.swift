@@ -74,6 +74,18 @@ struct MachineStatus: Equatable {
   var punchfsOpenFiles: Int?
   var punchfsFileLimit: Int?
   var bundlePrepared: Bool?
+  /// Age of the hold marker; `nil` = Samba was not stopped on purpose.
+  var smbdHoldAge: TimeInterval?
+  /// Samba paused on purpose (within the limit): information, not a failure.
+  var smbdHeld: Bool {
+    !smbdAttention && VMStatus.isHeld(smbdHoldAge, smbdState: services["smbd"])
+  }
+  /// A failed operation left Samba stopped: red until a new attempt succeeds.
+  var smbdAttention = false
+  /// A probe failure counts only while Samba is not paused on purpose.
+  var shareProbeFailed: Bool {
+    !smbdHeld && (shareRead?.isFailure == true || smb?.isFailure == true)
+  }
   var imageCount: Int?
   /// One byte read through the share's path in the machine; `nil` = not read.
   var shareRead: ShareReadProbe.Verdict?
@@ -90,7 +102,7 @@ struct MachineStatus: Equatable {
   /// `nil` = not known (no answer from the machine).
   var servicesHealthy: Bool? {
     guard isRunning, !services.isEmpty else { return nil }
-    return VMStatus.servicesHealthy(services, bundlePrepared: bundlePrepared)
+    return VMStatus.servicesHealthy(services, bundlePrepared: bundlePrepared, smbdHeld: smbdHeld)
   }
 
   /// Units that are not up, by the same rule as `servicesHealthy`: an
@@ -100,8 +112,14 @@ struct MachineStatus: Equatable {
       let state = services[$0]
       if state == "active" { return false }
       if $0 == "tm-bands-bind" && state == "inactive" { return bundlePrepared != false }
+      if $0 == "smbd" && state == "inactive" && smbdHeld { return false }
       return true
     }
+  }
+
+  /// `servicesDown` for people: Samba left stopped by a failed install says so.
+  var servicesDownLabels: [String] {
+    servicesDown.map { $0 == "smbd" && smbdAttention ? "smbd (\(L10n.tr("ACTION NEEDED")))" : $0 }
   }
 
   /// The "Services" row of the machine card. All services up is green only
@@ -110,10 +128,11 @@ struct MachineStatus: Equatable {
   var servicesText: String {
     switch servicesHealthy {
     case .some(true):
+      if smbdHeld { return L10n.tr("Not running: %@", "smbd (paused)") }
       if let summary = shareProblemSummary { return summary }
       return L10n.tr("All running")
     case .some(false):
-      return L10n.tr("Not running: %@", servicesDown.joined(separator: ", "))
+      return L10n.tr("Not running: %@", servicesDownLabels.joined(separator: ", "))
     case .none: return L10n.tr("not read")
     }
   }
@@ -121,7 +140,7 @@ struct MachineStatus: Equatable {
   var servicesTone: StatusTone {
     switch servicesHealthy {
     case .some(true):
-      if shareRead?.isFailure == true || smb?.isFailure == true { return .danger }
+      if shareProbeFailed { return .danger }
       return shareConfirmed ? .success : .warning
     case .some(false): return .danger
     case .none: return isRunning ? .warning : .neutral
@@ -190,6 +209,40 @@ struct MachineStatus: Equatable {
       bufferOutOfSpace: reading?.buffer.outOfSpace ?? false,
       driveFull: false,
       dailyQuotaExhausted: false)
+  }
+}
+
+extension AppStatus {
+  /// What the upload card shows. The upload state alone says "ALL GOOD" when
+  /// the queue is empty, even while Samba is down or no backup has completed
+  /// for a day (27.11.2026). A nominal upload state is therefore overridden
+  /// by those two facts; every specific upload problem keeps its own state.
+  var uploadCardState: UploadState {
+    let state = machine.uploadState
+    guard state == .upToDate || state.isMovingData else { return state }
+    // The machine runs but its services were not read: not "all good", unknown.
+    if machine.isRunning && machine.servicesHealthy == nil { return .queueUnknown }
+    let down = machine.servicesDownLabels  // a Samba paused on purpose is not in it
+    if machine.servicesHealthy == false, !down.isEmpty {
+      return .servicesDown(names: down.joined(separator: ", "))
+    }
+    // Only an idle upload is doubted by an old backup: a moving one may well be
+    // the backup itself (first backup, after sleep), and so may a running one.
+    // `isFresh` uses backup-health's own threshold; no backup at all = unknown.
+    guard state == .upToDate, backupProgress == nil, backupCycle.known,
+      let age = backupCycle.age(), !backupCycle.isFresh()
+    else { return state }
+    let headline = L10n.tr("No completed backup for %@", BackupHealth.formatAge(age))
+    return .backupStale(headline: headline, detail: backupCycle.problems.first ?? headline)
+  }
+}
+
+extension UploadState {
+  /// Red needs a person, amber passes by itself or is unknown, green is nominal.
+  var tone: StatusTone {
+    if needsAttention { return .danger }
+    if !isNominal { return .warning }
+    return .success
   }
 }
 
@@ -321,7 +374,7 @@ final class AppStatus: ObservableObject {
     }
     // Every service "active" says nothing about whether the path through
     // them works - and a probe that did not answer is not a path that works.
-    if machine.isRunning, machine.servicesHealthy == true,
+    if machine.isRunning, machine.servicesHealthy == true, !machine.smbdHeld,
       let summary = machine.shareProblemSummary
     {
       return summary
@@ -337,11 +390,12 @@ final class AppStatus: ObservableObject {
     }
     // ONE source speaks about uploading - otherwise the menu bar and the status
     // card could claim different things.
-    let upload = machine.uploadState
+    let upload = uploadCardState
     if !upload.isNominal { return upload.headline }
     // Backups work in this state, but any web page can delete them - so it
     // comes before every sentence that sounds like "all is well".
     if remoteControlOpen { return L10n.tr("rclone's remote control is open on this Mac") }
+    if machine.smbdHeld { return L10n.tr("Not running: %@", "smbd (paused)") }
     if backupProgress != nil { return L10n.tr("Backup in progress") }
     // The machine can be flawless while there has been no backup for two days.
     if !backupCycle.isFresh() {
@@ -397,9 +451,9 @@ extension AppStatus {
     case .unknown, .running: break
     }
     if machine.servicesHealthy == false { return .danger }
-    if machine.shareRead?.isFailure == true || machine.smb?.isFailure == true { return .danger }
+    if machine.shareProbeFailed { return .danger }
     if case .notRegistered = timeMachineState { return .danger }
-    if machine.uploadState.needsAttention { return .danger }
+    if uploadCardState.needsAttention { return .danger }
     if remoteControlOpen { return .danger }
     if backupCycle.known && !backupCycle.isFresh() { return .danger }
     return .warning

@@ -256,5 +256,13 @@ extension L10nPolish {
       "Samba z Maca:     %@",
     "This Mac found no route to %@ (%@). Either the route to the machine is gone, or macOS Local Network privacy has not allowed CloudMachine - then allow it in System Settings > Privacy & Security > Local Network. Check: cloudmachine-agent vm-status":
       "Ten Mac nie znalazł trasy do %@ (%@). Albo trasa do maszyny zniknęła, albo prywatność „Sieć lokalna” w macOS nie pozwoliła CloudMachine - wtedy zezwól w Ustawieniach systemowych > Prywatność i ochrona > Sieć lokalna. Sprawdź: cloudmachine-agent vm-status",
+    "Samba was left stopped by an image installation that failed halfway, so the image is half-installed. Restore or verify the bands first (see vm/README.md).":
+      "Samba została zatrzymana po instalacji obrazu, która nie udała się w połowie, więc obraz jest zainstalowany częściowo. Najpierw przywróć lub zweryfikuj pasma (zob. vm/README.md).",
+    "The image was installed, but Samba did not start. The healer starts it within a minute; check: cloudmachine-agent vm-status":
+      "Obraz został zainstalowany, ale Samba nie wystartowała. Mechanizm naprawczy uruchomi ją w ciągu minuty; sprawdź: cloudmachine-agent vm-status",
+    "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
+      "Instalacja obrazu nie udała się i nie udało się zapisać, że Samba ma pozostać zatrzymana. Nie uruchamiaj Samby przed sprawdzeniem obrazu.",
+    "Installing the converted image may have failed halfway: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original MAY have been moved to %@ in the machine; check there before doing anything else (see vm/README.md).":
+      "Instalacja przekonwertowanego obrazu mogła się nie udać w połowie: %@\nsmbd pozostaje ZATRZYMANY, żeby Time Machine nie otworzył częściowo zainstalowanego obrazu. Oryginał MÓGŁ zostać przeniesiony do %@ w maszynie; sprawdź tam, zanim zrobisz cokolwiek innego (zob. vm/README.md).",
   ]
 }

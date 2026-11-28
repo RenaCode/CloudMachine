@@ -979,5 +979,13 @@ extension L10nTranslations {
       "下次嘗試：%@",
     "Lima is not installed - run in Terminal: %@":
       "未安裝 Lima - 請在「終端機」中執行：%@",
+    "Samba was left stopped by an image installation that failed halfway, so the image is half-installed. Restore or verify the bands first (see vm/README.md).":
+      "映像安裝中途失敗，Samba 已保持停止，映像只安裝了一半。請先還原或驗證 band 檔案（見 vm/README.md）。",
+    "The image was installed, but Samba did not start. The healer starts it within a minute; check: cloudmachine-agent vm-status":
+      "映像已安裝，但 Samba 沒有啟動。自癒計時器會在一分鐘內啟動它；請檢查：cloudmachine-agent vm-status",
+    "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
+      "映像安裝失敗，且無法記錄 Samba 必須保持停止。檢查映像之前請不要啟動 Samba。",
+    "Installing the converted image may have failed halfway: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original MAY have been moved to %@ in the machine; check there before doing anything else (see vm/README.md).":
+      "轉換後的映像安裝可能在中途失敗：%@\n為避免 Time Machine 開啟只安裝了一半的映像，smbd 保持停止。原始映像可能已被移到機器中的 %@；請先在那裡檢查，再進行其他操作（見 vm/README.md）。",
   ]
 }

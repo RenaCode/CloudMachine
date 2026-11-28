@@ -162,6 +162,9 @@ public enum BackupHealth {
   ///
   /// `nil` means "no answer" for every three-state input: it is reported as
   /// its own problem, never folded into "fine" or into "broken".
+  /// The share and SMB probes say something only while Samba is meant to run.
+  public static func probesApply(_ report: VMStatus.Report?) -> Bool { report?.smbdHeld != true }
+
   public static func evaluate(
     lastSuccess: Date?,
     lastAttempt: Date?,
@@ -600,7 +603,7 @@ public enum BackupHealth {
     let report = machineRunning == true ? await VMStatus.currentReport() : nil
     let reading = report?.reading
     let servicesHealthy = report.flatMap {
-      VMStatus.servicesHealthy($0.services, bundlePrepared: $0.bundlePrepared)
+      VMStatus.servicesHealthy($0)
     }
     let address = machineRunning == true ? await VMLayout.currentAddress() : nil
     let registered = await VMStatus.timeMachineTargetsMachine(address: address)
@@ -644,8 +647,10 @@ public enum BackupHealth {
       withinStartupGrace: (systemUptime() ?? .infinity) < startupGraceMinutes * 60,
       backupRunning: await TimeMachineStatus.runningState(),
       // `report == nil` (no answer) is already "machine does not answer".
-      shareRead: report?.shareRead,
-      smb: machineRunning == true ? await SMBProbe.probe(address: address) : nil,
+      // Samba paused on purpose: its probes would only report the pause.
+      shareRead: probesApply(report) ? report?.shareRead : nil,
+      smb: machineRunning == true && probesApply(report)
+        ? await SMBProbe.probe(address: address) : nil,
       smbAddress: address)
 
     health.problems.append(contentsOf: unmeasuredLocalDiskProblems(localFreeGB: localFree))

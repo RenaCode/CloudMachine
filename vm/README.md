@@ -203,3 +203,41 @@ cloudmachine-agent vm-setup && cloudmachine-agent vm-status
 
 `vm-prepare-bundle` refuses while Time Machine is backing up to *this*
 machine; a backup going to another destination does not stop it.
+
+## Samba stopped on purpose
+
+`cm-smb-heal.timer` (every 60 s) starts the bind and Samba again from the machine's state. A
+deliberate stop (image conversion, encryption) leaves `/run/cloudmachine-smbd-hold`; the healer
+keeps off Samba while it is at most 2 h old.
+
+### Attention: an install that failed halfway
+
+If `vm-prepare-bundle` fails AFTER it has started changing the image (it has moved the original
+aside and copied bands to Drive), it leaves `/var/lib/cloudmachine/smbd-attention`. The image is
+then **half-installed**: Samba does not start (not even after a reboot), the app shows
+`smbd (ACTION NEEDED)`, and `vm-encrypt`/move refuse to run (exit 4). Repeating
+`vm-prepare-bundle` does NOT repair it: it stops with "bands on Drive appeared meanwhile" because
+the Drive folder is no longer empty. Only that same check failing (it prints `CM-UNCHANGED`, exit 3, before anything was
+changed) leaves no file, and Samba is simply started again. Any other failure - a timeout, a lost
+connection, a killed script - cannot be proven harmless, so the app sets the file itself.
+
+Restore or verify by hand, then remove the file. In a terminal on the Mac:
+
+```
+# what is there: the attention file, and the original image kept aside (named by its stamp)
+limactl shell cmsmb -- sudo ls -l /var/lib/cloudmachine/smbd-attention /var/lib/cloudmachine/prepare-backup/
+# the bands that reached Drive, and what the bind shows
+limactl shell cmsmb -- sudo sh -c 'find /srv/tm/bands -type f | wc -l; mountpoint /srv/tm-local/*.sparsebundle/bands'
+# the image Time Machine will open
+limactl shell cmsmb -- sudo ls -l /srv/tm-local/
+```
+
+Either put the original back (move `/var/lib/cloudmachine/prepare-backup/<stamp>` to
+`/srv/tm-local/<image>.sparsebundle`, empty `/srv/tm/bands`) or verify the converted image, then:
+
+```
+limactl shell cmsmb -- sudo rm /var/lib/cloudmachine/smbd-attention
+```
+
+The healer starts Samba within a minute. `tests/restart-chain.sh` checks all of this on the live
+machine.

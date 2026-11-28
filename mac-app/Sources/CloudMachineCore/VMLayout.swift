@@ -41,6 +41,14 @@ public enum VMLayout {
     public static let rcAddress = "127.0.0.1:5572"
     /// Touched by `tm-meta-sync.service` after every successful sync.
     public static let metaSyncStamp = "/var/lib/cloudmachine/tm-meta-sync.ok"
+    /// Made by every deliberate stop of Samba (image conversion), removed when
+    /// Samba starts. Under /run: a reboot clears it. The bind starts Samba only
+    /// without it.
+    public static let smbdHold = "/run/cloudmachine-smbd-hold"
+    /// A failed operation left Samba stopped. On the disk, NOT in /run: a reboot
+    /// must not start Samba on a half-installed image. Samba's drop-in refuses to
+    /// start while it exists; a new attempt (`holdSmbd`) removes it.
+    public static let smbdAttention = "/var/lib/cloudmachine/smbd-attention"
     public static let rcloneLog = "/var/log/rclone-tm.log"
   }
 
@@ -382,6 +390,89 @@ public enum VMLayout {
   /// this takes the Samba shutdown and the flush of the dirty cache disk out
   /// of that budget. `;` and not `&&`: the sync matters most when smbd is
   /// already gone, masked, or slow to stop.
+  /// A deliberate stop of Samba: leaves the marker so nothing restarts it.
+  /// A stop that fails removes the marker again: Samba is still running.
+  public static let holdSmbd =
+    ": > \(Guest.smbdHold) && "
+    + "{ systemctl stop smbd || { rm -f \(Guest.smbdHold); false; }; }"
+
+  /// Only a successful install (`vm-prepare-bundle`) clears the attention file.
+  /// Every other operation refuses to run while it exists (exit 4) - they would
+  /// start Samba on a half-installed image.
+  public static let refuseUnderAttention =
+    "[ ! -e \(Guest.smbdAttention) ] || "
+    + "{ echo 'smbd needs attention: repeat vm-prepare-bundle first' >&2; exit 4; }"
+
+  /// A start that checks the result: Samba skipped by its condition (the
+  /// attention file) exits 0 without running.
+  public static let startSmbd = "systemctl start smbd && systemctl is-active --quiet smbd"
+
+  /// Inside the install script, in the SAME shell: any failure records attention.
+  /// Only once the script has changed something (`MUTATED=1`): a failure before
+  /// that leaves the image as it was and Samba is simply started again. The
+  /// trap says so on stderr (`CM-MUTATED`) so the app can tell the cases apart.
+  public static let recordAttentionOnFailure =
+    "trap 'rc=$?; [ $rc -eq 0 ] || [ \"${MUTATED:-0}\" != 1 ] || "
+    + "{ echo CM-MUTATED >&2; \(flagSmbdNeedsAttention); }' EXIT"
+  /// After success: attention off, trap off, and a sentinel on stdout so "installed,
+  /// but Samba did not start" is not mistaken for a failed install.
+  public static let clearAttention = "rm -f \(Guest.smbdAttention); trap - EXIT; echo CM-INSTALLED"
+
+  /// Whether the attention file is really there (after a failed install).
+  public static func attentionRecorded(
+    run: (String) async -> Bool = { (try? await rootShell($0, timeout: 60))?.succeeded == true }
+  ) async -> Bool {
+    await run("[ -e \(Guest.smbdAttention) ]")
+  }
+
+  /// A hold older than this is a failure again, so that a forgotten marker
+  /// cannot hide a Samba that is simply dead. Image conversion takes minutes.
+  public static let smbdHoldLimit: TimeInterval = 2 * 3600
+
+  /// Refreshes the marker's mtime; `-c` never creates it, so a marker removed by
+  /// Samba's start is not brought back.
+  public static let refreshHold = "touch -c \(Guest.smbdHold)"
+
+  /// The operation failed and left Samba stopped: the persistent attention file
+  /// makes the app show it red at once; nothing restarts Samba until a new
+  /// attempt (`holdSmbd`) removes the file.
+  public static let flagSmbdNeedsAttention =
+    "mkdir -p /var/lib/cloudmachine && echo attention > \(Guest.smbdAttention)"
+
+  /// Keeps a deliberate hold fresh while the operation that made it runs (the
+  /// last encryption sync alone may take 6 h, more than `smbdHoldLimit`), by
+  /// refreshing the marker every 10 min. Cancel the task when the operation ends.
+  public static func keepHoldFresh(
+    every interval: TimeInterval = 600,
+    touch: @escaping @Sendable () async -> Void = {
+      _ = try? await rootShell(refreshHold, timeout: 60)
+    }
+  ) -> Task<Void, Never> {
+    Task {
+      while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        if Task.isCancelled { break }
+        await touch()
+      }
+    }
+  }
+
+  /// Stops Samba on purpose and keeps the hold fresh; `nil` = the stop failed
+  /// (no marker is left). The caller cancels the returned task when done.
+  public static func holdSamba(
+    refusingUnderAttention: Bool = false,
+    run: (String) async -> Bool = { (try? await rootShell($0, timeout: 120))?.succeeded == true },
+    every interval: TimeInterval = 600,
+    touch: @escaping @Sendable () async -> Void = {
+      _ = try? await rootShell(refreshHold, timeout: 60)
+    }
+  ) async -> Task<Void, Never>? {
+    let script =
+      refusingUnderAttention ? "[ ! -e \(Guest.smbdAttention) ] && \(holdSmbd)" : holdSmbd
+    guard await run(script) else { return nil }
+    return keepHoldFresh(every: interval, touch: touch)
+  }
+
   static let quiesceScript = "systemctl stop smbd; sync"
 
   public static func quiesceGuest(timeout: TimeInterval) async -> Bool {

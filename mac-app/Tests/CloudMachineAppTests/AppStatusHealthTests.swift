@@ -137,6 +137,196 @@ final class AppStatusHealthTests: XCTestCase {
     XCTAssertEqual(status.headline, "A service in the CloudMachine machine is not running")
   }
 
+  /// 27.11.2026: Samba was down for 13 h while the upload card said ALL GOOD.
+  func testUploadCardIsNotAllGoodWhileAServiceIsDown() {
+    let status = healthyStatus()
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+    status.machine.services["smbd"] = "inactive"
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "smbd"))
+    XCTAssertNotEqual(status.uploadCardState.badge, UploadState.upToDate.badge)
+    XCTAssertTrue(status.uploadCardState.needsAttention)
+    XCTAssertFalse(status.uploadCardState.isNominal)
+    XCTAssertEqual(status.uploadCardState.tone, .danger)
+  }
+
+  /// A moving upload is overridden too when a service is genuinely down.
+  func testUploadCardOverridesFlowingWhenAServiceIsDown() {
+    let status = healthyStatus()
+    withReading(status) { $0.uploadsQueued = 5 }
+    XCTAssertEqual(status.uploadCardState, .flowing(queued: 5))
+    status.machine.services["smbd"] = "failed"
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "smbd"))
+  }
+
+  func testUploadCardIsNotAllGoodWhenTheLastBackupIsStale() {
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-23 * 3600)
+    XCTAssertFalse(status.backupCycle.isFresh())
+    guard case .backupStale(let headline, let detail) = status.uploadCardState else {
+      return XCTFail("expected .backupStale, got \(status.uploadCardState)")
+    }
+    XCTAssertTrue(headline.hasPrefix("No completed backup for"), headline)
+    XCTAssertFalse(detail.isEmpty)
+    XCTAssertEqual(status.uploadCardState.tone, .danger)
+  }
+
+  /// Healthy uploading is NOT turned red by an old last backup: after a
+  /// night's sleep the first backup is the very thing that is uploading.
+  func testUploadCardLeavesFlowingAloneWhenTheLastBackupIsOld() {
+    let status = healthyStatus()
+    withReading(status) { $0.uploadsQueued = 5 }
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-10 * 3600)
+    XCTAssertEqual(status.uploadCardState, .flowing(queued: 5))
+  }
+
+  /// The threshold is backup-health's (3 h): 2.5 h old is still fine.
+  func testUploadCardUsesBackupHealthsThreshold() {
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-2.5 * 3600)
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+  }
+
+  /// A backup that is running right now is not "stale".
+  func testUploadCardIgnoresStalenessWhileABackupRuns() {
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = Date().addingTimeInterval(-10 * 3600)
+    status.backupProgress = BackupProgressInfo()
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+  }
+
+  /// No completed backup yet (first backup): unknown, not stale.
+  func testUploadCardKeepsUploadStateBeforeTheFirstBackup() {
+    let status = healthyStatus()
+    status.backupCycle.lastSuccess = nil
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+  }
+
+  /// An unknown backup age is not "stale": the card keeps the upload state.
+  func testUploadCardKeepsUploadStateWhenBackupAgeIsNotRead() {
+    let status = healthyStatus()
+    status.backupCycle.known = false
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+  }
+
+  /// A hard upload problem keeps its own, more specific, state.
+  func testUploadCardKeepsSpecificProblems() {
+    let status = healthyStatus()
+    status.machine.services["smbd"] = "inactive"
+    withReading(status) { $0.erroredFiles = 2 }
+    XCTAssertEqual(status.uploadCardState, .failedFiles(2))
+  }
+
+  /// The tone of every card state: red needs a person, amber is passes-by-itself
+  /// or unknown, green only for the nominal ones.
+  func testUploadStateTones() {
+    XCTAssertEqual(UploadState.upToDate.tone, .success)
+    XCTAssertEqual(UploadState.flowing(queued: 1).tone, .success)
+    XCTAssertEqual(UploadState.dailyQuotaExhausted.tone, .warning)
+    XCTAssertEqual(UploadState.queueUnknown.tone, .warning)
+    XCTAssertEqual(UploadState.servicesDown(names: "smbd").tone, .danger)
+    XCTAssertEqual(UploadState.backupStale(headline: "h", detail: "d").tone, .danger)
+    XCTAssertEqual(UploadState.mountDown.tone, .danger)
+  }
+
+  /// Samba stopped on purpose (image conversion) is not "action needed" - on
+  /// ANY surface: card, headline, overall tone, services row.
+  func testHeldSambaIsInformationalEverywhere() {
+    let status = healthyStatus()
+    status.machine.services["smbd"] = "inactive"
+    status.machine.smbdHoldAge = 60
+    status.machine.smb = .noAnswer(seconds: 5)
+    XCTAssertEqual(status.uploadCardState, .upToDate)
+    XCTAssertEqual(status.machine.servicesHealthy, true)
+    XCTAssertEqual(status.machine.servicesTone, .warning)
+    XCTAssertNotEqual(status.overallTone, .danger)
+    XCTAssertEqual(status.headline, "Not running: smbd (paused)")
+    XCTAssertFalse(status.healthy)
+    // Held does not excuse another service that is down.
+    status.machine.services["punchfs"] = "failed"
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "punchfs"))
+    XCTAssertEqual(status.overallTone, .danger)
+  }
+
+  /// A hold older than the limit is a failure: a forgotten marker must not
+  /// hide a Samba that is just dead.
+  func testAnOverlongHoldIsAFailureAgain() {
+    let status = healthyStatus()
+    status.machine.services["smbd"] = "inactive"
+    status.machine.smbdHoldAge = VMLayout.smbdHoldLimit + 60
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "smbd"))
+    XCTAssertEqual(status.overallTone, .danger)
+    XCTAssertEqual(status.headline, "A service in the CloudMachine machine is not running")
+  }
+
+  /// The drive summary card, the menu bar and the headline speak with the same
+  /// state: a down service never reads "Everything uploaded".
+  func testEverySurfaceAgreesWhileAServiceIsDown() {
+    let status = healthyStatus()
+    status.machine.services["smbd"] = "inactive"
+    let card = status.uploadCardState
+    XCTAssertEqual(card.headline, "A service in the CloudMachine machine is not running")
+    XCTAssertNotEqual(card.headline, UploadState.upToDate.headline)
+    XCTAssertEqual(card.tone, .danger)
+    XCTAssertEqual(status.headline, card.headline)
+    XCTAssertEqual(status.overallTone, .danger)
+  }
+
+  /// The machine runs but its services were not read: unknown, never ALL GOOD.
+  func testUploadCardIsUnknownWhenServicesAreNotRead() {
+    let status = healthyStatus()
+    status.machine.services["punchfs"] = nil
+    XCTAssertNil(status.machine.servicesHealthy)
+    XCTAssertEqual(status.uploadCardState, .queueUnknown)
+    XCTAssertEqual(status.uploadCardState.tone, .warning)
+  }
+
+  /// A marker next to a RUNNING Samba pauses nothing: probes still count.
+  func testStaleMarkerWithRunningSambaIsNotAPause() {
+    let status = healthyStatus()
+    status.machine.smbdHoldAge = 60
+    XCTAssertFalse(status.machine.smbdHeld, "smbd is active")
+    status.machine.smb = .refused(reason: "ECONNREFUSED")
+    XCTAssertEqual(status.machine.smb?.isFailure, true)
+    XCTAssertTrue(status.machine.shareProbeFailed, "Samba runs: a failing probe counts")
+    status.machine.services["smbd"] = "inactive"
+    XCTAssertTrue(status.machine.smbdHeld)
+    XCTAssertFalse(status.machine.shareProbeFailed)
+  }
+
+  /// BackupHealth's inputs follow the same rule.
+  func testBackupHealthSkipsProbesAndCountsServicesOnlyForAPause() {
+    var report = VMStatus.Report()
+    report.services = ["smbd": "inactive"]
+    report.smbdHoldAge = 60
+    XCTAssertFalse(BackupHealth.probesApply(report))
+    report.services["smbd"] = "active"
+    XCTAssertTrue(BackupHealth.probesApply(report), "running Samba: the probes count")
+    report.services["smbd"] = "inactive"
+    report.smbdHoldAge = VMLayout.smbdHoldLimit + 1
+    XCTAssertTrue(BackupHealth.probesApply(report), "an expired pause is a failure")
+    XCTAssertTrue(BackupHealth.probesApply(nil))
+    // services verdict from the report, same rule
+    var held = VMStatus.Report()
+    held.bundlePrepared = true
+    held.services = Dictionary(uniqueKeysWithValues: VMLayout.services.map { ($0, "active") })
+    held.services["smbd"] = "inactive"
+    XCTAssertEqual(VMStatus.servicesHealthy(held), false)
+    held.smbdHoldAge = 30
+    XCTAssertEqual(VMStatus.servicesHealthy(held), true)
+  }
+
+  /// A failed operation left Samba stopped: red at once, however fresh the pause.
+  func testAttentionIsRedAndNeverAPause() {
+    let status = healthyStatus()
+    status.machine.services["smbd"] = "inactive"
+    status.machine.smbdHoldAge = 10
+    status.machine.smbdAttention = true
+    XCTAssertFalse(status.machine.smbdHeld)
+    XCTAssertEqual(status.uploadCardState, .servicesDown(names: "smbd (ACTION NEEDED)"))
+    XCTAssertEqual(status.machine.servicesText, "Not running: smbd (ACTION NEEDED)")
+    XCTAssertEqual(status.overallTone, .danger)
+  }
+
   func testMachineStatesHaveTheirOwnHeadlines() {
     let status = healthyStatus()
     status.machine = MachineStatus()

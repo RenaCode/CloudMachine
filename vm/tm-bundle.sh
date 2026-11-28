@@ -1,16 +1,11 @@
 #!/bin/sh
 # CloudMachine: which image in /srv/tm-local holds the bands that live on Drive.
 #
-# bundle.env (CM_BUNDLE=<name>.sparsebundle) is written once, by
-# `cloudmachine-agent vm-prepare-bundle`. Time Machine renames the image when
-# the Mac's name changes: on 25 Nov 2026 "Marcin Mac Studio (3)" became
-# "Marcin Mac Studio" after a restart, the bind below failed ("mount point does
-# not exist"), Samba, which needs it, stayed down, and the metadata copy was
-# skipped. So the stored name is checked before every use and follows the
-# rename - but only to an image that is unmistakably the prepared one: 32 MB
-# bands (vm-prepare-bundle's) and no bands of its own on the local disk. A new
-# image Time Machine started by itself (875 MB bands, bands on local disk) is
-# never bound over: that would mix two images.
+# bundle.env (CM_BUNDLE=<name>.sparsebundle) is written by vm-prepare-bundle.
+# Time Machine renames the image when the Mac's name changes (25 Nov 2026), so
+# the stored name is checked before every use and follows the rename - but only
+# to the unmistakably prepared image: 32 MB bands, none of its own on local disk.
+# A new image Time Machine started (875 MB bands) is never bound over.
 #
 #   tm-bundle resolve    print the image's name, fixing bundle.env if renamed
 #   tm-bundle bind       bind the Drive bands into the image (tm-bands-bind)
@@ -26,15 +21,13 @@ BAND_BYTES=33554432
 
 log() { echo "tm-bundle: $*" >&2; }
 
-# The value as systemd reads it: outer quotes off, `\"` and `\\` unescaped
-# (vm-prepare-bundle writes it with VMLayout.envLine).
+# The value as systemd reads it (quotes off, escapes undone).
 stored_name() {
   sed -n 's/^CM_BUNDLE=//p' "$ENV_FILE" 2>/dev/null | head -n 1 \
     | sed 's/^"//; s/"$//; s/\\\(.\)/\1/g'
 }
 
-# bundle.env is also sourced as shell, by root (DriveEncryption): a name taken
-# off the share is written there only when it has no shell syntax in it.
+# bundle.env is also sourced as shell: only names without shell syntax go in.
 safe_name() {
   case "$1" in
     *[\"\\\$\`]* | *"
@@ -52,8 +45,7 @@ is_mountpoint() {
   command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$1"
 }
 
-# The image vm-prepare-bundle made: its bands are on Drive, so locally bands/
-# is empty or is the bind mount itself.
+# The image vm-prepare-bundle made: bands/ is empty or the bind mount itself.
 is_prepared() {
   [ -s "$1/Info.plist" ] || return 1
   [ "$(band_size "$1")" = "$BAND_BYTES" ] || return 1

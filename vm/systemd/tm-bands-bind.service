@@ -4,18 +4,19 @@
 # skipped, so Time Machine can create its first, empty image on local disk.
 [Unit]
 Description=Bind: Time Machine bands on Google Drive
-Requires=punchfs.service
+BindsTo=punchfs.service
 After=punchfs.service
 Before=smbd.service
+StartLimitIntervalSec=0
 ConditionPathExists=/etc/cloudmachine/bundle.env
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# punchfs is Type=simple: systemd calls it started before its FUSE mount is up.
-# Binding then fails ("special device /srv/tm-punch/bands does not exist") and
-# Samba, which Requires this unit, stays down - it happened at boot on 12 Nov
-# and after a restart on 13 Nov 2026, a day without backups. Wait for the mount.
+# 27 Nov 2026: one failed bind kept Samba down 13 h. Retry.
+Restart=on-failure
+RestartSec=15
+# punchfs (Type=simple) is "started" before its mount is up: wait for it.
 TimeoutStartSec=150
 ExecStartPre=/usr/bin/timeout 120 /bin/sh -c 'until mountpoint -q /srv/tm-punch && [ -d /srv/tm-punch/bands ]; do sleep 1; done'
 # Time Machine renames the image when the Mac's name changes (25 Nov 2026); the

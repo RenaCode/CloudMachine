@@ -131,11 +131,15 @@ public enum VMBundlePrep {
 
     // 6. Samba off, so Time Machine cannot open the image while we copy it.
     step("stopping smbd")
-    guard (try? await VMLayout.rootShell("systemctl stop smbd", timeout: 120))?.succeeded == true
+    guard let keepHold = await VMLayout.holdSamba()
     else { return fail(L10n.tr("Could not stop smbd in the machine.")) }
+    defer { keepHold.cancel() }
     func failRestoringSamba(_ message: String) async -> Outcome {
-      _ = try? await VMLayout.rootShell("rm -rf \(staging); systemctl start smbd", timeout: 120)
-      return fail(message + "\n" + L10n.tr("The image was not changed; smbd started again."))
+      let started =
+        (try? await VMLayout.rootShell(
+          "rm -rf \(staging); \(VMLayout.startSmbd)", timeout: 120))?.succeeded == true
+      // Only say it when it is true: a skipped start exits 0 without running Samba.
+      return fail(Self.notChangedMessage(message, sambaStarted: started))
     }
 
     // 7. Copy to the Mac.
@@ -237,16 +241,106 @@ public enum VMBundlePrep {
       envLine: VMLayout.envLine("CM_BUNDLE", name))
     let installed = try? await VMLayout.rootShell(install, timeout: 3600)
     guard installed?.succeeded == true else {
-      return fail(
-        L10n.tr(
-          "Installing the converted image FAILED: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original is in %@ in the machine.",
-          VMLayout.errorTail(installed), aside))
+      let resolution = await Self.resolveInstallFailure(
+        stdout: installed?.stdout, stderr: installed?.stderr, exitCode: installed?.exitCode,
+        tail: VMLayout.errorTail(installed), aside: aside,
+        run: { (try? await VMLayout.rootShell($0, timeout: 60))?.succeeded == true })
+      switch resolution {
+      case .restoreSamba(let tail):
+        // Proven untouched (CM-UNCHANGED): start Samba again as after any early failure.
+        return await failRestoringSamba(tail)
+      case .installedSambaDown:
+        // The image is in place; only the Samba start failed. The healer retries.
+        return fail(
+          L10n.tr(
+            "The image was installed, but Samba did not start. The healer starts it within a minute; check: cloudmachine-agent vm-status"
+          ))
+      case .stopped(let message):
+        return fail(message)
+      }
     }
     return Outcome(
       succeeded: true,
       message: L10n.tr(
         "Done: %@ has %@ MB bands on Google Drive; the original is kept in %@ in the machine. Start the backup: tmutil startbackup",
         name, "\(bandBytes >> 20)", aside))
+  }
+
+  enum InstallFailure: Equatable {
+    /// Failed before changing anything: the image is as it was.
+    case notChanged
+    /// The image is in place; only starting Samba failed.
+    case installedSambaDown
+    /// Failed halfway; the attention file is set (Samba stays stopped).
+    case halfInstalled
+    /// Failed halfway and the attention file could not be written.
+    case halfInstalledUnrecorded
+  }
+
+  /// Which case a failed install was in. Only an explicit `CM-UNCHANGED` (printed by
+  /// the script's early exit 3, before any change) proves nothing was touched. No
+  /// answer at all (timeout, limactl died), ssh's 255, a kill that skipped the
+  /// trap, an unknown code: all of them may have happened halfway, so they count
+  /// as a half-done install.
+  static func installFailure(stdout: String?, exitCode: Int32?, attentionRecorded: Bool)
+    -> InstallFailure
+  {
+    if let stdout, stdout.contains("CM-INSTALLED") { return .installedSambaDown }
+    if let stdout, exitCode == 3, stdout.contains("CM-UNCHANGED") { return .notChanged }
+    return attentionRecorded ? .halfInstalled : .halfInstalledUnrecorded
+  }
+
+  enum InstallResolution: Equatable {
+    /// Proven untouched: restore Samba and report this tail.
+    case restoreSamba(String)
+    case installedSambaDown
+    /// Samba stays stopped; this is the message.
+    case stopped(String)
+  }
+
+  /// What to do after a failed install script, with an injected runner for the
+  /// two machine questions (is the attention file there / write it). An uncertain
+  /// result writes the file itself, asks again, and says "MAY have been moved";
+  /// only a stderr `CM-MUTATED` proves the original was moved.
+  static func resolveInstallFailure(
+    stdout: String?, stderr: String?, exitCode: Int32?, tail: String, aside: String,
+    run: (String) async -> Bool
+  ) async -> InstallResolution {
+    var recorded = await VMLayout.attentionRecorded(run: run)
+    var stage = installFailure(stdout: stdout, exitCode: exitCode, attentionRecorded: recorded)
+    if stage == .halfInstalledUnrecorded {
+      // The script's own trap may not have run (kill, lost connection): record it now.
+      _ = await run(VMLayout.flagSmbdNeedsAttention)
+      recorded = await VMLayout.attentionRecorded(run: run)
+      stage = installFailure(stdout: stdout, exitCode: exitCode, attentionRecorded: recorded)
+    }
+    switch stage {
+    case .notChanged: return .restoreSamba(tail)
+    case .installedSambaDown: return .installedSambaDown
+    case .halfInstalled, .halfInstalledUnrecorded:
+      let proven = stderr?.contains("CM-MUTATED") == true
+      let base =
+        proven
+        ? L10n.tr(
+          "Installing the converted image FAILED: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original is in %@ in the machine.",
+          tail, aside)
+        : L10n.tr(
+          "Installing the converted image may have failed halfway: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original MAY have been moved to %@ in the machine; check there before doing anything else (see vm/README.md).",
+          tail, aside)
+      return .stopped(
+        stage == .halfInstalled
+          ? base
+          : base + "\n"
+            + L10n.tr(
+              "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image."
+            ))
+    }
+  }
+
+  /// The message after an early failure: "started again" only when it is true.
+  static func notChangedMessage(_ message: String, sambaStarted: Bool) -> String {
+    sambaStarted
+      ? message + "\n" + L10n.tr("The image was not changed; smbd started again.") : message
   }
 
   /// The machine-side install, one script so it stops at the first error
@@ -258,10 +352,15 @@ public enum VMBundlePrep {
     let drive = "\(VMLayout.Guest.driveRoot)/bands"
     return [
       "set -euo pipefail",
+      "MUTATED=0",
+      // Same shell, so a failure cannot lose the record that Samba must stay down.
+      VMLayout.recordAttentionOnFailure,
       "B=\(bundle)",
       // Checked again here: between the first check and now someone may have written there.
-      "if [ -n \"$(ls -A \(drive) 2>/dev/null)\" ]; then echo 'bands on Drive appeared meanwhile' >&2; exit 3; fi",
+      "if [ -n \"$(ls -A \(drive) 2>/dev/null)\" ]; then echo CM-UNCHANGED; echo 'bands on Drive appeared meanwhile' >&2; exit 3; fi",
       "install -d -m 700 \(VMLayout.Guest.backupDir)",
+      // From here on the image is changed: a failure leaves it half-installed.
+      "MUTATED=1",
       "mv \"$B\" \(VMLayout.shellQuoted(aside))",
       "tar -C \(local) -xf \(staging)/converted.tar",
       "find \"$B\" -name '._*' -delete",
@@ -279,7 +378,8 @@ public enum VMBundlePrep {
       "mountpoint -q \"$B/bands\"",
       "test \"$(find \"$B/bands/\" -type f | wc -l)\" -eq \"$count\"",
       "rm -rf \(staging)",
-      "systemctl start smbd",
+      VMLayout.clearAttention,
+      VMLayout.startSmbd,
     ].joined(separator: "\n")
   }
 

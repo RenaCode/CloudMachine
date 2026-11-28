@@ -979,5 +979,13 @@ extension L10nTranslations {
       "Prossimo tentativo: %@",
     "Lima is not installed - run in Terminal: %@":
       "Lima non è installato: esegui nel Terminale: %@",
+    "Samba was left stopped by an image installation that failed halfway, so the image is half-installed. Restore or verify the bands first (see vm/README.md).":
+      "Samba è stato lasciato fermo perché l'installazione dell'immagine è fallita a metà, quindi l'immagine è installata solo in parte. Ripristina o verifica prima le bande (vedi vm/README.md).",
+    "The image was installed, but Samba did not start. The healer starts it within a minute; check: cloudmachine-agent vm-status":
+      "L'immagine è stata installata, ma Samba non si è avviato. Il riparatore lo avvia entro un minuto; controlla: cloudmachine-agent vm-status",
+    "The image installation failed and could not record that Samba must stay stopped. Do not start Samba before checking the image.":
+      "L'installazione dell'immagine non è riuscita e non è stato possibile registrare che Samba deve restare fermo. Non avviare Samba prima di aver controllato l'immagine.",
+    "Installing the converted image may have failed halfway: %@\nsmbd is left STOPPED so Time Machine does not open a half-installed image. The original MAY have been moved to %@ in the machine; check there before doing anything else (see vm/README.md).":
+      "L'installazione dell'immagine convertita potrebbe essere fallita a metà: %@\nsmbd resta FERMO perché Time Machine non apra un'immagine installata solo in parte. L'originale POTREBBE essere stato spostato in %@ nella macchina; controlla lì prima di fare altro (vedi vm/README.md).",
   ]
 }
