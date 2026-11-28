@@ -8,7 +8,10 @@
 #     marker (older than 120 min) does not hide a dead smbd, the persistent
 #     attention file blocks it until removed (the healer starts with --no-block,
 #     so it never hangs past its 60 s period);
-#   - a failing bind, once repaired, brings smbd back.
+#   - a failing bind, once repaired, brings smbd back;
+#   - kill -9 leaves a DEAD FUSE mount behind (28.11.2026, "Transport endpoint is
+#     not connected"): the units clear it themselves (cm-unmount-stale), no manual
+#     umount, and everything is back within 3 minutes.
 #
 #   sudo sh restart-chain.sh
 set -eu
@@ -23,10 +26,34 @@ wait_active() { # unit, seconds
   done
   echo "FAIL: $1 not active after $2 s ($(systemctl is-active "$1"))"; return 1
 }
+# kill -9 the main process of a unit, then wait until systemd has really restarted it:
+# right after the kill every unit is still "active" (RestartSec window), so a check
+# made at once passes or fails on the OLD state (28.11.2026).
+kill_and_wait() { # unit, seconds
+  old=$(systemctl show -p MainPID --value "$1.service")
+  [ -n "$old" ] && [ "$old" != 0 ] || { echo "FAIL: $1 has no main process"; return 1; }
+  kill -9 "$old"
+  i=0
+  while [ "$i" -lt "$2" ]; do
+    pid=$(systemctl show -p MainPID --value "$1.service")
+    [ "$pid" != "$old" ] && [ "$pid" != 0 ] && return 0
+    i=$((i + 2)); sleep 2
+  done
+  echo "FAIL: $1 did not restart within $2 s (MainPID $old)"; return 1
+}
+wait_ok() { # seconds, description, command...
+  t=$1; d=$2; shift 2
+  i=0
+  while [ "$i" -lt "$t" ]; do
+    "$@" >/dev/null 2>&1 && return 0
+    i=$((i + 5)); sleep 5
+  done
+  echo "FAIL: $d"; return 1
+}
 all_up() {
   for u in rclone-tm punchfs tm-bands-bind smbd; do wait_active "$u" "$1" || return 1; done
-  mountpoint -q /srv/tm-punch || { echo "FAIL: /srv/tm-punch not mounted"; return 1; }
-  ls /srv/tm-punch/bands >/dev/null || { echo "FAIL: bands unreadable"; return 1; }
+  wait_ok "$1" "/srv/tm-punch not mounted" mountpoint -q /srv/tm-punch || return 1
+  wait_ok "$1" "bands unreadable" ls /srv/tm-punch/bands || return 1
 }
 
 echo "0. the healer timer runs"
@@ -35,10 +62,14 @@ rm -f "$HOLD"
 
 echo "1. baseline"; all_up 30
 echo "2. kill -9 rclone (what the OOM killer does)"
-kill -9 "$(systemctl show -p MainPID --value rclone-tm.service)"
+kill_and_wait rclone-tm 120
 all_up 900   # rclone scans the VFS cache before it mounts: minutes
+echo "2b. the same kill leaves a DEAD mount; nobody unmounts it by hand, all is back in 3 min"
+kill_and_wait rclone-tm 60 || exit 1
+if timeout 5 stat -t /srv/tm >/dev/null 2>&1; then echo "   (rclone was already back: no dead mount this time)"; else echo "   /srv/tm is dead right after the kill, as expected"; fi
+all_up 180
 echo "3. kill -9 punchfs"
-kill -9 "$(systemctl show -p MainPID --value punchfs.service)"
+kill_and_wait punchfs 60
 all_up 300
 echo "4. smbd stopped on purpose (FRESH marker, as holdSmbd does) must STAY stopped"
 touch "$HOLD" && systemctl stop smbd.service

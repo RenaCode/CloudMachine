@@ -28,7 +28,11 @@ ExecStart=/usr/local/bin/rclone mount2 ${CM_REMOTE} /srv/tm \
   --cache-dir /var/cache/rclone --dir-cache-time 9999h --poll-interval 0 --attr-timeout 5m \
   --use-mmap --buffer-size 8M --transfers 4 --drive-chunk-size 32M --drive-use-trash=false --drive-stop-on-upload-limit \
   --rc --rc-addr 127.0.0.1:5572 --rc-no-auth --log-file /var/log/rclone-tm.log --log-level INFO
-ExecStop=/bin/fusermount3 -uz /srv/tm
+# 28 Nov 2026: kill -9 left a dead FUSE mount on /srv/tm and every start died with
+# "directory already mounted". Unmount it (only when it is dead) before mounting;
+# the dependents' stale mounts (punchfs, the bind) go with it.
+ExecStartPre=-/usr/local/sbin/cm-unmount-stale --bands /srv/tm-punch /srv/tm
+ExecStop=-/bin/fusermount3 -uz /srv/tm
 Restart=always
 RestartSec=10
 

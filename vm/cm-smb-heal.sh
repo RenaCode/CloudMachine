@@ -11,6 +11,17 @@ age() {
   echo $(($(date +%s) - m))
 }
 
+# 0. A chain unit that hit its start limit stays failed for good: systemd never retries
+# it (28 Nov 2026: punchfs, after the dead-mount restart loop). Reset it and start it.
+# Other failures (old punchfs binary: exit 78, a real crash) stay visible.
+for u in rclone-tm punchfs tm-bands-bind; do
+  if ! active "$u" \
+    && [ "$(systemctl show -p Result --value "$u" 2>/dev/null)" = start-limit-hit ]; then
+    systemctl reset-failed "$u"
+    systemctl --no-block start "$u"
+  fi
+done
+
 # 1. punchfs is up and mounted, the bind is not: bind again.
 if active punchfs && mountpoint -q /srv/tm-punch && [ -s "$BUNDLE_ENV" ] \
   && ! active tm-bands-bind; then

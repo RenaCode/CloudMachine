@@ -9,6 +9,10 @@ ConditionPathExists=/etc/rclone/rclone.conf
 
 [Service]
 Type=simple
+# 28 Nov 2026: after kill -9 of rclone the old mount on /srv/tm-punch (and the bind over
+# it) stayed dead; clear them when dead, never when healthy. ExecStop=- because the
+# unmount of a dead mount failed with "Invalid argument" and left the unit failed.
+ExecStartPre=-/usr/local/sbin/cm-unmount-stale --bands /srv/tm-punch
 # passthrough_ll keeps one descriptor open for every inode the kernel has seen;
 # a full backup has tens of thousands of bands, and the default 1024 ran out (EMFILE).
 LimitNOFILE=524288
@@ -19,7 +23,7 @@ LimitNOFILE=524288
 # failure instead of a restart loop; `cloudmachine-agent vm-update` rebuilds it.
 ExecStart=/bin/sh -c '/usr/local/bin/punchfs --help 2>&1 | grep -q "syncfs=<dir>" || { echo "punchfs: /usr/local/bin/punchfs has no -o syncfs (old binary): not starting, rebuild it (cloudmachine-agent vm-update)" >&2; exit 78; }; exec /usr/local/bin/punchfs -f -o source=/srv/tm,syncfs=/var/cache/rclone,allow_other /srv/tm-punch'
 RestartPreventExitStatus=78
-ExecStop=/bin/fusermount3 -uz /srv/tm-punch
+ExecStop=-/bin/fusermount3 -uz /srv/tm-punch
 Restart=always
 RestartSec=5
 

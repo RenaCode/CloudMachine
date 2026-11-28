@@ -210,6 +210,15 @@ machine; a backup going to another destination does not stop it.
 deliberate stop (image conversion, encryption) leaves `/run/cloudmachine-smbd-hold`; the healer
 keeps off Samba while it is at most 2 h old.
 
+### Dead FUSE mount after `kill -9`
+
+A killed rclone or punchfs leaves its mount behind ("Transport endpoint is not connected"); every
+start then fails with "directory already mounted". `rclone-tm`, `punchfs` and `tm-bands-bind` run
+`cm-unmount-stale` as `ExecStartPre=-`: a mount point (also `/srv/tm-local/*/bands`) is unmounted
+lazily only if it is listed in `/proc/mounts` and `stat` on it fails with an error within 5 s. A
+healthy or merely slow mount is never touched. The healer also `reset-failed`s a chain unit that
+hit its start limit. `tests/restart-chain.sh` step 2b checks recovery within 3 minutes.
+
 ### Attention: an install that failed halfway
 
 If `vm-prepare-bundle` fails AFTER it has started changing the image (it has moved the original

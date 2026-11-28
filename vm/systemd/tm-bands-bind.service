@@ -16,6 +16,8 @@ RemainAfterExit=yes
 # 27 Nov 2026: one failed bind kept Samba down 13 h. Retry.
 Restart=on-failure
 RestartSec=15
+# 28 Nov 2026: a bind over a dead punchfs mount stays dead; clear it first.
+ExecStartPre=-/usr/local/sbin/cm-unmount-stale --bands
 # punchfs (Type=simple) is "started" before its mount is up: wait for it.
 TimeoutStartSec=150
 ExecStartPre=/usr/bin/timeout 120 /bin/sh -c 'until mountpoint -q /srv/tm-punch && [ -d /srv/tm-punch/bands ]; do sleep 1; done'
